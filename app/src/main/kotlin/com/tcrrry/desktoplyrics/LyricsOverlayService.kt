@@ -13,6 +13,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -94,6 +95,7 @@ class LyricsOverlayService : Service() {
     private var wallpaperLyricsEnabled = WALLPAPER_LYRICS_DEFAULT
     private var backgroundMode = BACKGROUND_DEFAULT
     private var fontScalePercent = FONT_SCALE_DEFAULT_PERCENT
+    private var nightTheme = true
     private var surfaceMode = LyricsSurfaceMode.TOPBAR
     private var displayState: IcarDisplayState? = null
     private var monitorStarted = false
@@ -196,6 +198,7 @@ class LyricsOverlayService : Service() {
         super.onCreate()
         isRunning = true
         announceOverlayState()
+        nightTheme = isNightTheme(resources.configuration)
         backgroundMode = BACKGROUND_TRANSPARENT
         fontScalePercent = normalizedFontScale(
             prefs.getInt(PREF_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
@@ -213,6 +216,14 @@ class LyricsOverlayService : Service() {
             .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
             .apply()
         createNotificationChannel()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val nextNightTheme = isNightTheme(newConfig)
+        if (nightTheme == nextNightTheme) return
+        nightTheme = nextNightTheme
+        applyThemeToWeb()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -528,6 +539,7 @@ class LyricsOverlayService : Service() {
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     webReady = true
+                    applyThemeToWeb()
                     applyFontScale(fontScalePercent, adjustCompactHeight = false)
                     applySurfaceModeToWeb()
                     applyTopbarLines()
@@ -705,6 +717,19 @@ class LyricsOverlayService : Service() {
             null
         )
     }
+
+    private fun applyThemeToWeb() {
+        if (!webReady) return
+        val encodedTheme = JSONObject.quote(if (nightTheme) "dark" else "light")
+        webView?.evaluateJavascript(
+            "window.LobstaOverlay && window.LobstaOverlay.setTheme($encodedTheme);",
+            null
+        )
+    }
+
+    private fun isNightTheme(configuration: Configuration): Boolean =
+        configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
 
     private fun applyFontScale(
         @Suppress("UNUSED_PARAMETER") previousPercent: Int,

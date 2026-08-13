@@ -1,0 +1,10 @@
+# Copy to local-context.properties and fill in machine-local values.
+# The real file is ignored by Git. Do not put passwords or tokens here.
+
+JDK17_HOME=/path/to/jdk-17/Contents/Home
+ANDROID_SDK_ROOT=/path/to/Android/sdk
+PRIMARY_ADB=/path/to/Android/sdk/platform-tools/adb
+FALLBACK_ADB=/optional/path/to/another/adb
+VEHICLE_ADB_SERIAL=host-or-ip:port
+SHARED_TOOLCHAIN_DOC=/optional/path/to/toolchain/README.md
+NEW_PROJECT_TEMPLATE_DIR=/optional/path/to/NewProject

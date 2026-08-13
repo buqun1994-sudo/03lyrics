@@ -2,12 +2,12 @@ package com.tcrrry.desktoplyrics
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
@@ -60,7 +60,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
-        notifyOverlay(LyricsOverlayService.ACTION_SETTINGS_CLOSED)
+        if (!isChangingConfigurations) {
+            notifyOverlay(LyricsOverlayService.ACTION_SETTINGS_CLOSED)
+        }
         super.onStop()
     }
 
@@ -155,7 +157,12 @@ class MainActivity : AppCompatActivity() {
         option.setBackgroundResource(
             if (selected) R.drawable.bg_settings_option_selected else R.drawable.bg_settings_option
         )
-        option.setTextColor(Color.parseColor(if (selected) "#F7FAFF" else "#AAB1BE"))
+        option.setTextColor(
+            ContextCompat.getColor(
+                this,
+                if (selected) R.color.settings_text_on_accent else R.color.settings_text_option
+            )
+        )
         option.typeface = Typeface.create(
             "sans-serif",
             if (selected) Typeface.BOLD else Typeface.NORMAL

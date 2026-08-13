@@ -9,3 +9,17 @@ keystore.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Machine-local Codex and environment context
+.codex/local-context.properties
+.env
+.env.*
+!.env.example
+*.local.*
+*.pem
+*.key
+*.log
+.DS_Store
+.vscode/
+.tmp/
+tmp/

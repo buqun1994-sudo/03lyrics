@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="settings_screen_background">#090A0E</color>
+    <color name="settings_sidebar_background">#101319</color>
+    <color name="settings_text_primary">#F4F6FA</color>
+    <color name="settings_text_section">#EEF1F6</color>
+    <color name="settings_text_secondary">#7F8896</color>
+    <color name="settings_text_option">#AAB1BE</color>
+    <color name="settings_text_on_accent">#F7FAFF</color>
+    <color name="settings_divider">#27303A</color>
+    <color name="settings_control_fill">#171B22</color>
+    <color name="settings_control_border">#303845</color>
+    <color name="settings_close_fill">#1A1E25</color>
+    <color name="settings_accent">#245EAD</color>
+    <color name="settings_accent_border">#5B94E0</color>
+    <color name="settings_switch_thumb_off">#AAB1BE</color>
+    <color name="settings_switch_track_off">#303845</color>
+
+    <bool name="settings_light_system_bars">false</bool>
+</resources>
