@@ -6,8 +6,42 @@
         <item name="android:windowLightNavigationBar">@bool/settings_light_system_bars</item>
         <item name="android:statusBarColor">@color/settings_screen_background</item>
         <item name="android:navigationBarColor">@color/settings_screen_background</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowAnimationStyle">@style/Animation.Icar.StandardWindow</item>
         <item name="android:colorAccent">@color/settings_accent</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowActionModeOverlay">true</item>
+    </style>
+
+    <style name="Animation.Icar.StandardWindow" parent="@android:style/Animation">
+        <item name="android:windowEnterAnimation">@anim/icar_standard_window_enter</item>
+        <item name="android:windowExitAnimation">@anim/icar_standard_window_exit</item>
+        <item name="android:windowShowAnimation">@anim/icar_standard_window_enter</item>
+        <item name="android:windowHideAnimation">@anim/icar_standard_window_exit</item>
+
+        <item name="android:activityOpenEnterAnimation">@anim/icar_standard_window_enter</item>
+        <item name="android:activityOpenExitAnimation">@null</item>
+        <item name="android:activityCloseEnterAnimation">@null</item>
+        <item name="android:activityCloseExitAnimation">@anim/icar_standard_window_exit</item>
+
+        <item name="android:taskOpenEnterAnimation">@anim/icar_standard_window_enter</item>
+        <item name="android:taskOpenExitAnimation">@null</item>
+        <item name="android:taskCloseEnterAnimation">@null</item>
+        <item name="android:taskCloseExitAnimation">@anim/icar_standard_window_exit</item>
+        <item name="android:taskToFrontEnterAnimation">@anim/icar_standard_window_enter</item>
+        <item name="android:taskToFrontExitAnimation">@null</item>
+        <item name="android:taskToBackEnterAnimation">@null</item>
+        <item name="android:taskToBackExitAnimation">@anim/icar_standard_window_exit</item>
+
+        <item name="android:wallpaperOpenEnterAnimation">@null</item>
+        <item name="android:wallpaperOpenExitAnimation">@anim/icar_standard_window_exit</item>
+        <item name="android:wallpaperCloseEnterAnimation">@anim/icar_standard_window_enter</item>
+        <item name="android:wallpaperCloseExitAnimation">@null</item>
+        <item name="android:wallpaperIntraOpenEnterAnimation">@anim/icar_standard_window_enter</item>
+        <item name="android:wallpaperIntraOpenExitAnimation">@null</item>
+        <item name="android:wallpaperIntraCloseEnterAnimation">@null</item>
+        <item name="android:wallpaperIntraCloseExitAnimation">@anim/icar_standard_window_exit</item>
     </style>
 </resources>

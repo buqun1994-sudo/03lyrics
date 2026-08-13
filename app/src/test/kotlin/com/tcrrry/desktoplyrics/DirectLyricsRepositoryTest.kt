@@ -118,6 +118,253 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
+    fun `accepts Maria from independent sources when localized metadata forms one recording`() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            album = "María - EP",
+            durationMs = 199_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "QQ音乐",
+                    sourceId = "qq-maria",
+                    track = "마리아",
+                    artist = "华莎",
+                    album = "María",
+                    durationMs = 199_000L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "netease-maria",
+                    track = "마리아 (Maria)",
+                    artist = "华莎",
+                    album = "María",
+                    durationMs = 199_053L
+                )
+            )
+        )
+
+        assertEquals(listOf("qq-maria", "netease-maria"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `keeps one unconfirmed localized result out without independent support`() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            album = "Different Release",
+            durationMs = 199_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "qq-maria",
+                        track = "마리아",
+                        artist = "华莎",
+                        album = "María",
+                        durationMs = 199_000L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `accepts unknown localized metadata only after two sources describe the same recording`() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            durationMs = 199_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "QQ音乐",
+                    sourceId = "qq-maria",
+                    track = "마리아",
+                    artist = "华莎",
+                    album = "María",
+                    durationMs = 199_000L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "netease-maria",
+                    track = "마리아 (Maria)",
+                    artist = "华莎",
+                    album = "María",
+                    durationMs = 199_053L
+                )
+            )
+        )
+
+        assertEquals(listOf("qq-maria", "netease-maria"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `uses a bilingual source to bridge an independently confirmed translated title`() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            album = "María - EP",
+            durationMs = 199_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "lrclib-maria",
+                    track = "Maria",
+                    artist = "HWASA",
+                    album = "María - EP",
+                    durationMs = 199_000L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "netease-maria",
+                    track = "마리아 (Maria)",
+                    artist = "华莎",
+                    album = "María",
+                    durationMs = 199_053L
+                )
+            )
+        )
+
+        assertEquals(listOf("lrclib-maria", "netease-maria"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `does not treat an ordinary album prefix as a release marker`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Localized Artist",
+            album = "Album",
+            durationMs = 200_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "other-album",
+                        track = "A Song",
+                        artist = "本地歌手",
+                        album = "Other Album",
+                        durationMs = 200_000L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `rejects placeholder candidate artists even when title album and duration match`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Artist",
+            album = "Album",
+            durationMs = 200_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "LRCLIB",
+                        sourceId = "placeholder-artist",
+                        track = "A Song",
+                        artist = "Unknown",
+                        album = "Album",
+                        durationMs = 200_000L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `does not count duplicate candidates from one source as independent support`() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            album = "Different Release",
+            durationMs = 199_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "qq-maria-a",
+                        track = "마리아",
+                        artist = "华莎",
+                        album = "María",
+                        durationMs = 199_000L
+                    ),
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "qq-maria-b",
+                        track = "마리아 (Maria)",
+                        artist = "华莎",
+                        album = "María",
+                        durationMs = 199_100L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `independent support cannot override an explicit recording version conflict`() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            album = "María - EP",
+            durationMs = 199_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "qq-live",
+                        track = "마리아 (Live)",
+                        artist = "华莎",
+                        album = "María",
+                        durationMs = 199_000L
+                    ),
+                    candidate(
+                        source = "网易云音乐",
+                        sourceId = "netease-live",
+                        track = "마리아 (Live at Seoul)",
+                        artist = "华莎",
+                        album = "María",
+                        durationMs = 199_100L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
     fun `uses the base title for catalog search when featured artists are written in brackets`() {
         val terms = LyricsCandidateSelector.searchTerms(
             LyricsLookup(

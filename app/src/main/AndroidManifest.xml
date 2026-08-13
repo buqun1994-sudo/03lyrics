@@ -24,6 +24,9 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:screenOrientation="landscape">
+            <meta-data
+                android:name="com.tcrrry.icar.window.STANDARD_FLOATING_WINDOW"
+                android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -56,9 +56,58 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = state,
                 wallpaperLyricsEnabled = true,
-                settingsOpen = true
+                localSettingsOpen = true
             )
         )
+    }
+
+    @Test
+    fun `standard floating window uses topbar while launcher remains on wallpaper`() {
+        val state = IcarDisplayState(
+            launcherState = IcarDisplayStateMonitor.LAUNCHER_STATE_WALLPAPER,
+            windowMode = IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW
+        )
+
+        assertEquals(IcarStandardWindowOccupancy.OPEN, state.standardWindowOccupancy)
+        assertEquals(
+            LyricsSurfaceMode.TOPBAR,
+            IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+                displayState = state,
+                wallpaperLyricsEnabled = true,
+                localSettingsOpen = false
+            )
+        )
+        assertTrue(
+            IcarLyricsSurfacePolicy.hasRenderableGeometry(
+                width = state.topbarGeometry().widthPx,
+                height = 72
+            )
+        )
+    }
+
+    @Test
+    fun `unknown window mode fails closed to topbar lyrics`() {
+        val state = IcarDisplayState(
+            launcherState = IcarDisplayStateMonitor.LAUNCHER_STATE_WALLPAPER,
+            windowMode = IcarDisplayStateMonitor.STATE_UNKNOWN
+        )
+
+        assertEquals(IcarStandardWindowOccupancy.UNKNOWN, state.standardWindowOccupancy)
+        assertEquals(
+            LyricsSurfaceMode.TOPBAR,
+            IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+                displayState = state,
+                wallpaperLyricsEnabled = true,
+                localSettingsOpen = false
+            )
+        )
+    }
+
+    @Test
+    fun `only invalid geometry can hide the lyric overlay`() {
+        assertTrue(IcarLyricsSurfacePolicy.hasRenderableGeometry(width = 560, height = 72))
+        assertEquals(false, IcarLyricsSurfacePolicy.hasRenderableGeometry(width = 0, height = 72))
+        assertEquals(false, IcarLyricsSurfacePolicy.hasRenderableGeometry(width = 560, height = 0))
     }
 
     @Test
@@ -75,7 +124,7 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = wallpaper,
                 wallpaperLyricsEnabled = true,
-                settingsOpen = false
+                localSettingsOpen = false
             )
         )
         assertEquals(
@@ -83,7 +132,7 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = wallpaper,
                 wallpaperLyricsEnabled = false,
-                settingsOpen = false
+                localSettingsOpen = false
             )
         )
         assertEquals(
@@ -91,7 +140,7 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = map,
                 wallpaperLyricsEnabled = true,
-                settingsOpen = false
+                localSettingsOpen = false
             )
         )
     }

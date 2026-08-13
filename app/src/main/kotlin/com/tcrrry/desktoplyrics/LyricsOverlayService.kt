@@ -90,7 +90,7 @@ class LyricsOverlayService : Service() {
     private var windowParams: WindowManager.LayoutParams? = null
     private var webReady = false
     private var compact = false
-    private var settingsOpen = false
+    private var localSettingsOpen = false
     private var topbarLines = TOPBAR_LINES_DEFAULT
     private var wallpaperLyricsEnabled = WALLPAPER_LYRICS_DEFAULT
     private var backgroundMode = BACKGROUND_DEFAULT
@@ -272,13 +272,13 @@ class LyricsOverlayService : Service() {
         }
 
         if (intent?.action == ACTION_SETTINGS_OPENED) {
-            settingsOpen = true
+            localSettingsOpen = true
             applyCurrentSurface()
             return START_STICKY
         }
 
         if (intent?.action == ACTION_SETTINGS_CLOSED) {
-            settingsOpen = false
+            localSettingsOpen = false
             // Re-read the car's final state instead of restoring the mode that
             // was active before settings opened. A launcher action may have
             // closed settings while switching from wallpaper to map.
@@ -340,7 +340,7 @@ class LyricsOverlayService : Service() {
         @JavascriptInterface
         fun requestSettings() {
             mainHandler.post {
-                if (surfaceMode == LyricsSurfaceMode.TOPBAR && !settingsOpen) {
+                if (surfaceMode == LyricsSurfaceMode.TOPBAR && !localSettingsOpen) {
                     openSettings()
                 }
             }
@@ -585,12 +585,12 @@ class LyricsOverlayService : Service() {
         applyCurrentSurface(previous)
     }
 
-    /** Reconciles raw launcher state with the temporary settings page and preference state. */
+    /** Reconciles launcher, standard-window, local-page, and preference state. */
     private fun applyCurrentSurface(previousState: IcarDisplayState? = null) {
         val nextSurfaceMode = IcarLyricsSurfacePolicy.effectiveSurfaceMode(
             displayState = displayState,
             wallpaperLyricsEnabled = wallpaperLyricsEnabled,
-            settingsOpen = settingsOpen
+            localSettingsOpen = localSettingsOpen
         )
         val geometry = overlayGeometry(nextSurfaceMode, displayState)
         if (overlayRoot == null && geometry.width > 0 && geometry.height > 0) {
@@ -626,7 +626,7 @@ class LyricsOverlayService : Service() {
     }
 
     private fun applyOverlayGeometry(params: WindowManager.LayoutParams, geometry: OverlayGeometry) {
-        if (geometry.width <= 0 || geometry.height <= 0) {
+        if (!IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)) {
             overlayRoot?.visibility = View.GONE
             return
         }
@@ -635,14 +635,16 @@ class LyricsOverlayService : Service() {
         params.width = geometry.width
         params.height = geometry.height
         overlayRoot?.let { root ->
-            root.visibility = if (settingsOpen) View.GONE else View.VISIBLE
+            root.visibility = View.VISIBLE
             runCatching { windowManager.updateViewLayout(root, params) }
                 .onFailure { error -> Log.w(LOG_TAG, "Unable to update lyric surface", error) }
         }
     }
 
     private fun updateOverlayVisibility(geometry: OverlayGeometry = overlayGeometry(surfaceMode, displayState)) {
-        overlayRoot?.visibility = if (!settingsOpen && geometry.width > 0 && geometry.height > 0) {
+        overlayRoot?.visibility = if (
+            IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)
+        ) {
             View.VISIBLE
         } else {
             View.GONE
@@ -794,7 +796,7 @@ class LyricsOverlayService : Service() {
     }
 
     private fun openSettings() {
-        settingsOpen = true
+        localSettingsOpen = true
         applyCurrentSurface()
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
@@ -810,7 +812,7 @@ class LyricsOverlayService : Service() {
                 options.toBundle()
             )
         }.onFailure {
-            settingsOpen = false
+            localSettingsOpen = false
             displayStateMonitor.refresh()
             applyCurrentSurface()
             Log.w(LOG_TAG, "Unable to open lyric settings", it)

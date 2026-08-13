@@ -79,10 +79,10 @@ class DirectLyricsRepository {
                 .getOrDefault(emptyList())
         })
 
-        val exact = awaitUntil(exactFuture, catalogDeadline)
-            ?.let { candidate ->
-                LyricsCandidateSelector.selectCandidates(query, listOf(candidate)).firstOrNull()
-            }
+        val exactCandidate = awaitUntil(exactFuture, catalogDeadline)
+        val exact = exactCandidate?.let { candidate ->
+            LyricsCandidateSelector.selectCandidates(query, listOf(candidate)).firstOrNull()
+        }
         if (exact != null) {
             qqFuture.cancel(true)
             netEaseFuture.cancel(true)
@@ -95,6 +95,7 @@ class DirectLyricsRepository {
         }
 
         val candidates = buildList {
+            exactCandidate?.let(::add)
             addAll(awaitUntil(qqFuture, catalogDeadline).orEmpty())
             addAll(awaitUntil(netEaseFuture, catalogDeadline).orEmpty())
         }
@@ -513,31 +514,53 @@ internal object LyricsCandidateSelector {
         candidates: Iterable<DirectLyricsRepository.Result>
     ): List<DirectLyricsRepository.Result> {
         if (!canConfirm(query)) return emptyList()
-        val matched = candidates.asSequence()
-            .filter { matchesVersion(query, it) }
+        val uniqueCandidates = candidates.asSequence()
             .distinctBy(::candidateIdentity)
+            .toList()
+        val queryTitle = titleIdentity(query.track)
+        val eligibleCandidates = uniqueCandidates.asSequence()
+            .mapNotNull { candidate -> candidateMetadata(query, candidate) }
+            .toList()
+        val eligibleEvidence = eligibleCandidates.mapNotNull { metadata ->
+            val directTitleEvidence = titleEvidence(queryTitle, metadata.title)
+            val effectiveTitleEvidence = when {
+                directTitleEvidence.isConfirmed() -> directTitleEvidence
+                hasIndependentTitleBridge(queryTitle, metadata, eligibleCandidates) ->
+                    EvidenceLevel.NEAR
+                else -> return@mapNotNull null
+            }
+            candidateEvidence(query, metadata.candidate, effectiveTitleEvidence)
+        }
+        val matched = eligibleEvidence.asSequence()
+            .map { evidence ->
+                evidence.copy(
+                    supportingSources = supportingSourceCount(
+                        evidence,
+                        eligibleEvidence
+                    )
+                )
+            }
+            .filter(CandidateEvidence::isConfirmed)
             .sortedWith(
-                compareBy<DirectLyricsRepository.Result> { titleAnnotationRank(query, it) }
-                    .thenBy { confirmationRank(query, it) }
-                    .thenBy { abs(query.durationMs - it.durationMs) }
-                    .thenBy { it.source }
-                    .thenBy { it.sourceId }
+                compareBy<CandidateEvidence> { it.titleAnnotationRank }
+                    .thenBy(CandidateEvidence::confirmationRank)
+                    .thenByDescending { it.supportingSources }
+                    .thenBy { abs(query.durationMs - it.candidate.durationMs) }
+                    .thenBy { it.candidate.source }
+                    .thenBy { it.candidate.sourceId }
             )
+            .map(CandidateEvidence::candidate)
             .toList()
         return matched
     }
 
     fun matchesVersion(query: LyricsLookup, candidate: DirectLyricsRepository.Result): Boolean {
-        if (!canConfirm(query) || !hasKnownDuration(candidate.durationMs) ||
-            !isValidArtist(candidate.candidateArtist)
-        ) {
-            return false
-        }
-        if (!titlesMatch(query.track, candidate.candidateTrack)) return false
-        if (!hasMatchingDuration(query.durationMs, candidate.durationMs)) return false
-
-        return artistRelation(query, candidate) != ArtistRelation.NONE ||
-            albumsMatch(query.album, candidate.candidateAlbum)
+        if (!canConfirm(query)) return false
+        val metadata = candidateMetadata(query, candidate) ?: return false
+        val directTitleEvidence = titleEvidence(titleIdentity(query.track), metadata.title)
+        if (!directTitleEvidence.isConfirmed()) return false
+        val evidence = candidateEvidence(query, candidate, directTitleEvidence)
+        return evidence.copy(supportingSources = 1).isConfirmed()
     }
 
     fun canFindCover(query: LyricsLookup): Boolean =
@@ -551,7 +574,7 @@ internal object LyricsCandidateSelector {
         val matched = candidates.asSequence()
             .filter { it.cover.isNotBlank() }
             .filter { titlesMatch(query.track, it.candidateTrack) }
-            .filter { artistRelation(query, it) != ArtistRelation.NONE }
+            .filter { artistEvidence(query, it).isConfirmed() }
             .distinctBy(::candidateIdentity)
             .sortedWith(
                 compareBy<DirectLyricsRepository.Result> { it.source }
@@ -575,15 +598,116 @@ internal object LyricsCandidateSelector {
         return if (normalizedAlbum(first.candidateAlbum).isNotBlank() &&
             normalizedAlbum(second.candidateAlbum).isNotBlank()
         ) {
-            albumsMatch(first.candidateAlbum, second.candidateAlbum)
+            albumEvidence(first.candidateAlbum, second.candidateAlbum).isConfirmed()
         } else {
-            artistRelation(
+            artistEvidence(
                 first.candidateTrack,
                 first.candidateArtist,
                 second.candidateTrack,
                 second.candidateArtist
-            ) != ArtistRelation.NONE
+            ).isConfirmed()
         }
+    }
+
+    private fun candidateMetadata(
+        query: LyricsLookup,
+        candidate: DirectLyricsRepository.Result
+    ): CandidateMetadata? {
+        if (!hasKnownDuration(candidate.durationMs) ||
+            !hasMatchingDuration(query.durationMs, candidate.durationMs) ||
+            !isValidArtist(candidate.candidateArtist)
+        ) {
+            return null
+        }
+        val wantedTitle = titleIdentity(query.track)
+        val foundTitle = titleIdentity(candidate.candidateTrack)
+        if (!wantedTitle.isValid || !foundTitle.isValid ||
+            !versionsMatch(wantedTitle, foundTitle)
+        ) {
+            return null
+        }
+        return CandidateMetadata(candidate, foundTitle)
+    }
+
+    private fun hasIndependentTitleBridge(
+        queryTitle: TitleIdentity,
+        candidate: CandidateMetadata,
+        candidates: List<CandidateMetadata>
+    ): Boolean = candidates.any { peer ->
+        peer.candidate.source.isNotBlank() &&
+            peer.candidate.source != candidate.candidate.source &&
+            titleEvidence(queryTitle, peer.title).isConfirmed() &&
+            titleEvidence(candidate.title, peer.title).isConfirmed() &&
+            hasMatchingDuration(candidate.candidate.durationMs, peer.candidate.durationMs) &&
+            (
+                artistEvidence(
+                    candidate.candidate.candidateTrack,
+                    candidate.candidate.candidateArtist,
+                    peer.candidate.candidateTrack,
+                    peer.candidate.candidateArtist
+                ).isConfirmed() ||
+                    albumEvidence(
+                        candidate.candidate.candidateAlbum,
+                        peer.candidate.candidateAlbum
+                    ).isConfirmed()
+                )
+    }
+
+    private fun candidateEvidence(
+        query: LyricsLookup,
+        candidate: DirectLyricsRepository.Result,
+        titleEvidence: EvidenceLevel
+    ): CandidateEvidence {
+
+        return CandidateEvidence(
+            candidate = candidate,
+            titleEvidence = titleEvidence,
+            artistEvidence = artistEvidence(query, candidate),
+            albumEvidence = albumEvidence(query.album, candidate.candidateAlbum),
+            titleAnnotationRank = titleAnnotationRank(query, candidate)
+        )
+    }
+
+    private fun supportingSourceCount(
+        evidence: CandidateEvidence,
+        candidates: List<CandidateEvidence>
+    ): Int {
+        val sources = candidates.asSequence()
+            .filter { peer -> candidatesDescribeSameRecording(evidence.candidate, peer.candidate) }
+            .map { peer -> peer.candidate.source }
+            .filter(String::isNotBlank)
+            .distinct()
+            .count()
+        return sources.coerceAtLeast(1)
+    }
+
+    private fun candidatesDescribeSameRecording(
+        first: DirectLyricsRepository.Result,
+        second: DirectLyricsRepository.Result
+    ): Boolean {
+        if (!hasMatchingDuration(first.durationMs, second.durationMs) ||
+            !isValidArtist(first.candidateArtist) ||
+            !isValidArtist(second.candidateArtist)
+        ) {
+            return false
+        }
+        val firstTitle = titleIdentity(first.candidateTrack)
+        val secondTitle = titleIdentity(second.candidateTrack)
+        if (!firstTitle.isValid || !secondTitle.isValid ||
+            !versionsMatch(firstTitle, secondTitle) ||
+            titleEvidence(firstTitle, secondTitle) == EvidenceLevel.DIFFERENT
+        ) {
+            return false
+        }
+        return artistEvidence(
+            first.candidateTrack,
+            first.candidateArtist,
+            second.candidateTrack,
+            second.candidateArtist
+        ).isConfirmed() || albumEvidence(
+            first.candidateAlbum,
+            second.candidateAlbum
+        ).isConfirmed()
     }
 
     private fun titleAnnotationRank(
@@ -612,33 +736,40 @@ internal object LyricsCandidateSelector {
         return if (featuredRelated || versionRelated || annotationRelated) 1 else 2
     }
 
-    private fun confirmationRank(
-        query: LyricsLookup,
-        candidate: DirectLyricsRepository.Result
-    ): Int {
-        val artistRelation = artistRelation(query, candidate)
-        val albumMatches = albumsMatch(query.album, candidate.candidateAlbum)
-        return when {
-            artistRelation == ArtistRelation.EXACT && albumMatches -> 0
-            artistRelation == ArtistRelation.EXACT -> 1
-            artistRelation == ArtistRelation.COMPATIBLE && albumMatches -> 2
-            artistRelation == ArtistRelation.COMPATIBLE -> 3
-            else -> 4
-        }
-    }
-
-    private fun albumsMatch(first: String, second: String): Boolean {
+    private fun albumEvidence(first: String, second: String): EvidenceLevel {
         val firstAlbum = normalizedAlbum(first)
         val secondAlbum = normalizedAlbum(second)
-        return firstAlbum.isNotBlank() && firstAlbum == secondAlbum
+        if (firstAlbum.isBlank() || secondAlbum.isBlank()) return EvidenceLevel.UNKNOWN
+        if (firstAlbum == secondAlbum) return EvidenceLevel.EXACT
+        if (nearMetadataText(first, second)) return EvidenceLevel.NEAR
+        return if (haveDisjointScripts(firstAlbum, secondAlbum)) {
+            EvidenceLevel.UNKNOWN
+        } else {
+            EvidenceLevel.DIFFERENT
+        }
     }
 
     private fun titlesMatch(first: String, second: String): Boolean {
         val firstTitle = titleIdentity(first)
         val secondTitle = titleIdentity(second)
         return firstTitle.isValid && secondTitle.isValid &&
-            firstTitle.base == secondTitle.base &&
-            firstTitle.versionQualifiers == secondTitle.versionQualifiers
+            versionsMatch(firstTitle, secondTitle) &&
+            titleEvidence(firstTitle, secondTitle).isConfirmed()
+    }
+
+    private fun versionsMatch(first: TitleIdentity, second: TitleIdentity): Boolean =
+        first.versionQualifiers == second.versionQualifiers
+
+    private fun titleEvidence(first: TitleIdentity, second: TitleIdentity): EvidenceLevel {
+        if (!first.isValid || !second.isValid) return EvidenceLevel.UNKNOWN
+        if (first.base == second.base) return EvidenceLevel.EXACT
+        val firstBases = first.alternateBases + first.base
+        val secondBases = second.alternateBases + second.base
+        return if (firstBases.any(secondBases::contains)) {
+            EvidenceLevel.NEAR
+        } else {
+            EvidenceLevel.DIFFERENT
+        }
     }
 
     private fun titleIdentity(value: String): TitleIdentity {
@@ -675,8 +806,16 @@ internal object LyricsCandidateSelector {
         }
             .replace(WHITESPACE_PATTERN, " ")
             .trim()
+        val base = normalizeText(normalized.replace(BRACKET_PATTERN, " "))
+        val alternateBases = bracketIdentities.asSequence()
+            .filter { it.featuredArtists.isEmpty() && it.versionQualifiers.isEmpty() }
+            .map { normalizeText(it.content) }
+            .filter(String::isNotBlank)
+            .filter { alternate -> haveDisjointScripts(base, alternate) }
+            .toSet()
         return TitleIdentity(
-            base = normalizeText(normalized.replace(BRACKET_PATTERN, " ")),
+            base = base,
+            alternateBases = alternateBases,
             searchText = searchText,
             versionQualifiers = versionQualifiers,
             annotations = annotations,
@@ -690,43 +829,47 @@ internal object LyricsCandidateSelector {
         .map(::normalizeText)
         .filter(String::isNotBlank)
 
-    private fun artistRelation(
+    private fun artistEvidence(
         query: LyricsLookup,
         candidate: DirectLyricsRepository.Result
-    ): ArtistRelation = artistRelation(
+    ): EvidenceLevel = artistEvidence(
         query.track,
         query.artist,
         candidate.candidateTrack,
         candidate.candidateArtist
     )
 
-    private fun artistRelation(
+    private fun artistEvidence(
         firstTrack: String,
         firstArtist: String,
         secondTrack: String,
         secondArtist: String
-    ): ArtistRelation {
+    ): EvidenceLevel {
         if (!isValidArtist(firstArtist) || !isValidArtist(secondArtist)) {
-            return ArtistRelation.NONE
+            return EvidenceLevel.UNKNOWN
         }
         val first = artistIdentity(firstTrack, firstArtist)
         val second = artistIdentity(secondTrack, secondArtist)
-        if (first.effective == second.effective) return ArtistRelation.EXACT
-        if (first.declared == second.declared) return ArtistRelation.COMPATIBLE
+        if (first.effective == second.effective) return EvidenceLevel.EXACT
+        if (first.declared == second.declared) return EvidenceLevel.NEAR
 
         if (first.effective.containsAll(second.effective)) {
             val omitted = first.effective - second.effective
             if (omitted.isNotEmpty() && omitted.all(first.featured::contains)) {
-                return ArtistRelation.COMPATIBLE
+                return EvidenceLevel.NEAR
             }
         }
         if (second.effective.containsAll(first.effective)) {
             val omitted = second.effective - first.effective
             if (omitted.isNotEmpty() && omitted.all(second.featured::contains)) {
-                return ArtistRelation.COMPATIBLE
+                return EvidenceLevel.NEAR
             }
         }
-        return ArtistRelation.NONE
+        return if (haveDisjointScripts(firstArtist, secondArtist)) {
+            EvidenceLevel.UNKNOWN
+        } else {
+            EvidenceLevel.DIFFERENT
+        }
     }
 
     private fun artistIdentity(track: String, artist: String): ArtistIdentity {
@@ -741,13 +884,54 @@ internal object LyricsCandidateSelector {
         it.isNotBlank() && it !in PLACEHOLDER_ARTISTS
     }
 
-    private fun normalizeText(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
+    private fun normalizeText(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKD)
         .lowercase(Locale.ROOT)
+        .replace(COMBINING_MARK_PATTERN, "")
         .replace(NON_LETTER_OR_DIGIT_PATTERN, "")
 
     private fun normalizedAlbum(value: String): String = normalizeText(value)
         .takeUnless { it in PLACEHOLDER_ALBUMS }
         .orEmpty()
+
+    private fun nearMetadataText(first: String, second: String): Boolean {
+        val firstTokens = metadataTokens(first)
+        val secondTokens = metadataTokens(second)
+        if (firstTokens.isEmpty() || secondTokens.isEmpty()) return false
+        if (firstTokens == secondTokens) return true
+        val (smaller, larger) = if (firstTokens.size <= secondTokens.size) {
+            firstTokens to secondTokens
+        } else {
+            secondTokens to firstTokens
+        }
+        if (!larger.containsAll(smaller)) return false
+        val extraTokens = larger - smaller
+        return extraTokens.isNotEmpty() &&
+            extraTokens.all { token -> token.length <= MAX_SHORT_METADATA_TOKEN_LENGTH }
+    }
+
+    private fun metadataTokens(value: String): Set<String> =
+        Normalizer.normalize(value, Normalizer.Form.NFKD)
+            .lowercase(Locale.ROOT)
+            .replace(COMBINING_MARK_PATTERN, "")
+            .split(NON_ALPHANUMERIC_PATTERN)
+            .filter(String::isNotBlank)
+            .toSet()
+
+    private fun haveDisjointScripts(first: String, second: String): Boolean {
+        val firstScripts = scripts(first)
+        val secondScripts = scripts(second)
+        return firstScripts.isNotEmpty() && secondScripts.isNotEmpty() &&
+            firstScripts.intersect(secondScripts).isEmpty()
+    }
+
+    private fun scripts(value: String): Set<Character.UnicodeScript> = value.asSequence()
+        .filter(Char::isLetter)
+        .map { character -> Character.UnicodeScript.of(character.code) }
+        .filterNot { script ->
+            script == Character.UnicodeScript.COMMON ||
+                script == Character.UnicodeScript.INHERITED
+        }
+        .toSet()
 
     private fun extractFeaturedArtists(value: String): Set<String> =
         FEATURED_ARTIST_PATTERN.matchEntire(value.trim())
@@ -820,6 +1004,7 @@ internal object LyricsCandidateSelector {
 
     private data class TitleIdentity(
         val base: String,
+        val alternateBases: Set<String>,
         val searchText: String,
         val versionQualifiers: Set<String>,
         val annotations: Set<String>,
@@ -842,10 +1027,44 @@ internal object LyricsCandidateSelector {
         val effective: Set<String> = declared + featured
     }
 
-    private enum class ArtistRelation {
+    private data class CandidateEvidence(
+        val candidate: DirectLyricsRepository.Result,
+        val titleEvidence: EvidenceLevel,
+        val artistEvidence: EvidenceLevel,
+        val albumEvidence: EvidenceLevel,
+        val titleAnnotationRank: Int,
+        val supportingSources: Int = 1
+    ) {
+        fun isConfirmed(): Boolean {
+            val directConfirmation = artistEvidence.isConfirmed() || albumEvidence.isConfirmed()
+            val consensusConfirmation = supportingSources >= MINIMUM_SUPPORTING_SOURCES &&
+                artistEvidence != EvidenceLevel.DIFFERENT &&
+                albumEvidence != EvidenceLevel.DIFFERENT
+            return titleEvidence.isConfirmed() && (directConfirmation || consensusConfirmation)
+        }
+
+        fun confirmationRank(): Int = when {
+            artistEvidence == EvidenceLevel.EXACT && albumEvidence == EvidenceLevel.EXACT -> 0
+            artistEvidence.isConfirmed() && albumEvidence.isConfirmed() -> 1
+            artistEvidence.isConfirmed() -> 2
+            albumEvidence.isConfirmed() -> 3
+            supportingSources >= MINIMUM_SUPPORTING_SOURCES -> 4
+            else -> 5
+        }
+    }
+
+    private data class CandidateMetadata(
+        val candidate: DirectLyricsRepository.Result,
+        val title: TitleIdentity
+    )
+
+    private enum class EvidenceLevel {
         EXACT,
-        COMPATIBLE,
-        NONE
+        NEAR,
+        UNKNOWN,
+        DIFFERENT;
+
+        fun isConfirmed(): Boolean = this == EXACT || this == NEAR
     }
 
     private val BRACKET_PATTERN = Regex("[（(\\[【{]([^）)\\]】}]{1,80})[）)\\]】}]")
@@ -886,8 +1105,11 @@ internal object LyricsCandidateSelector {
     private val CJK_VERSION_PATTERN = Regex("^\\s*(.+?)(?:版本|版)\\s*$")
     private val NON_ALPHANUMERIC_PATTERN = Regex("[^\\p{L}\\p{N}]+")
     private val NON_LETTER_OR_DIGIT_PATTERN = Regex("[^\\p{L}\\p{N}]")
+    private val COMBINING_MARK_PATTERN = Regex("\\p{M}+")
     private val CJK_SEQUENCE_PATTERN = Regex("[\\u3400-\\u9fff\\uF900-\\uFAFF]+")
     private val ANNOTATION_STOP_WORDS = setOf("the", "and", "from", "with", "of")
+    private const val MAX_SHORT_METADATA_TOKEN_LENGTH = 3
+    private const val MINIMUM_SUPPORTING_SOURCES = 2
     private val LANGUAGE_DISPLAY_LOCALES = listOf(
         Locale.ENGLISH,
         Locale.SIMPLIFIED_CHINESE,

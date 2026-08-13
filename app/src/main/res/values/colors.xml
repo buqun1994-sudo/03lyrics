@@ -1,20 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="settings_screen_background">#F3F5F7</color>
-    <color name="settings_sidebar_background">#FFFFFF</color>
-    <color name="settings_text_primary">#161A20</color>
-    <color name="settings_text_section">#252B33</color>
-    <color name="settings_text_secondary">#66717E</color>
-    <color name="settings_text_option">#4E5966</color>
+    <color name="settings_screen_background">#00000000</color>
+    <color name="settings_sidebar_background">#EBF3F3F3</color>
+    <color name="settings_content_background_start">#F6FCFBFC</color>
+    <color name="settings_content_background_center">#F9FDFDFD</color>
+    <color name="settings_content_background_end">#FFFFFFFF</color>
+    <color name="settings_control_background">#4DA4A6BD</color>
+    <color name="settings_text_primary">#FF000000</color>
+    <color name="settings_text_secondary">#8F000000</color>
+    <color name="settings_text_option">#B2000000</color>
     <color name="settings_text_on_accent">#FFFFFF</color>
-    <color name="settings_divider">#D6DCE3</color>
-    <color name="settings_control_fill">#FFFFFF</color>
-    <color name="settings_control_border">#C9D1DA</color>
-    <color name="settings_close_fill">#EDF1F4</color>
-    <color name="settings_accent">#245EAD</color>
-    <color name="settings_accent_border">#5B94E0</color>
-    <color name="settings_switch_thumb_off">#6E7885</color>
-    <color name="settings_switch_track_off">#C9D1DA</color>
+    <color name="settings_accent">#1A8CFF</color>
+    <color name="settings_switch_thumb_color">#FFFFFFFF</color>
+    <color name="settings_switch_track_off">#33A5ABAF</color>
 
     <bool name="settings_light_system_bars">true</bool>
 </resources>

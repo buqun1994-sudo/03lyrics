@@ -18,6 +18,7 @@
 | 任务信号 | 必读文档 |
 |---|---|
 | 项目定位、模块边界、状态流、微观阈值 | `docs/architecture/项目长期总纲.md` |
+| 车机视觉、页面模式、控件比例、背景透明度、主题色 | `docs/architecture/iCAR车机UI设计规范.md` |
 | 用户路径、功能范围、非目标、验收口径 | `docs/product/产品需求基线.md` |
 | 单测、lint、构建、实机 smoke | `docs/testing/验证矩阵.md` |
 | JDK、Android SDK、ADB、共享工具链 | `docs/operations/本地开发环境.md` |

@@ -23,6 +23,12 @@ internal enum class IcarIconVisibility {
     UNKNOWN
 }
 
+internal enum class IcarStandardWindowOccupancy {
+    CLOSED,
+    OPEN,
+    UNKNOWN
+}
+
 /**
  * The known small dynamic items between the fixed map/wallpaper and lock
  * buttons and the clock. Unknown states intentionally consume no width: the
@@ -71,8 +77,16 @@ internal object IcarTopbarLayout {
 
 internal data class IcarDisplayState(
     val launcherState: Int,
-    val iconVisibility: Map<IcarTopbarIconSlot, IcarIconVisibility> = emptyMap()
+    val iconVisibility: Map<IcarTopbarIconSlot, IcarIconVisibility> = emptyMap(),
+    val windowMode: Int = IcarDisplayStateMonitor.WINDOW_MODE_CLOSED
 ) {
+    val standardWindowOccupancy: IcarStandardWindowOccupancy
+        get() = when (windowMode) {
+            IcarDisplayStateMonitor.WINDOW_MODE_CLOSED -> IcarStandardWindowOccupancy.CLOSED
+            IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW -> IcarStandardWindowOccupancy.OPEN
+            else -> IcarStandardWindowOccupancy.UNKNOWN
+        }
+
     val surfaceMode: LyricsSurfaceMode
         get() = if (launcherState == IcarDisplayStateMonitor.LAUNCHER_STATE_WALLPAPER) {
             LyricsSurfaceMode.DESKTOP
@@ -101,19 +115,24 @@ internal object IcarLyricsSurfacePolicy {
     fun effectiveSurfaceMode(
         displayState: IcarDisplayState?,
         wallpaperLyricsEnabled: Boolean,
-        settingsOpen: Boolean
+        localSettingsOpen: Boolean
     ): LyricsSurfaceMode = when {
-        settingsOpen -> LyricsSurfaceMode.TOPBAR
+        localSettingsOpen -> LyricsSurfaceMode.TOPBAR
+        displayState == null -> LyricsSurfaceMode.TOPBAR
+        displayState.standardWindowOccupancy != IcarStandardWindowOccupancy.CLOSED -> {
+            LyricsSurfaceMode.TOPBAR
+        }
         !wallpaperLyricsEnabled -> LyricsSurfaceMode.TOPBAR
-        else -> displayState?.surfaceMode ?: LyricsSurfaceMode.TOPBAR
+        else -> displayState.surfaceMode
     }
+
+    fun hasRenderableGeometry(width: Int, height: Int): Boolean = width > 0 && height > 0
 }
 
 /**
- * Passive iCAR state reader. It observes only the public Global settings that
- * drive the launcher mode and the known left-side icon slots. It never
- * writes vehicle state or connects to private car, CAN, Bluetooth-phone, or
- * accessibility interfaces.
+ * Passive iCAR state reader. It observes only verified, readable Settings
+ * values plus public storage state. It never writes vehicle state or connects
+ * to private car, CAN, Bluetooth-phone, or accessibility interfaces.
  */
 internal class IcarDisplayStateMonitor(
     context: Context,
@@ -140,6 +159,7 @@ internal class IcarDisplayStateMonitor(
         if (started) return
         started = true
         OBSERVED_GLOBAL_KEYS.forEach(::observeGlobal)
+        observeSecure(KEY_WINDOW_MODE)
         registerStorageReceiver(handler)
         refresh()
     }
@@ -165,13 +185,15 @@ internal class IcarDisplayStateMonitor(
                 IcarTopbarIconSlot.SD_CARD_DVR to sdCardDvrVisibility(),
                 IcarTopbarIconSlot.USB_STORAGE to usbStorageVisibility(),
                 IcarTopbarIconSlot.GUARDIAN_MODE to guardianModeVisibility()
-            )
+            ),
+            windowMode = readSecure(KEY_WINDOW_MODE) ?: STATE_UNKNOWN
         )
         if (state == lastState) return
         lastState = state
         Log.i(
             LOG_TAG,
-            "iCAR display launcher=${state.launcherState} surface=${state.surfaceMode} " +
+            "iCAR display launcher=${state.launcherState} window=${state.windowMode} " +
+                "occupancy=${state.standardWindowOccupancy} surface=${state.surfaceMode} " +
                 "topbarOccupied=${state.occupiedTopbarWidthPx()} slots=${state.iconVisibility}"
         )
         onStateChanged(state)
@@ -182,6 +204,14 @@ internal class IcarDisplayStateMonitor(
             resolver.registerContentObserver(Settings.Global.getUriFor(key), false, observer)
         }.onFailure { error ->
             Log.w(LOG_TAG, "Unable to observe iCAR setting $key", error)
+        }
+    }
+
+    private fun observeSecure(key: String) {
+        runCatching {
+            resolver.registerContentObserver(Settings.Secure.getUriFor(key), false, observer)
+        }.onFailure { error ->
+            Log.w(LOG_TAG, "Unable to observe iCAR secure setting $key", error)
         }
     }
 
@@ -275,11 +305,17 @@ internal class IcarDisplayStateMonitor(
         Settings.Global.getString(resolver, key)
     }.getOrNull()
 
+    private fun readSecure(key: String): Int? = runCatching {
+        Settings.Secure.getInt(resolver, key)
+    }.getOrNull()
+
     companion object {
         const val STATE_UNKNOWN = -1
         const val LAUNCHER_STATE_WALLPAPER = 1
         const val LAUNCHER_STATE_MAP = 2
         const val LAUNCHER_STATE_CAR_SETTINGS = 3
+        const val WINDOW_MODE_CLOSED = 0
+        const val WINDOW_MODE_STANDARD_WINDOW = 2
 
         private const val WIRELESS_CHARGING_INACTIVE = 0
         private const val WIRELESS_CHARGING_ACTIVE = 1
@@ -291,6 +327,8 @@ internal class IcarDisplayStateMonitor(
 
         private const val KEY_LAUNCHER_STATE =
             "com.mengbo.launcher3.SETTINGS_KEY_LAUNCHER_STATE"
+        private const val KEY_WINDOW_MODE =
+            "com.mengbo.launcher3.settings.secure.window_mode"
         private const val KEY_WIRELESS_CHARGING_STATE =
             "com.mengbo.provider.wireless_charging_state"
         private const val KEY_SD_CARD_MOUNTED = "com.mb.provider.usb_sd_mounted"

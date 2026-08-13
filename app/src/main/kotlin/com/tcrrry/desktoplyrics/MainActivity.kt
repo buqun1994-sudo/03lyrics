@@ -2,8 +2,15 @@ package com.tcrrry.desktoplyrics
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
+import android.database.ContentObserver
+import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -20,11 +27,23 @@ class MainActivity : AppCompatActivity() {
     private lateinit var smallSizeOption: TextView
     private lateinit var standardSizeOption: TextView
     private lateinit var largeSizeOption: TextView
+    private lateinit var displayNavigationItem: TextView
+    private lateinit var wallpaperLyricsSetting: LinearLayout
     private lateinit var wallpaperLyricsSwitch: SwitchCompat
-    private var updatingOptions = false
+    private var themePalette = IcarThemeColorPalette.resolve(null, false)
+    private var renderedNightMode = false
+    private var themeObserverRegistered = false
+    private var renderingOptions = false
+
+    private val themeColorObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            refreshThemePalette()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        renderedNightMode = isNightMode()
         setContentView(R.layout.activity_main)
 
         currentLineOption = findViewById(R.id.topbar_lines_current)
@@ -32,34 +51,43 @@ class MainActivity : AppCompatActivity() {
         smallSizeOption = findViewById(R.id.font_size_small)
         standardSizeOption = findViewById(R.id.font_size_standard)
         largeSizeOption = findViewById(R.id.font_size_large)
+        displayNavigationItem = findViewById(R.id.settings_navigation_display)
+        wallpaperLyricsSetting = findViewById(R.id.wallpaper_lyrics_setting)
         wallpaperLyricsSwitch = findViewById(R.id.wallpaper_lyrics_switch)
-
-        findViewById<TextView>(R.id.settings_close).setOnClickListener { finish() }
-        findViewById<TextView>(R.id.settings_done).setOnClickListener { finish() }
 
         currentLineOption.setOnClickListener { setTopbarLines(1) }
         currentAndNextOption.setOnClickListener { setTopbarLines(2) }
         smallSizeOption.setOnClickListener { setFontScale(FONT_SCALE_SMALL) }
         standardSizeOption.setOnClickListener { setFontScale(FONT_SCALE_STANDARD) }
         largeSizeOption.setOnClickListener { setFontScale(FONT_SCALE_LARGE) }
+        wallpaperLyricsSetting.setOnClickListener {
+            wallpaperLyricsSwitch.isChecked = !wallpaperLyricsSwitch.isChecked
+        }
         wallpaperLyricsSwitch.setOnCheckedChangeListener { _, enabled ->
-            if (!updatingOptions) setWallpaperLyricsEnabled(enabled)
+            if (!renderingOptions) setWallpaperLyricsEnabled(enabled)
         }
 
-        updateOptions()
+        refreshThemePalette()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::currentLineOption.isInitialized) updateOptions()
+        if (renderedNightMode != isNightMode()) {
+            recreate()
+            return
+        }
+        if (::currentLineOption.isInitialized) refreshThemePalette()
     }
 
     override fun onStart() {
         super.onStart()
+        registerThemeColorObserver()
+        refreshThemePalette()
         notifyOverlay(LyricsOverlayService.ACTION_SETTINGS_OPENED)
     }
 
     override fun onStop() {
+        unregisterThemeColorObserver()
         if (!isChangingConfigurations) {
             notifyOverlay(LyricsOverlayService.ACTION_SETTINGS_CLOSED)
         }
@@ -131,12 +159,15 @@ class MainActivity : AppCompatActivity() {
             LyricsOverlayService.FONT_SCALE_MAX_PERCENT
         )
 
-        updatingOptions = true
+        renderingOptions = true
         try {
-            wallpaperLyricsSwitch.isChecked = overlayPrefs.getBoolean(
-                LyricsOverlayService.PREF_WALLPAPER_LYRICS_ENABLED,
-                LyricsOverlayService.WALLPAPER_LYRICS_DEFAULT
+            renderWallpaperLyricsSwitch(
+                overlayPrefs.getBoolean(
+                    LyricsOverlayService.PREF_WALLPAPER_LYRICS_ENABLED,
+                    LyricsOverlayService.WALLPAPER_LYRICS_DEFAULT
+                )
             )
+            setNavigationSelected(displayNavigationItem)
             setOptionSelected(currentLineOption, lines == 1)
             setOptionSelected(currentAndNextOption, lines == 2)
 
@@ -149,25 +180,79 @@ class MainActivity : AppCompatActivity() {
             setOptionSelected(standardSizeOption, selectedFontScale == FONT_SCALE_STANDARD)
             setOptionSelected(largeSizeOption, selectedFontScale == FONT_SCALE_LARGE)
         } finally {
-            updatingOptions = false
+            renderingOptions = false
         }
     }
 
     private fun setOptionSelected(option: TextView, selected: Boolean) {
-        option.setBackgroundResource(
-            if (selected) R.drawable.bg_settings_option_selected else R.drawable.bg_settings_option
-        )
+        option.setBackgroundResource(if (selected) R.drawable.bg_settings_segment_selected else 0)
+        option.backgroundTintList = if (selected) {
+            ColorStateList.valueOf(themePalette.accentColor)
+        } else {
+            null
+        }
         option.setTextColor(
-            ContextCompat.getColor(
-                this,
-                if (selected) R.color.settings_text_on_accent else R.color.settings_text_option
-            )
+            if (selected) themePalette.accentTextColor
+            else ContextCompat.getColor(this, R.color.settings_text_option)
         )
         option.typeface = Typeface.create(
-            "sans-serif",
-            if (selected) Typeface.BOLD else Typeface.NORMAL
+            if (selected) "sans-serif-medium" else "sans-serif",
+            Typeface.NORMAL
         )
     }
+
+    private fun setNavigationSelected(item: TextView) {
+        item.setBackgroundResource(R.drawable.bg_settings_navigation_selected)
+        item.backgroundTintList = ColorStateList.valueOf(themePalette.accentColor)
+        item.setTextColor(themePalette.accentTextColor)
+        item.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+
+    private fun renderWallpaperLyricsSwitch(enabled: Boolean) {
+        wallpaperLyricsSwitch.trackTintList = ColorStateList(
+            arrayOf(
+                intArrayOf(android.R.attr.state_checked),
+                intArrayOf()
+            ),
+            intArrayOf(
+                themePalette.accentColor,
+                ContextCompat.getColor(this, R.color.settings_switch_track_off)
+            )
+        )
+        wallpaperLyricsSwitch.isChecked = enabled
+    }
+
+    private fun refreshThemePalette() {
+        themePalette = IcarThemeColorPalette.resolve(
+            themeKey = runCatching {
+                Settings.Global.getInt(contentResolver, IcarThemeColorPalette.GLOBAL_THEME_KEY)
+            }.getOrNull(),
+            nightMode = isNightMode()
+        )
+        if (::currentLineOption.isInitialized) updateOptions()
+    }
+
+    private fun registerThemeColorObserver() {
+        if (themeObserverRegistered) return
+        runCatching {
+            contentResolver.registerContentObserver(
+                Settings.Global.getUriFor(IcarThemeColorPalette.GLOBAL_THEME_KEY),
+                false,
+                themeColorObserver
+            )
+            themeObserverRegistered = true
+        }
+    }
+
+    private fun unregisterThemeColorObserver() {
+        if (!themeObserverRegistered) return
+        runCatching { contentResolver.unregisterContentObserver(themeColorObserver) }
+        themeObserverRegistered = false
+    }
+
+    private fun isNightMode(): Boolean =
+        resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
 
     private fun notifyOverlay(action: String) {
         if (!LyricsOverlayService.isRunning) return

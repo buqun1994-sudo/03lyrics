@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="SettingsText.Body1" parent="@android:style/Widget.TextView">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:textColor">@color/settings_text_primary</item>
+        <item name="android:textSize">@dimen/settings_text_body1</item>
+    </style>
+
+    <style name="SettingsText.Body1.Emphasis" parent="SettingsText.Body1">
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="SettingsText.Option" parent="SettingsText.Body1">
+        <item name="android:textColor">@color/settings_text_option</item>
+    </style>
+
+    <style name="SettingsText.Body2" parent="SettingsText.Body1">
+        <item name="android:textSize">@dimen/settings_text_body2</item>
+    </style>
+
+    <style name="SettingsText.Body2.Emphasis" parent="SettingsText.Body2">
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="SettingsText.Caption2" parent="SettingsText.Body1">
+        <item name="android:textColor">@color/settings_text_secondary</item>
+        <item name="android:textSize">@dimen/settings_text_caption2</item>
+    </style>
+</resources>

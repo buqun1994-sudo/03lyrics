@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- iCAR source values are physical px at 141 dpi; app resources use converted dp/sp. -->
+    <dimen name="settings_sidebar_width">345dp</dimen>
+    <dimen name="settings_sidebar_padding_horizontal">29.5dp</dimen>
+    <dimen name="settings_navigation_width">286dp</dimen>
+    <dimen name="settings_navigation_height">95dp</dimen>
+    <dimen name="settings_sidebar_title_height">68dp</dimen>
+
+    <dimen name="settings_content_padding_start">48dp</dimen>
+    <dimen name="settings_content_padding_end">41dp</dimen>
+    <dimen name="settings_content_padding_vertical">48dp</dimen>
+    <dimen name="settings_navigation_margin_top">40dp</dimen>
+    <dimen name="settings_group_spacing">40dp</dimen>
+    <dimen name="settings_control_spacing">20dp</dimen>
+
+    <dimen name="settings_segment_height">95dp</dimen>
+    <dimen name="settings_segment_padding">7dp</dimen>
+    <dimen name="settings_switch_card_width">466dp</dimen>
+    <dimen name="settings_switch_card_height">143dp</dimen>
+    <dimen name="settings_switch_card_padding_start">27dp</dimen>
+    <dimen name="settings_switch_label_spacing">27dp</dimen>
+    <dimen name="settings_switch_caption_spacing">5dp</dimen>
+    <dimen name="settings_switch_width">73dp</dimen>
+    <dimen name="settings_switch_height">41dp</dimen>
+    <dimen name="settings_switch_thumb_size">34dp</dimen>
+
+    <dimen name="settings_window_radius">20dp</dimen>
+    <dimen name="settings_control_radius">20dp</dimen>
+    <dimen name="settings_selected_radius">14dp</dimen>
+
+    <dimen name="settings_text_body1">31.75sp</dimen>
+    <dimen name="settings_text_body2">27.25sp</dimen>
+    <dimen name="settings_text_caption2">22.75sp</dimen>
+</resources>
