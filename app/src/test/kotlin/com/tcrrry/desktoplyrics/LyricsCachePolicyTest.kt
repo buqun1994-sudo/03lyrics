@@ -1,6 +1,7 @@
 package com.tcrrry.desktoplyrics
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -22,5 +23,27 @@ class LyricsCachePolicyTest {
 
         assertEquals(30, cappedUseCount)
         assertTrue(recentOccasional > oldFrequent)
+    }
+
+    @Test
+    fun `keeps nearby platform duration metadata in the same lookup window`() {
+        val storedKey = LyricsCache.key("Twinkle", "Localized Artist", "Twinkle Mini Album", 208_000L)
+        val lookupKeys = LyricsCache.lookupKeys(
+            "Twinkle",
+            "Localized Artist",
+            "Twinkle Mini Album",
+            206_796L
+        )
+
+        assertTrue(storedKey in lookupKeys)
+    }
+
+    @Test
+    fun `separates a duration mismatch larger than the recording tolerance`() {
+        val wrongVersionKey = LyricsCache.key("World", "Artist", "Album", 255_546L)
+        val lookupKeys = LyricsCache.lookupKeys("World", "Artist", "Album", 258_763L)
+
+        assertFalse(wrongVersionKey in lookupKeys)
+        assertFalse(LyricsCandidateSelector.hasMatchingDuration(258_763L, 255_546L))
     }
 }

@@ -28,7 +28,6 @@ class DirectLyricsRepository {
         val cover: String = "",
         val source: String = "",
         val sourceId: String = "",
-        val score: Int = 0,
         val candidateTrack: String = "",
         val candidateArtist: String = "",
         val candidateAlbum: String = "",
@@ -56,36 +55,25 @@ class DirectLyricsRepository {
         durationMs: Long = 0L
     ): Result {
         val query = LyricsLookup(track, artist, album, durationMs)
-        val completion = ExecutorCompletionService<Result?>(executor)
-        val futures = listOf(
-            completion.submit(Callable { queryLrcLib(query) }),
-            completion.submit(Callable { queryQqMusic(query, includeLyrics = true) }),
-            completion.submit(Callable { queryNetEase(query, includeLyrics = true) })
-        )
+        if (!LyricsCandidateSelector.canConfirm(query)) return Result()
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(LYRICS_DEADLINE_MS)
-        val candidates = mutableListOf<Result>()
-
-        try {
-            repeat(futures.size) {
-                val remaining = deadline - System.nanoTime()
-                if (remaining <= 0L) return@repeat
-                val future = completion.poll(remaining, TimeUnit.NANOSECONDS) ?: return@repeat
-                val candidate = runCatching { future.get() }
-                    .onFailure { Log.w(LOG_TAG, "Lyrics source query failed", it) }
-                    .getOrNull()
-                if (candidate != null) candidates += candidate
-            }
-        } finally {
-            futures.forEach { it.cancel(true) }
-        }
-        val selected = LyricsCandidateSelector.select(
-            query,
-            candidates,
-            minimumKind = LyricsKind.SYNCHRONIZED
+        val catalogDeadline = minOf(
+            deadline,
+            System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CATALOG_DEADLINE_MS)
         )
+        val candidates = collectCatalogCandidates(
+            catalogDeadline,
+            listOf(
+                Callable { searchLrcLib(query, catalogDeadline) },
+                Callable { searchQqMusic(query, catalogDeadline) },
+                Callable { searchNetEase(query, catalogDeadline) }
+            )
+        )
+        val confirmed = LyricsCandidateSelector.selectCandidates(query, candidates)
+        val selected = loadConfirmedLyrics(confirmed, deadline)
         Log.i(
             LOG_TAG,
-            "Lyrics candidates=${candidates.joinToString { "${it.source}:${it.lyricsKind}:${it.score}" }} " +
+            "Lyrics catalogCandidates=${candidates.size} confirmed=${confirmed.size} " +
                 "selected=${selected?.source ?: "none"}"
         )
         return selected ?: Result()
@@ -93,215 +81,210 @@ class DirectLyricsRepository {
 
     fun resolveCover(track: String, artist: String): String {
         val query = LyricsLookup(track, artist)
-        val completion = ExecutorCompletionService<Result?>(executor)
-        val futures = listOf(
-            completion.submit(Callable { queryQqMusic(query, includeLyrics = false) }),
-            completion.submit(Callable { queryNetEase(query, includeLyrics = false) })
-        )
+        if (!LyricsCandidateSelector.canFindCover(query)) return ""
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(COVER_DEADLINE_MS)
-        var best: Result? = null
-
-        try {
-            repeat(futures.size) {
-                val remaining = deadline - System.nanoTime()
-                if (remaining <= 0L) return@repeat
-                val candidate = completion.poll(remaining, TimeUnit.NANOSECONDS)
-                    ?.let { runCatching { it.get() }.getOrNull() }
-                    ?.takeIf { it.cover.isNotBlank() && it.score >= MIN_ACCEPTABLE_SCORE }
-                if (candidate != null && (best == null || candidate.score > best?.score ?: Int.MIN_VALUE)) {
-                    best = candidate
-                }
-            }
-        } finally {
-            futures.forEach { it.cancel(true) }
-        }
-        return best?.cover.orEmpty()
+        val candidates = collectCatalogCandidates(
+            deadline,
+            listOf(
+                Callable { searchQqMusic(query, deadline) },
+                Callable { searchNetEase(query, deadline) }
+            )
+        )
+        return LyricsCandidateSelector.selectCoverCandidate(query, candidates)?.cover.orEmpty()
     }
 
     fun close() {
         executor.shutdownNow()
     }
 
-    private fun queryLrcLib(query: LyricsLookup): Result? {
-        val url = "https://lrclib.net/api/search?track_name=${encode(query.track)}&artist_name=${encode(query.artist)}"
-        val list = JSONArray(getText(url, mapOf("Accept" to "application/json")))
+    private fun collectCatalogCandidates(
+        deadlineNanos: Long,
+        tasks: List<Callable<List<Result>>>
+    ): List<Result> {
+        val completion = ExecutorCompletionService<List<Result>>(executor)
+        val futures = tasks.map(completion::submit)
         val candidates = mutableListOf<Result>()
-        for (index in 0 until list.length()) {
-            val item = list.optJSONObject(index) ?: continue
-            val syncedLyrics = item.contentString("syncedLyrics")
-            val lyrics = syncedLyrics.ifBlank { item.contentString("plainLyrics") }
-            val metadata = LyricsCandidateMetadata(
-                track = item.contentString("trackName"),
-                artist = item.contentString("artistName"),
-                album = item.contentString("albumName"),
-                durationMs = (item.optDouble("duration", 0.0) * 1000.0).toLong()
-            )
-            val match = LyricsCandidateSelector.assess(query, metadata)
-            if (!match.accepted || cleanLyrics(lyrics).isBlank()) continue
-            candidates += Result(
-                lyrics = lyrics,
-                durationMs = metadata.durationMs,
-                source = "LRCLIB",
-                sourceId = item.contentString("id"),
-                score = match.score,
-                candidateTrack = metadata.track,
-                candidateArtist = metadata.artist,
-                candidateAlbum = metadata.album,
-                lyricsKind = classifyLyrics(lyrics)
-            )
+
+        try {
+            var completed = 0
+            while (completed < futures.size) {
+                val remaining = deadlineNanos - System.nanoTime()
+                if (remaining <= 0L) break
+                val future = completion.poll(remaining, TimeUnit.NANOSECONDS) ?: break
+                completed += 1
+                candidates += runCatching { future.get() }
+                    .onFailure { Log.w(LOG_TAG, "Lyrics catalog query failed", it) }
+                    .getOrDefault(emptyList())
+            }
+        } finally {
+            futures.forEach { it.cancel(true) }
         }
-        return LyricsCandidateSelector.select(
-            query,
-            candidates,
-            minimumKind = LyricsKind.SYNCHRONIZED
-        )
+        return candidates
     }
 
-    private fun queryQqMusic(query: LyricsLookup, includeLyrics: Boolean): Result? {
+    private fun searchLrcLib(query: LyricsLookup, deadlineNanos: Long): List<Result> {
+        val url = "https://lrclib.net/api/search?track_name=${encode(query.track)}&artist_name=${encode(query.artist)}"
+        val list = JSONArray(getText(url, mapOf("Accept" to "application/json"), deadlineNanos))
+        return buildList {
+            for (index in 0 until list.length()) {
+                val item = list.optJSONObject(index) ?: continue
+                val lyrics = cleanLyrics(item.contentString("syncedLyrics"))
+                if (classifyLyrics(lyrics) != LyricsKind.SYNCHRONIZED) continue
+                add(
+                    Result(
+                        lyrics = lyrics,
+                        durationMs = (item.optDouble("duration", 0.0) * 1000.0).toLong(),
+                        source = SOURCE_LRCLIB,
+                        sourceId = item.contentString("id"),
+                        candidateTrack = item.contentString("trackName"),
+                        candidateArtist = item.contentString("artistName"),
+                        candidateAlbum = item.contentString("albumName"),
+                        lyricsKind = LyricsKind.SYNCHRONIZED
+                    )
+                )
+            }
+        }
+    }
+
+    private fun searchQqMusic(query: LyricsLookup, deadlineNanos: Long): List<Result> {
         val searchUrl = "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp" +
             "?format=json&p=1&n=8&w=${encode("${query.track} ${query.artist}".trim())}"
-        val headers = mapOf(
-            "Accept" to "application/json",
-            "Referer" to "https://y.qq.com/",
-            "User-Agent" to USER_AGENT
-        )
-        val root = JSONObject(getText(searchUrl, headers))
+        val root = JSONObject(getText(searchUrl, qqHeaders(), deadlineNanos))
         val songs = root.optJSONObject("data")
             ?.optJSONObject("song")
-            ?.optJSONArray("list") ?: return null
-        val match = bestJsonMatch(songs, query) { item ->
-            LyricsCandidateMetadata(
-                track = item.contentString("songname").ifBlank { item.contentString("songorig") },
-                artist = item.optJSONArray("singer").joinNames("name"),
-                album = item.contentString("albumname"),
-                durationMs = item.optLong("interval", 0L) * 1000L
-            )
-        } ?: return null
+            ?.optJSONArray("list") ?: return emptyList()
+        return buildList {
+            for (index in 0 until songs.length()) {
+                val song = songs.optJSONObject(index) ?: continue
+                val songMid = song.contentString("songmid")
+                if (songMid.isBlank()) continue
+                add(
+                    Result(
+                        durationMs = song.optLong("interval", 0L) * 1000L,
+                        cover = qqCover(song),
+                        source = SOURCE_QQ,
+                        sourceId = songMid,
+                        candidateTrack = song.contentString("songname").ifBlank {
+                            song.contentString("songorig")
+                        },
+                        candidateArtist = song.optJSONArray("singer").joinNames("name"),
+                        candidateAlbum = song.contentString("albumname")
+                    )
+                )
+            }
+        }
+    }
 
-        val song = match.item
-        val metadata = match.metadata
+    private fun searchNetEase(query: LyricsLookup, deadlineNanos: Long): List<Result> {
+        val searchUrl = "https://music.163.com/api/search/get/web" +
+            "?type=1&limit=8&s=${encode("${query.track} ${query.artist}".trim())}"
+        val root = JSONObject(getText(searchUrl, netEaseHeaders(), deadlineNanos))
+        val songs = root.optJSONObject("result")?.optJSONArray("songs") ?: return emptyList()
+        return buildList {
+            for (index in 0 until songs.length()) {
+                val song = songs.optJSONObject(index) ?: continue
+                val songId = song.optLong("id", 0L)
+                if (songId <= 0L) continue
+                val album = song.optJSONObject("album") ?: song.optJSONObject("al")
+                add(
+                    Result(
+                        durationMs = song.optLong("duration", song.optLong("dt", 0L)),
+                        cover = album.contentString("picUrl"),
+                        source = SOURCE_NETEASE,
+                        sourceId = songId.toString(),
+                        candidateTrack = song.contentString("name"),
+                        candidateArtist = (song.optJSONArray("artists") ?: song.optJSONArray("ar"))
+                            .joinNames("name"),
+                        candidateAlbum = album.contentString("name")
+                    )
+                )
+            }
+        }
+    }
+
+    private fun loadConfirmedLyrics(candidates: List<Result>, deadlineNanos: Long): Result? {
+        val results = MutableList<Result?>(candidates.size) { null }
+        val completion = ExecutorCompletionService<IndexedValue<Result?>>(executor)
+        val futures = candidates.mapIndexedNotNull { index, candidate ->
+            if (candidate.source == SOURCE_LRCLIB) {
+                results[index] = candidate.takeIf {
+                    classifyLyrics(it.lyrics) == LyricsKind.SYNCHRONIZED
+                }
+                null
+            } else {
+                completion.submit(
+                    Callable { IndexedValue(index, loadCandidateLyrics(candidate, deadlineNanos)) }
+                )
+            }
+        }
+        try {
+            repeat(futures.size) {
+                val remaining = deadlineNanos - System.nanoTime()
+                if (remaining <= 0L) return@repeat
+                val loaded = completion.poll(remaining, TimeUnit.NANOSECONDS)
+                    ?.let { future ->
+                        runCatching { future.get() }
+                            .onFailure { Log.w(LOG_TAG, "Lyrics source lookup failed", it) }
+                            .getOrNull()
+                    }
+                if (loaded != null) results[loaded.index] = loaded.value
+            }
+        } finally {
+            futures.forEach { it.cancel(true) }
+        }
+        return results.firstOrNull { it != null }
+    }
+
+    private fun loadCandidateLyrics(candidate: Result, deadlineNanos: Long): Result? = when (candidate.source) {
+        SOURCE_LRCLIB -> candidate.takeIf { classifyLyrics(it.lyrics) == LyricsKind.SYNCHRONIZED }
+        SOURCE_QQ -> loadQqLyrics(candidate, deadlineNanos)
+        SOURCE_NETEASE -> loadNetEaseLyrics(candidate, deadlineNanos)
+        else -> null
+    }
+
+    private fun loadQqLyrics(candidate: Result, deadlineNanos: Long): Result? {
+        if (candidate.sourceId.isBlank()) return null
+        val lyricUrl = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg" +
+            "?songmid=${encode(candidate.sourceId)}&format=json&nobase64=1"
+        val lyricRoot = parseJsonFlexible(getBytes(lyricUrl, qqHeaders(), deadlineNanos)) ?: return null
+        val lyrics = cleanLyrics(unescapeHtml(lyricRoot.contentString("lyric")))
+        return candidate.takeIf { classifyLyrics(lyrics) == LyricsKind.SYNCHRONIZED }
+            ?.copy(lyrics = lyrics, lyricsKind = LyricsKind.SYNCHRONIZED)
+    }
+
+    private fun loadNetEaseLyrics(candidate: Result, deadlineNanos: Long): Result? {
+        if (candidate.sourceId.isBlank()) return null
+        val lyricUrl = "https://music.163.com/api/song/lyric?os=pc&id=${encode(candidate.sourceId)}" +
+            "&lv=-1&kv=-1&tv=-1"
+        val lyricRoot = JSONObject(getText(lyricUrl, netEaseHeaders(), deadlineNanos))
+        val lyrics = cleanLyrics(lyricRoot.optJSONObject("lrc").contentString("lyric"))
+        return candidate.takeIf { classifyLyrics(lyrics) == LyricsKind.SYNCHRONIZED }
+            ?.copy(lyrics = lyrics, lyricsKind = LyricsKind.SYNCHRONIZED)
+    }
+
+    private fun qqCover(song: JSONObject): String {
         val albumMid = song.contentString("albummid")
         val albumId = song.optLong("albumid", 0L)
-        val cover = when {
+        return when {
             albumMid.isNotBlank() && !albumMid.all(Char::isDigit) ->
                 "https://y.gtimg.cn/music/photo_new/T002R800x800M000$albumMid.jpg"
             albumId > 0L ->
                 "https://y.gtimg.cn/music/photo/album_500/${albumId % 100}/500_albumpic_${albumId}_0.jpg"
             else -> ""
         }
-        if (!includeLyrics) {
-            return Result(
-                cover = cover,
-                source = "QQ音乐",
-                score = match.assessment.score,
-                candidateTrack = metadata.track,
-                candidateArtist = metadata.artist,
-                candidateAlbum = metadata.album
-            )
-        }
-
-        val songMid = song.contentString("songmid")
-        if (songMid.isBlank()) return null
-        val lyricUrl = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg" +
-            "?songmid=${encode(songMid)}&format=json&nobase64=1"
-        val lyricRoot = parseJsonFlexible(getBytes(lyricUrl, headers)) ?: return null
-        val lyrics = cleanLyrics(unescapeHtml(lyricRoot.contentString("lyric")))
-        if (lyrics.isBlank()) return null
-        return Result(
-            lyrics = lyrics,
-            durationMs = metadata.durationMs,
-            cover = cover,
-            source = "QQ音乐",
-            sourceId = songMid,
-            score = match.assessment.score,
-            candidateTrack = metadata.track,
-            candidateArtist = metadata.artist,
-            candidateAlbum = metadata.album,
-            lyricsKind = classifyLyrics(lyrics)
-        )
     }
 
-    private fun queryNetEase(query: LyricsLookup, includeLyrics: Boolean): Result? {
-        val searchUrl = "https://music.163.com/api/search/get/web" +
-            "?type=1&limit=8&s=${encode("${query.track} ${query.artist}".trim())}"
-        val headers = mapOf(
-            "Accept" to "application/json",
-            "Referer" to "https://music.163.com/",
-            "User-Agent" to USER_AGENT
-        )
-        val root = JSONObject(getText(searchUrl, headers))
-        val songs = root.optJSONObject("result")?.optJSONArray("songs") ?: return null
-        val match = bestJsonMatch(songs, query) { item ->
-            val album = item.optJSONObject("album") ?: item.optJSONObject("al")
-            LyricsCandidateMetadata(
-                track = item.contentString("name"),
-                artist = (item.optJSONArray("artists") ?: item.optJSONArray("ar")).joinNames("name"),
-                album = album.contentString("name"),
-                durationMs = item.optLong("duration", item.optLong("dt", 0L))
-            )
-        } ?: return null
+    private fun qqHeaders(): Map<String, String> = mapOf(
+        "Accept" to "application/json",
+        "Referer" to "https://y.qq.com/",
+        "User-Agent" to USER_AGENT
+    )
 
-        val song = match.item
-        val metadata = match.metadata
-        val album = song.optJSONObject("album") ?: song.optJSONObject("al")
-        var cover = album.contentString("picUrl")
-        val songId = song.optLong("id", 0L)
-
-        if (cover.isBlank() && songId > 0L) {
-            val detailUrl = "https://music.163.com/api/song/detail/?id=$songId&ids=[$songId]"
-            val detail = runCatching { JSONObject(getText(detailUrl, headers)) }.getOrNull()
-            val detailSong = detail?.optJSONArray("songs")?.optJSONObject(0)
-            cover = (detailSong?.optJSONObject("album") ?: detailSong?.optJSONObject("al"))
-                .contentString("picUrl")
-        }
-        if (!includeLyrics) {
-            return Result(
-                cover = cover,
-                source = "网易云音乐",
-                score = match.assessment.score,
-                candidateTrack = metadata.track,
-                candidateArtist = metadata.artist,
-                candidateAlbum = metadata.album
-            )
-        }
-        if (songId <= 0L) return null
-
-        val lyricUrl = "https://music.163.com/api/song/lyric?os=pc&id=$songId&lv=-1&kv=-1&tv=-1"
-        val lyricRoot = JSONObject(getText(lyricUrl, headers))
-        val lyrics = cleanLyrics(lyricRoot.optJSONObject("lrc").contentString("lyric"))
-        if (lyrics.isBlank()) return null
-        return Result(
-            lyrics = lyrics,
-            durationMs = metadata.durationMs,
-            cover = cover,
-            source = "网易云音乐",
-            sourceId = songId.toString(),
-            score = match.assessment.score,
-            candidateTrack = metadata.track,
-            candidateArtist = metadata.artist,
-            candidateAlbum = metadata.album,
-            lyricsKind = classifyLyrics(lyrics)
-        )
-    }
-
-    private fun bestJsonMatch(
-        array: JSONArray,
-        query: LyricsLookup,
-        fields: (JSONObject) -> LyricsCandidateMetadata
-    ): JsonMatch? {
-        var best: JsonMatch? = null
-        for (index in 0 until array.length()) {
-            val item = array.optJSONObject(index) ?: continue
-            val metadata = fields(item)
-            val assessment = LyricsCandidateSelector.assess(query, metadata)
-            if (!assessment.accepted) continue
-            val candidate = JsonMatch(item, metadata, assessment)
-            if (best == null || candidate.assessment.score > best.assessment.score) {
-                best = candidate
-            }
-        }
-        return best
-    }
+    private fun netEaseHeaders(): Map<String, String> = mapOf(
+        "Accept" to "application/json",
+        "Referer" to "https://music.163.com/",
+        "User-Agent" to USER_AGENT
+    )
 
     private fun JSONArray?.joinNames(key: String): String {
         if (this == null) return ""
@@ -312,15 +295,23 @@ class DirectLyricsRepository {
         }.joinToString("/")
     }
 
-    private fun getText(url: String, headers: Map<String, String>): String =
-        getBytes(url, headers).toString(Charsets.UTF_8)
+    private fun getText(
+        url: String,
+        headers: Map<String, String>,
+        deadlineNanos: Long? = null
+    ): String = getBytes(url, headers, deadlineNanos).toString(Charsets.UTF_8)
 
-    private fun getBytes(url: String, headers: Map<String, String>): ByteArray {
+    private fun getBytes(
+        url: String,
+        headers: Map<String, String>,
+        deadlineNanos: Long? = null
+    ): ByteArray {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
+            val remainingMs = remainingTimeoutMs(deadlineNanos)
             connection.requestMethod = "GET"
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
+            connection.connectTimeout = minOf(CONNECT_TIMEOUT_MS, remainingMs)
+            connection.readTimeout = minOf(READ_TIMEOUT_MS, remainingMs)
             connection.instanceFollowRedirects = true
             connection.useCaches = true
             headers.forEach(connection::setRequestProperty)
@@ -331,6 +322,7 @@ class DirectLyricsRepository {
                 val buffer = ByteArray(8192)
                 var total = 0
                 while (true) {
+                    remainingTimeoutMs(deadlineNanos)
                     val read = input.read(buffer)
                     if (read < 0) break
                     total += read
@@ -342,6 +334,16 @@ class DirectLyricsRepository {
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun remainingTimeoutMs(deadlineNanos: Long?): Int {
+        if (deadlineNanos == null) return READ_TIMEOUT_MS
+        val remaining = deadlineNanos - System.nanoTime()
+        if (remaining <= 0L) throw IllegalStateException("Lyrics lookup deadline reached")
+        return TimeUnit.NANOSECONDS.toMillis(remaining)
+            .coerceAtLeast(1L)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
     }
 
     private fun parseJsonFlexible(bytes: ByteArray): JSONObject? {
@@ -359,20 +361,17 @@ class DirectLyricsRepository {
 
     private fun encode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
 
-    private data class JsonMatch(
-        val item: JSONObject,
-        val metadata: LyricsCandidateMetadata,
-        val assessment: LyricsMatchAssessment
-    )
-
     companion object {
         private const val LOG_TAG = "DesktopLyrics"
+        private const val SOURCE_LRCLIB = "LRCLIB"
+        private const val SOURCE_QQ = "QQ音乐"
+        private const val SOURCE_NETEASE = "网易云音乐"
         private const val CONNECT_TIMEOUT_MS = 1_500
         private const val READ_TIMEOUT_MS = 2_200
+        private const val CATALOG_DEADLINE_MS = 1_800L
         private const val LYRICS_DEADLINE_MS = 3_800L
         private const val COVER_DEADLINE_MS = 3_000L
         private const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-        private const val MIN_ACCEPTABLE_SCORE = 50
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36"
     }
@@ -385,144 +384,144 @@ internal data class LyricsLookup(
     val durationMs: Long = 0L
 )
 
-internal data class LyricsCandidateMetadata(
-    val track: String,
-    val artist: String,
-    val album: String = "",
-    val durationMs: Long = 0L
-)
-
-enum class LyricsKind(val priority: Int) {
-    NONE(0),
-    PLAIN(1),
-    SYNCHRONIZED(2)
+enum class LyricsKind {
+    NONE,
+    PLAIN,
+    SYNCHRONIZED
 }
 
-internal data class LyricsMatchAssessment(
-    val accepted: Boolean,
-    val tier: Int,
-    val score: Int
-)
-
 internal object LyricsCandidateSelector {
-    private const val MIN_TITLE_SIMILARITY = 0.55
-    private const val MIN_ARTIST_SIMILARITY = 0.45
-    private const val MIN_CANDIDATE_SCORE = 68
-    private const val MIN_SELECTION_SCORE = 78
-    private const val MIN_WINNER_MARGIN = 6
-    private const val SOURCE_CONSENSUS_BONUS = 4
+    private const val MINIMUM_DURATION_MS = 1_000L
+    internal const val MAX_DURATION_DELTA_MS = 2_000L
 
-    fun select(
+    fun canConfirm(query: LyricsLookup): Boolean =
+        hasKnownDuration(query.durationMs) &&
+            titleIdentity(query.track).isValid &&
+            isValidArtist(query.artist)
+
+    fun hasKnownDuration(durationMs: Long): Boolean = durationMs >= MINIMUM_DURATION_MS
+
+    fun hasMatchingDuration(firstDurationMs: Long, secondDurationMs: Long): Boolean =
+        hasKnownDuration(firstDurationMs) &&
+            hasKnownDuration(secondDurationMs) &&
+            abs(firstDurationMs - secondDurationMs) <= MAX_DURATION_DELTA_MS
+
+    fun selectCandidates(
         query: LyricsLookup,
-        candidates: Iterable<DirectLyricsRepository.Result>,
-        minimumKind: LyricsKind = LyricsKind.PLAIN
-    ): DirectLyricsRepository.Result? {
-        val ranked = candidates.mapNotNull { candidate ->
-            val lyrics = cleanLyrics(candidate.lyrics)
-            val kind = classifyLyrics(lyrics)
-            if (kind.priority < minimumKind.priority) return@mapNotNull null
-            val metadata = LyricsCandidateMetadata(
-                track = candidate.candidateTrack,
-                artist = candidate.candidateArtist,
-                album = candidate.candidateAlbum,
-                durationMs = candidate.durationMs
-            )
-            val assessment = assess(query, metadata)
-            if (!assessment.accepted) return@mapNotNull null
-            RankedCandidate(
-                candidate.copy(lyrics = lyrics, lyricsKind = kind, score = assessment.score),
-                assessment
-            )
-        }.toList()
-        val supported = ranked.map { rankedCandidate ->
-            val supportingSources = ranked.asSequence()
-                .filter { it !== rankedCandidate }
-                .filter { it.result.source.isNotBlank() }
-                .filter { it.result.source != rankedCandidate.result.source }
-                .filter { sameRecording(rankedCandidate.metadata, it.metadata) }
-                .map { it.result.source }
-                .distinct()
-                .count()
-            val consensusBonus = supportingSources.coerceAtMost(2) * SOURCE_CONSENSUS_BONUS
-            rankedCandidate.copy(
-                result = rankedCandidate.result.copy(score = rankedCandidate.assessment.score + consensusBonus),
-                finalScore = rankedCandidate.assessment.score + consensusBonus
-            )
-        }.filter { it.finalScore >= MIN_SELECTION_SCORE }
-            .sortedWith(
-                compareByDescending<RankedCandidate> { it.finalScore }
-                    .thenByDescending { it.result.lyricsKind.priority }
-                    .thenBy { it.result.source }
-            )
+        candidates: Iterable<DirectLyricsRepository.Result>
+    ): List<DirectLyricsRepository.Result> {
+        if (!canConfirm(query)) return emptyList()
+        val matched = candidates.asSequence()
+            .filter { matchesVersion(query, it) }
+            .distinctBy(::candidateIdentity)
+            .toList()
+        if (matched.isEmpty()) return emptyList()
 
-        val winner = supported.firstOrNull() ?: return null
-        val nearestDifferentRecording = supported.drop(1)
-            .firstOrNull { !sameRecording(winner.metadata, it.metadata) }
-        if (nearestDifferentRecording != null &&
-            winner.finalScore - nearestDifferentRecording.finalScore < MIN_WINNER_MARGIN
-        ) {
-            return null
+        val versions = mutableListOf<MutableList<DirectLyricsRepository.Result>>()
+        matched.forEach { candidate ->
+            val matchingVersion = versions.firstOrNull { version ->
+                version.all { candidatesForSameVersion(it, candidate) }
+            }
+            if (matchingVersion == null) {
+                versions += mutableListOf(candidate)
+            } else {
+                matchingVersion += candidate
+            }
         }
-        return winner.result
-    }
-
-    fun assess(query: LyricsLookup, candidate: LyricsCandidateMetadata): LyricsMatchAssessment {
-        val wantedTitle = titleFingerprint(query.track)
-        val foundTitle = titleFingerprint(candidate.track)
-        if (wantedTitle.base.isBlank() || foundTitle.base.isBlank()) {
-            return LyricsMatchAssessment(accepted = false, tier = 0, score = 0)
-        }
-        val wantedArtists = artistNames(query.artist)
-        val foundArtists = artistNames(candidate.artist)
-        if (!isValidArtist(query.artist) || !isValidArtist(candidate.artist) ||
-            wantedArtists.isEmpty() || foundArtists.isEmpty()
-        ) {
-            return LyricsMatchAssessment(accepted = false, tier = 0, score = 0)
-        }
-
-        val titleSimilarity = textSimilarity(wantedTitle.base, foundTitle.base)
-        val artistSimilarity = artistSimilarity(wantedArtists, foundArtists)
-        if (titleSimilarity < MIN_TITLE_SIMILARITY || artistSimilarity < MIN_ARTIST_SIMILARITY) {
-            return LyricsMatchAssessment(accepted = false, tier = 0, score = 0)
-        }
-
-        val fullTitleSimilarity = textSimilarity(wantedTitle.full, foundTitle.full)
-        val qualifierScore = qualifierScore(wantedTitle.qualifier, foundTitle.qualifier)
-        val titleScore = (titleSimilarity * 54.0).toInt() +
-            (fullTitleSimilarity * 14.0).toInt() + qualifierScore
-        val artistScore = (artistSimilarity * 24.0).toInt()
-        val albumScore = albumScore(query.album, candidate.album)
-        val durationScore = durationScore(query.durationMs, candidate.durationMs)
-        val score = titleScore + artistScore + albumScore + durationScore
-        return LyricsMatchAssessment(
-            accepted = score >= MIN_CANDIDATE_SCORE,
-            tier = when {
-                score >= 96 -> 3
-                score >= MIN_SELECTION_SCORE -> 2
-                else -> 1
-            },
-            score = score
+        if (versions.size != 1) return emptyList()
+        return versions.single().sortedWith(
+            compareBy<DirectLyricsRepository.Result> { abs(query.durationMs - it.durationMs) }
+                .thenBy { it.source }
+                .thenBy { it.sourceId }
         )
     }
 
-    private fun titleFingerprint(value: String): TitleFingerprint {
+    fun matchesVersion(query: LyricsLookup, candidate: DirectLyricsRepository.Result): Boolean {
+        if (!canConfirm(query) || !hasKnownDuration(candidate.durationMs) ||
+            !isValidArtist(candidate.candidateArtist)
+        ) {
+            return false
+        }
+        if (!titlesMatch(query.track, candidate.candidateTrack)) return false
+        if (!hasMatchingDuration(query.durationMs, candidate.durationMs)) return false
+
+        val wantedAlbum = normalizedAlbum(query.album)
+        val foundAlbum = normalizedAlbum(candidate.candidateAlbum)
+        return if (wantedAlbum.isNotBlank() && foundAlbum.isNotBlank()) {
+            wantedAlbum == foundAlbum
+        } else {
+            directArtistMatch(query.artist, candidate.candidateArtist)
+        }
+    }
+
+    fun canFindCover(query: LyricsLookup): Boolean =
+        titleIdentity(query.track).isValid && isValidArtist(query.artist)
+
+    fun selectCoverCandidate(
+        query: LyricsLookup,
+        candidates: Iterable<DirectLyricsRepository.Result>
+    ): DirectLyricsRepository.Result? {
+        if (!canFindCover(query)) return null
+        val matched = candidates.asSequence()
+            .filter { it.cover.isNotBlank() }
+            .filter { titlesMatch(query.track, it.candidateTrack) }
+            .filter { directArtistMatch(query.artist, it.candidateArtist) }
+            .distinctBy(::candidateIdentity)
+            .sortedWith(
+                compareBy<DirectLyricsRepository.Result> { it.source }
+                    .thenBy { it.sourceId }
+            )
+            .toList()
+        val anchor = matched.firstOrNull() ?: return null
+        return anchor.takeIf { matched.all { candidate -> coversSameRelease(anchor, candidate) } }
+    }
+
+    private fun candidatesForSameVersion(
+        first: DirectLyricsRepository.Result,
+        second: DirectLyricsRepository.Result
+    ): Boolean {
+        if (!titlesMatch(first.candidateTrack, second.candidateTrack)) return false
+        if (!hasMatchingDuration(first.durationMs, second.durationMs)) return false
+        return sameRelease(first, second)
+    }
+
+    private fun coversSameRelease(
+        first: DirectLyricsRepository.Result,
+        second: DirectLyricsRepository.Result
+    ): Boolean =
+        titlesMatch(first.candidateTrack, second.candidateTrack) && sameRelease(first, second)
+
+    private fun sameRelease(
+        first: DirectLyricsRepository.Result,
+        second: DirectLyricsRepository.Result
+    ): Boolean {
+        val firstAlbum = normalizedAlbum(first.candidateAlbum)
+        val secondAlbum = normalizedAlbum(second.candidateAlbum)
+        return if (firstAlbum.isNotBlank() && secondAlbum.isNotBlank()) {
+            firstAlbum == secondAlbum
+        } else {
+            directArtistMatch(first.candidateArtist, second.candidateArtist)
+        }
+    }
+
+    private fun titlesMatch(first: String, second: String): Boolean {
+        val firstTitle = titleIdentity(first)
+        val secondTitle = titleIdentity(second)
+        return firstTitle.isValid && secondTitle.isValid &&
+            firstTitle.base == secondTitle.base && firstTitle.qualifier == secondTitle.qualifier
+    }
+
+    private fun titleIdentity(value: String): TitleIdentity {
         val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC).lowercase(Locale.ROOT)
         val qualifiers = BRACKET_PATTERN.findAll(normalized)
             .map { it.groupValues[1] }
             .map(::normalizeQualifier)
             .filter(String::isNotBlank)
             .toList()
-        return TitleFingerprint(
-            full = normalizeText(normalized),
+        return TitleIdentity(
             base = normalizeText(normalized.replace(BRACKET_PATTERN, " ")),
             qualifier = qualifiers.joinToString(" ")
         )
-    }
-
-    private fun qualifierScore(wanted: String, found: String): Int = when {
-        wanted.isBlank() && found.isBlank() -> 4
-        wanted.isBlank() || found.isBlank() -> -3
-        else -> (textSimilarity(wanted, found) * 36.0).toInt() - 28
     }
 
     private fun artistNames(value: String): List<String> = value
@@ -530,132 +529,45 @@ internal object LyricsCandidateSelector {
         .map(::normalizeText)
         .filter(String::isNotBlank)
 
-    private fun artistSimilarity(wanted: List<String>, found: List<String>): Double {
-        if (wanted.isEmpty() || found.isEmpty()) return 0.0
-        val recall = wanted.map { wantedName ->
-            found.maxOf { foundName -> artistNameSimilarity(wantedName, foundName) }
-        }.average()
-        val precision = found.map { foundName ->
-            wanted.maxOf { wantedName -> artistNameSimilarity(wantedName, foundName) }
-        }.average()
-        return recall * 0.82 + precision * 0.18
-    }
-
-    private fun artistNameSimilarity(wanted: String, found: String): Double = when {
-        wanted == found -> 1.0
-        minOf(wanted.length, found.length) >= 2 && (wanted in found || found in wanted) -> 0.94
-        else -> textSimilarity(wanted, found)
+    private fun directArtistMatch(first: String, second: String): Boolean {
+        if (!isValidArtist(first) || !isValidArtist(second)) return false
+        return artistNames(first).toSet() == artistNames(second).toSet()
     }
 
     private fun isValidArtist(value: String): Boolean = normalizeText(value).let {
         it.isNotBlank() && it !in PLACEHOLDER_ARTISTS
     }
 
-    private fun albumScore(wanted: String, found: String): Int {
-        val wantedAlbum = normalizeText(wanted)
-        val foundAlbum = normalizeText(found)
-        if (wantedAlbum.isBlank() || foundAlbum.isBlank()) return 0
-        val similarity = textSimilarity(wantedAlbum, foundAlbum)
-        return when {
-            similarity >= 0.9 -> 12
-            similarity >= 0.7 -> 8
-            similarity >= 0.5 -> 3
-            else -> -4
-        }
-    }
-
-    private fun durationScore(wanted: Long, found: Long): Int {
-        if (wanted <= 0L || found <= 0L) return 0
-        return when (abs(wanted - found)) {
-            in 0..2_000L -> 12
-            in 2_001L..5_000L -> 10
-            in 5_001L..12_000L -> 7
-            in 12_001L..25_000L -> 2
-            in 25_001L..45_000L -> -4
-            else -> -10
-        }
-    }
-
-    private fun sameRecording(
-        first: LyricsCandidateMetadata,
-        second: LyricsCandidateMetadata
-    ): Boolean {
-        val firstTitle = titleFingerprint(first.track)
-        val secondTitle = titleFingerprint(second.track)
-        val titleSimilarity = textSimilarity(firstTitle.base, secondTitle.base)
-        val fullTitleSimilarity = textSimilarity(firstTitle.full, secondTitle.full)
-        val artists = artistSimilarity(artistNames(first.artist), artistNames(second.artist))
-        if (firstTitle.qualifier.isNotBlank() && secondTitle.qualifier.isNotBlank() &&
-            textSimilarity(firstTitle.qualifier, secondTitle.qualifier) < 0.5
-        ) {
-            return false
-        }
-        if (fullTitleSimilarity >= 0.92 && artists >= 0.75) return true
-        if (titleSimilarity < 0.92 || artists < 0.75) return false
-
-        val durationsAgree = first.durationMs > 0L && second.durationMs > 0L &&
-            abs(first.durationMs - second.durationMs) <= 12_000L
-        val albumsAgree = first.album.isNotBlank() && second.album.isNotBlank() &&
-            textSimilarity(normalizeText(first.album), normalizeText(second.album)) >= 0.72
-        return durationsAgree || albumsAgree
-    }
-
-    private fun textSimilarity(first: String, second: String): Double {
-        if (first == second) return if (first.isBlank()) 0.0 else 1.0
-        if (first.isBlank() || second.isBlank()) return 0.0
-        val longerLength = maxOf(first.length, second.length)
-        return 1.0 - levenshteinDistance(first, second).toDouble() / longerLength.toDouble()
-    }
-
-    private fun levenshteinDistance(first: String, second: String): Int {
-        if (first.isEmpty()) return second.length
-        if (second.isEmpty()) return first.length
-        var previous = IntArray(second.length + 1) { it }
-        var current = IntArray(second.length + 1)
-        for (firstIndex in first.indices) {
-            current[0] = firstIndex + 1
-            for (secondIndex in second.indices) {
-                val substitution = previous[secondIndex] +
-                    if (first[firstIndex] == second[secondIndex]) 0 else 1
-                current[secondIndex + 1] = minOf(
-                    current[secondIndex] + 1,
-                    previous[secondIndex + 1] + 1,
-                    substitution
-                )
-            }
-            val swap = previous
-            previous = current
-            current = swap
-        }
-        return previous[second.length]
-    }
-
     private fun normalizeText(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]"), "")
+
+    private fun normalizedAlbum(value: String): String = normalizeText(value)
+        .takeUnless { it in PLACEHOLDER_ALBUMS }
+        .orEmpty()
 
     private fun normalizeQualifier(value: String): String = normalizeText(
         value.replace(QUALIFIER_DECORATION_PATTERN, " ")
     )
 
-    private data class RankedCandidate(
-        val result: DirectLyricsRepository.Result,
-        val assessment: LyricsMatchAssessment,
-        val finalScore: Int = assessment.score
-    ) {
-        val metadata = LyricsCandidateMetadata(
-            track = result.candidateTrack,
-            artist = result.candidateArtist,
-            album = result.candidateAlbum,
-            durationMs = result.durationMs
-        )
-    }
+    private fun candidateIdentity(candidate: DirectLyricsRepository.Result): String =
+        if (candidate.source.isNotBlank() && candidate.sourceId.isNotBlank()) {
+            "${candidate.source}\u0000${candidate.sourceId}"
+        } else {
+            listOf(
+                candidate.candidateTrack,
+                candidate.candidateArtist,
+                candidate.candidateAlbum,
+                candidate.durationMs.toString()
+            ).joinToString("\u0000")
+        }
 
-    private data class TitleFingerprint(
-        val full: String,
+    private data class TitleIdentity(
         val base: String,
         val qualifier: String
-    )
+    ) {
+        val isValid: Boolean get() = base.isNotBlank()
+    }
 
     private val BRACKET_PATTERN = Regex("[（(\\[【{]([^）)\\]】}]{1,80})[）)\\]】}]")
     private val ARTIST_SEPARATOR_PATTERN = Regex(
@@ -673,6 +585,14 @@ internal object LyricsCandidateSelector {
         "undefined",
         "未知",
         "未知歌手"
+    )
+    private val PLACEHOLDER_ALBUMS = setOf(
+        "unknown",
+        "unkown",
+        "null",
+        "undefined",
+        "未知",
+        "未知专辑"
     )
 }
 

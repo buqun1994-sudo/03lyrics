@@ -368,7 +368,7 @@
     const playback = {
       hasSession:false, track:'', artist:'', album:'', state:'paused', positionMs:0,
       durationMs:0, speed:0, timelineReady:true, receivedAt:performance.now(), key:'', lyrics:[], active:-1,
-      cover:'', coverIsNative:false, requestId:0, abort:null
+      cover:'', coverIsNative:false, requestId:0
     };
     let lyricAdvanceTimer=0,compactLineCount=2;
     let renderedLyricsKey='';
@@ -829,26 +829,8 @@
       lyricAdvanceTimer=setTimeout(scheduleLyricAdvance,delay);
     }
 
-    async function fetchFallback(track, artist, signal) {
-      const url = 'https://lrclib.net/api/search?track_name=' + encodeURIComponent(track) + '&artist_name=' + encodeURIComponent(artist);
-      const response = await fetch(url, { signal, headers:{'Accept':'application/json'} });
-      if (!response.ok) throw new Error('LRCLIB ' + response.status);
-      const list = await response.json();
-      if (!Array.isArray(list) || !list.length) return {};
-      const match=list.find(item=>usableLyrics(item&&item.syncedLyrics));
-      if(!match)return {};
-      return {
-        lyrics:sanitizeLyrics(match.syncedLyrics),
-        duration:Number(match.duration||0)*1000
-      };
-    }
-
     async function resolveTrack(track, artist, key, requestId) {
       lyricsLookupDurationMs = Math.max(0, Math.round(playback.durationMs || 0));
-      if (playback.abort) playback.abort.abort();
-      const controller = new AbortController();
-      playback.abort = controller;
-
       if (window.LobstaNativeLyrics && window.LobstaNativeLyrics.requestLyrics) {
         try {
           window.LobstaNativeLyrics.requestLyrics(
@@ -858,17 +840,7 @@
           return;
         } catch (_) {}
       }
-
-      try {
-        const data = await fetchFallback(track,artist,controller.signal);
-        if (key !== playback.key || requestId !== playback.requestId) return;
-        if (data.lyrics) {
-          applyResolved(data,key,requestId);
-        } else hideLyricsForUnavailableTrack(key, requestId);
-      } catch (error) {
-        if (error && error.name === 'AbortError') return;
-        hideLyricsForUnavailableTrack(key, requestId);
-      }
+      hideLyricsForUnavailableTrack(key, requestId);
     }
 
     function receiveLyrics(requestId, data) {
@@ -1038,7 +1010,6 @@
         document.body.classList.remove('has-session','playing');
         playback.key='';
         playback.requestId++;
-        if (playback.abort) playback.abort.abort();
         clearLyricsForTrackChange();
         return;
       }
@@ -1047,7 +1018,6 @@
         document.body.classList.remove('has-session','playing');
         playback.key='';
         playback.requestId++;
-        if (playback.abort) playback.abort.abort();
         clearLyricsForTrackChange();
         return;
       }
@@ -1088,6 +1058,8 @@
           (lyricsLookupDurationMs < 1000 ||
            Math.abs(playback.durationMs - lyricsLookupDurationMs) > 2000)) {
         playback.requestId++;
+        pendingTrackTransition = true;
+        clearLyricsForTrackChange();
         resolveTrack(playback.track, playback.artist, key, playback.requestId);
       } else if (pendingInitialReveal && playback.state === 'playing') {
         revealInitialLyrics();

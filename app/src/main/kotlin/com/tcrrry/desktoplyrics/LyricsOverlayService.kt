@@ -356,16 +356,22 @@ class LyricsOverlayService : Service() {
             needsRemoteCover: Boolean
         ) {
             if (track.isBlank() || requestId <= 0) return
-            val cacheKey = LyricsCache.key(track, artist, album)
+            val durationMs = durationMsText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+            if (!LyricsCandidateSelector.hasKnownDuration(durationMs)) {
+                latestLyricsRequestId = requestId
+                deliverLyricsResult(requestId, DirectLyricsRepository.Result())
+                return
+            }
+            val usageKey = LyricsCache.usageKey(track, artist, album, durationMs)
             val recordUse = synchronized(lyricsUsageLock) {
-                val changed = cacheKey != lastLyricsUsageKey
-                lastLyricsUsageKey = cacheKey
+                val changed = usageKey != lastLyricsUsageKey
+                lastLyricsUsageKey = usageKey
                 changed
             }
             latestLyricsRequestId = requestId
             lyricsScope.launch {
                 val nowMs = System.currentTimeMillis()
-                val cached = lyricsCache.get(cacheKey, recordUse, nowMs)
+                val cached = lyricsCache.get(track, artist, album, durationMs, recordUse, nowMs)
                 if (requestId != latestLyricsRequestId) return@launch
                 if (cached != null) {
                     deliverLyricsResult(requestId, cached.result)
@@ -373,7 +379,6 @@ class LyricsOverlayService : Service() {
                 }
 
                 val startedAt = SystemClock.elapsedRealtime()
-                val durationMs = durationMsText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
                 val coverLookup = if (needsRemoteCover) {
                     async { lyricsRepository.resolveCover(track, artist) }
                 } else null
@@ -385,11 +390,11 @@ class LyricsOverlayService : Service() {
                 Log.i(
                     LOG_TAG,
                     "Direct lyrics source=${result.source.ifBlank { "none" }} " +
-                        "kind=${result.lyricsKind} score=${result.score} " +
+                        "kind=${result.lyricsKind} " +
                         "found=${result.lyrics.isNotBlank()} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                 )
                 if (classifyLyrics(result.lyrics) == LyricsKind.SYNCHRONIZED) {
-                    lyricsCache.put(cacheKey, result)
+                    lyricsCache.put(track, artist, album, durationMs, result)
                     deliverLyricsResult(requestId, result)
                 } else if (cached == null) {
                     deliverLyricsResult(requestId, result)

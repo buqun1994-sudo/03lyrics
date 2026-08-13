@@ -11,9 +11,13 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.min
 
-internal class LyricsCache(context: Context) : Closeable {
+internal class LyricsCache(
+    context: Context,
+    databaseName: String = DATABASE_NAME
+) : Closeable {
     data class Entry(
         val result: DirectLyricsRepository.Result,
         val updatedAtMs: Long
@@ -22,38 +26,49 @@ internal class LyricsCache(context: Context) : Closeable {
             nowMs - updatedAtMs >= LyricsCachePolicy.REFRESH_AFTER_MS
     }
 
-    private val helper = CacheDatabase(context.applicationContext)
+    private val helper = CacheDatabase(context.applicationContext, databaseName)
     @Volatile private var closed = false
 
     @Synchronized
     fun get(
-        cacheKey: String,
+        track: String,
+        artist: String,
+        album: String,
+        playbackDurationMs: Long,
         recordUse: Boolean,
         nowMs: Long = System.currentTimeMillis()
     ): Entry? {
-        if (closed || cacheKey.isBlank()) return null
+        if (closed || !LyricsCandidateSelector.hasKnownDuration(playbackDurationMs)) return null
         return runCatching {
             val database = helper.writableDatabase
-            var entry: Entry? = null
-            var useCount = 0
-            database.query(
-                TABLE_CACHE,
-                arrayOf(COLUMN_PAYLOAD, COLUMN_UPDATED_AT, COLUMN_USE_COUNT),
-                "$COLUMN_KEY = ?",
-                arrayOf(cacheKey),
-                null,
-                null,
-                null,
-                "1"
-            ).use { cursor ->
-                if (cursor.moveToFirst()) {
-                    entry = decodeEntry(cursor.getString(0), cursor.getLong(1))
-                    useCount = cursor.getInt(2)
+            val matches = lookupKeys(track, artist, album, playbackDurationMs).mapNotNull { cacheKey ->
+                database.query(
+                    TABLE_CACHE,
+                    arrayOf(COLUMN_PAYLOAD, COLUMN_UPDATED_AT, COLUMN_USE_COUNT),
+                    "$COLUMN_KEY = ?",
+                    arrayOf(cacheKey),
+                    null,
+                    null,
+                    null,
+                    "1"
+                ).use { cursor ->
+                    if (!cursor.moveToFirst()) return@use null
+                    decodeEntry(cursor.getString(0), cursor.getLong(1))
+                        ?.takeIf {
+                            LyricsCandidateSelector.hasMatchingDuration(
+                                playbackDurationMs,
+                                it.result.durationMs
+                            )
+                        }
+                        ?.let { CachedEntry(cacheKey, it, cursor.getInt(2)) }
                 }
             }
-            if (entry == null) return@runCatching null
+            val cached = matches.minWithOrNull(
+                compareBy<CachedEntry> { abs(playbackDurationMs - it.entry.result.durationMs) }
+                    .thenByDescending { it.entry.updatedAtMs }
+            ) ?: return@runCatching null
             if (recordUse) {
-                val nextUseCount = LyricsCachePolicy.nextUseCount(useCount)
+                val nextUseCount = LyricsCachePolicy.nextUseCount(cached.useCount)
                 database.update(
                     TABLE_CACHE,
                     ContentValues().apply {
@@ -65,10 +80,10 @@ internal class LyricsCache(context: Context) : Closeable {
                         )
                     },
                     "$COLUMN_KEY = ?",
-                    arrayOf(cacheKey)
+                    arrayOf(cached.cacheKey)
                 )
             }
-            entry
+            cached.entry
         }.onFailure { error ->
             Log.w(LOG_TAG, "Unable to read native lyrics cache", error)
         }.getOrNull()
@@ -76,14 +91,20 @@ internal class LyricsCache(context: Context) : Closeable {
 
     @Synchronized
     fun put(
-        cacheKey: String,
+        track: String,
+        artist: String,
+        album: String,
+        playbackDurationMs: Long,
         result: DirectLyricsRepository.Result,
         updatedAtMs: Long = System.currentTimeMillis()
     ) {
-        if (closed || cacheKey.isBlank() || classifyLyrics(result.lyrics) != LyricsKind.SYNCHRONIZED) {
+        if (closed || classifyLyrics(result.lyrics) != LyricsKind.SYNCHRONIZED ||
+            !LyricsCandidateSelector.hasMatchingDuration(playbackDurationMs, result.durationMs)
+        ) {
             return
         }
         runCatching {
+            val cacheKey = key(track, artist, album, result.durationMs)
             val payload = encodeResult(result)
             val byteSize = cacheEntrySize(cacheKey, payload)
             if (byteSize > LyricsCachePolicy.MAX_BYTES) return@runCatching
@@ -212,11 +233,7 @@ internal class LyricsCache(context: Context) : Closeable {
         )
     }
 
-    private fun encodeResult(result: DirectLyricsRepository.Result): String =
-        result.toJson()
-            .put("score", result.score)
-            .put("lyricsKind", result.lyricsKind.name)
-            .toString()
+    private fun encodeResult(result: DirectLyricsRepository.Result): String = result.toJson().toString()
 
     private fun decodeEntry(payload: String, updatedAtMs: Long): Entry? {
         val value = JSONObject(payload)
@@ -229,7 +246,6 @@ internal class LyricsCache(context: Context) : Closeable {
                 cover = value.optString("cover"),
                 source = value.optString("source"),
                 sourceId = value.optString("sourceId"),
-                score = value.optInt("score", 0),
                 candidateTrack = value.optString("candidateTrack"),
                 candidateArtist = value.optString("candidateArtist"),
                 candidateAlbum = value.optString("candidateAlbum"),
@@ -251,8 +267,14 @@ internal class LyricsCache(context: Context) : Closeable {
         val evictionScore: Long
     )
 
-    private class CacheDatabase(context: Context) :
-        SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
+    private data class CachedEntry(
+        val cacheKey: String,
+        val entry: Entry,
+        val useCount: Int
+    )
+
+    private class CacheDatabase(context: Context, databaseName: String) :
+        SQLiteOpenHelper(context, databaseName, null, DATABASE_VERSION) {
         override fun onCreate(database: SQLiteDatabase) {
             database.execSQL(
                 """
@@ -284,13 +306,19 @@ internal class LyricsCache(context: Context) : Closeable {
             )
         }
 
-        override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            database.delete(TABLE_CACHE, null, null)
+            database.delete(TABLE_META, null, null)
+            database.execSQL(
+                "INSERT INTO $TABLE_META ($COLUMN_META_ID, $COLUMN_TOTAL_BYTES) VALUES (1, 0)"
+            )
+        }
     }
 
     companion object {
         private const val LOG_TAG = "DesktopLyrics"
         private const val DATABASE_NAME = "lyrics-cache.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
         private const val TABLE_CACHE = "lyrics_cache"
         private const val TABLE_META = "cache_meta"
         private const val COLUMN_KEY = "cache_key"
@@ -306,9 +334,10 @@ internal class LyricsCache(context: Context) : Closeable {
         private const val EVICTION_BATCH_SIZE = 256
         private const val ESTIMATED_ROW_OVERHEAD_BYTES = 256L
 
-        fun key(track: String, artist: String, album: String): String {
+        fun key(track: String, artist: String, album: String, durationMs: Long): String {
+            val durationSeconds = roundedDurationSeconds(durationMs)
             val identity = Normalizer.normalize(
-                "$track\u0000$artist\u0000$album",
+                "$track\u0000$artist\u0000$album\u0000$durationSeconds",
                 Normalizer.Form.NFKC
             )
                 .trim()
@@ -317,6 +346,25 @@ internal class LyricsCache(context: Context) : Closeable {
                 .digest(identity.toByteArray(StandardCharsets.UTF_8))
                 .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
         }
+
+        fun usageKey(track: String, artist: String, album: String, playbackDurationMs: Long): String =
+            key(track, artist, album, playbackDurationMs)
+
+        internal fun lookupKeys(
+            track: String,
+            artist: String,
+            album: String,
+            playbackDurationMs: Long
+        ): List<String> {
+            val durationSeconds = roundedDurationSeconds(playbackDurationMs)
+            val toleranceSeconds = (LyricsCandidateSelector.MAX_DURATION_DELTA_MS + 999L) / 1_000L
+            return (-toleranceSeconds..toleranceSeconds)
+                .map { offset -> key(track, artist, album, (durationSeconds + offset).coerceAtLeast(0L) * 1_000L) }
+                .distinct()
+        }
+
+        private fun roundedDurationSeconds(durationMs: Long): Long =
+            (durationMs.coerceAtLeast(0L) + 500L) / 1_000L
     }
 }
 
