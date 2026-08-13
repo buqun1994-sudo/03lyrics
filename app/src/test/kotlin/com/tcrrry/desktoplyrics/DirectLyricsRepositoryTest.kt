@@ -42,6 +42,342 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
+    fun `accepts a single source when artist title and duration match despite release naming`() {
+        val query = LyricsLookup(
+            track = "Super Girl",
+            artist = "SUPER JUNIOR-M",
+            album = "Super Girl",
+            durationMs = 216_827L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "QQ音乐",
+                    sourceId = "super-girl-mandarin",
+                    track = "Super Girl",
+                    artist = "Super Junior-M",
+                    album = "The First Mini Album - Super Girl",
+                    durationMs = 218_000L
+                )
+            )
+        )
+
+        assertEquals(listOf("super-girl-mandarin"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `selects Mandarin Super Girl candidates without accepting Korean or wrong duration versions`() {
+        val query = LyricsLookup(
+            track = "Super Girl",
+            artist = "SUPER JUNIOR-M",
+            album = "Super Girl",
+            durationMs = 216_827L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "QQ音乐",
+                    sourceId = "qq-mandarin",
+                    track = "Super Girl",
+                    artist = "Super Junior-M",
+                    album = "The First Mini Album - Super Girl",
+                    durationMs = 218_000L
+                ),
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "lrclib-mandarin",
+                    track = "Super Girl",
+                    artist = "Super Junior-M",
+                    album = "The First Mini Album - Super Girl",
+                    durationMs = 218_720L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "netease-too-long",
+                    track = "Super Girl",
+                    artist = "Super Junior M",
+                    album = "Super Girl",
+                    durationMs = 220_290L
+                ),
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "korean-version",
+                    track = "Super Girl (Korean Version)",
+                    artist = "Super Junior-M",
+                    album = "Super Girl",
+                    durationMs = 217_000L
+                )
+            )
+        )
+
+        assertEquals(listOf("qq-mandarin", "lrclib-mandarin"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `uses the base title for catalog search when featured artists are written in brackets`() {
+        val terms = LyricsCandidateSelector.searchTerms(
+            LyricsLookup(
+                track = "错错错 (feat. 陈娟儿)",
+                artist = "六哲",
+                album = "被伤过的心还可以爱谁",
+                durationMs = 289_250L
+            )
+        )
+
+        assertEquals("错错错", terms.track)
+        assertEquals("六哲", terms.artist)
+    }
+
+    @Test
+    fun `builds exact LRCLIB terms from the recording identity`() {
+        val terms = LyricsCandidateSelector.lrcLibExactTerms(
+            LyricsLookup(
+                track = "错错错 (feat. 陈娟儿)",
+                artist = "六哲",
+                album = "被伤过的心还可以爱谁",
+                durationMs = 289_250L
+            )
+        )
+
+        assertEquals("错错错", terms.track)
+        assertEquals("六哲, 陈娟儿", terms.artist)
+        assertEquals("被伤过的心还可以爱谁", terms.album)
+        assertEquals(289_250L, terms.durationMs)
+    }
+
+    @Test
+    fun `does not duplicate featured artists already present in the artist field`() {
+        val terms = LyricsCandidateSelector.lrcLibExactTerms(
+            LyricsLookup(
+                track = "错错错 (feat. 陈娟儿)",
+                artist = "六哲/陈娟儿",
+                album = "未知专辑",
+                durationMs = 289_250L
+            )
+        )
+
+        assertEquals("六哲/陈娟儿", terms.artist)
+        assertEquals("", terms.album)
+    }
+
+    @Test
+    fun `keeps explicit recording versions in catalog search terms`() {
+        val terms = LyricsCandidateSelector.searchTerms(
+            LyricsLookup(
+                track = "Super Girl (Korean Version) (Anniversary Release)",
+                artist = "SUPER JUNIOR-M",
+                durationMs = 217_000L
+            )
+        )
+
+        assertEquals("Super Girl Korean Version", terms.track)
+    }
+
+    @Test
+    fun `ranks exact omitted and unrelated bracket information without losing the recording`() {
+        val query = LyricsLookup(
+            track = "错错错 (feat. 陈娟儿)",
+            artist = "六哲",
+            album = "被伤过的心还可以爱谁",
+            durationMs = 289_250L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "source-c",
+                    sourceId = "unrelated-brackets",
+                    track = "错错错 (电视剧主题曲)",
+                    artist = "六哲",
+                    album = "被伤过的心还可以爱谁",
+                    durationMs = 289_100L
+                ),
+                candidate(
+                    source = "source-b",
+                    sourceId = "omitted-feature",
+                    track = "错错错",
+                    artist = "六哲",
+                    album = "被伤过的心还可以爱谁",
+                    durationMs = 289_000L
+                ),
+                candidate(
+                    source = "source-a",
+                    sourceId = "feature-in-artist",
+                    track = "错错错",
+                    artist = "六哲/陈娟儿",
+                    album = "单身必听情歌",
+                    durationMs = 289_186L
+                )
+            )
+        )
+
+        assertEquals(
+            listOf("feature-in-artist", "omitted-feature", "unrelated-brackets"),
+            selected.map { it.sourceId }
+        )
+    }
+
+    @Test
+    fun `keeps conflicting featured artist annotations as a lower priority candidate`() {
+        val query = LyricsLookup(
+            track = "A Song (feat. Guest A)",
+            artist = "Main Artist",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "different-feature",
+                    track = "A Song (feat. Guest B)",
+                    artist = "Main Artist",
+                    durationMs = 200_000L
+                )
+            )
+        )
+
+        assertEquals(listOf("different-feature"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `ranks exact similar and unrelated ordinary bracket information in that order`() {
+        val query = LyricsLookup(
+            track = "A Song (Movie Theme)",
+            artist = "Artist",
+            album = "Album",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "source-c",
+                    sourceId = "exact",
+                    track = "A Song (Movie Theme)",
+                    artist = "Artist",
+                    album = "Album",
+                    durationMs = 201_500L
+                ),
+                candidate(
+                    source = "source-b",
+                    sourceId = "unrelated",
+                    track = "A Song (Anniversary Release)",
+                    artist = "Artist",
+                    album = "Album",
+                    durationMs = 200_000L
+                ),
+                candidate(
+                    source = "source-a",
+                    sourceId = "similar",
+                    track = "A Song (Theme from Movie)",
+                    artist = "Artist",
+                    album = "Album",
+                    durationMs = 200_500L
+                )
+            )
+        )
+
+        assertEquals(listOf("exact", "similar", "unrelated"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `treats soundtrack context as ordinary bracket information rather than a recording version`() {
+        val query = LyricsLookup(
+            track = "A Song (From the Original Motion Picture Soundtrack)",
+            artist = "Artist",
+            album = "Soundtrack",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "without-soundtrack-note",
+                    track = "A Song",
+                    artist = "Artist",
+                    album = "Soundtrack",
+                    durationMs = 200_000L
+                )
+            )
+        )
+
+        assertEquals(listOf("without-soundtrack-note"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `accepts compatible details within the same explicit recording version`() {
+        val query = LyricsLookup(
+            track = "A Song (Live at Wembley)",
+            artist = "Artist",
+            album = "Live Album",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "live",
+                    track = "A Song (Live)",
+                    artist = "Artist",
+                    album = "Live Album",
+                    durationMs = 200_000L
+                )
+            )
+        )
+
+        assertEquals(listOf("live"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `ranks an exact version annotation ahead of differently worded details of the same version`() {
+        val query = LyricsLookup(
+            track = "A Song (Remastered)",
+            artist = "Artist",
+            album = "Album",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "source-b",
+                    sourceId = "same-version-detail",
+                    track = "A Song (2020 Remaster)",
+                    artist = "Artist",
+                    album = "Album",
+                    durationMs = 200_000L
+                ),
+                candidate(
+                    source = "source-a",
+                    sourceId = "exact-version",
+                    track = "A Song (Remastered)",
+                    artist = "Artist",
+                    album = "Album",
+                    durationMs = 200_500L
+                )
+            )
+        )
+
+        assertEquals(
+            listOf("exact-version", "same-version-detail"),
+            selected.map { it.sourceId }
+        )
+    }
+
+    @Test
     fun `rejects a version when the duration differs by more than two seconds`() {
         val query = LyricsLookup(
             track = "World (Remastered)",
@@ -91,6 +427,32 @@ class DirectLyricsRepositoryTest {
                 )
             ).isEmpty()
         )
+    }
+
+    @Test
+    fun `accepts the same language version written in different languages`() {
+        val query = LyricsLookup(
+            track = "Number Nine (韩语版)",
+            artist = "T-ara",
+            album = "Album",
+            durationMs = 228_920L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "korean-version",
+                    track = "Number Nine (Korean Version)",
+                    artist = "T-ara",
+                    album = "Album",
+                    durationMs = 228_920L
+                )
+            )
+        )
+
+        assertEquals(listOf("korean-version"), selected.map { it.sourceId })
     }
 
     @Test
@@ -149,10 +511,46 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
-    fun `keeps silent when metadata describes more than one release`() {
+    fun `additional releases cannot invalidate independently matching candidates`() {
         val query = LyricsLookup(
             track = "A Song",
             artist = "Artist",
+            album = "Current Release",
+            durationMs = 200_000L
+        )
+
+        assertEquals(
+            listOf("current-release", "other-release"),
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "source-b",
+                        sourceId = "other-release",
+                        track = "A Song",
+                        artist = "Artist",
+                        album = "Other Release",
+                        durationMs = 200_050L
+                    ),
+                    candidate(
+                        source = "source-a",
+                        sourceId = "current-release",
+                        track = "A Song",
+                        artist = "Artist",
+                        album = "Current Release",
+                        durationMs = 201_500L
+                    )
+                )
+            ).map { it.sourceId }
+        )
+    }
+
+    @Test
+    fun `rejects a candidate when neither artist nor album confirms it`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Artist A",
+            album = "Album A",
             durationMs = 200_000L
         )
 
@@ -161,19 +559,11 @@ class DirectLyricsRepositoryTest {
                 query,
                 listOf(
                     candidate(
-                        source = "QQ音乐",
-                        sourceId = "album-one",
+                        source = "LRCLIB",
+                        sourceId = "unrelated",
                         track = "A Song",
-                        artist = "Artist",
-                        album = "Album One",
-                        durationMs = 200_000L
-                    ),
-                    candidate(
-                        source = "网易云音乐",
-                        sourceId = "album-two",
-                        track = "A Song",
-                        artist = "Artist",
-                        album = "Album Two",
+                        artist = "Artist B",
+                        album = "Album B",
                         durationMs = 200_000L
                     )
                 )
@@ -240,6 +630,25 @@ class DirectLyricsRepositoryTest {
         assertEquals(LyricsKind.NONE, classifyLyrics("null"))
         assertEquals(LyricsKind.PLAIN, classifyLyrics("plain fallback"))
         assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics("[00:15.44]Timed lyric"))
+    }
+
+    @Test
+    fun `stops loading candidates after the first synchronized result`() {
+        val candidates = listOf(
+            candidate("source", "first", "A Song", "Artist", durationMs = 200_000L),
+            candidate("source", "second", "A Song", "Artist", durationMs = 200_000L),
+            candidate("source", "third", "A Song", "Artist", durationMs = 200_000L)
+        )
+        val loadedIds = mutableListOf<String>()
+
+        val selected = firstResolvedLyricsCandidate(candidates) { candidate ->
+            loadedIds += candidate.sourceId
+            candidate.takeIf { it.sourceId == "second" }
+                ?.copy(lyrics = "[00:01.00]Ready", lyricsKind = LyricsKind.SYNCHRONIZED)
+        }
+
+        assertEquals("second", selected?.sourceId)
+        assertEquals(listOf("first", "second"), loadedIds)
     }
 
     private fun candidate(
