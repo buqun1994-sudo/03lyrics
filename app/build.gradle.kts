@@ -20,8 +20,8 @@ android {
         applicationId = "com.tcrrry.desktoplyrics"
         minSdk = 26
         targetSdk = 34
-        versionCode = 100
-        versionName = "1.00"
+        versionCode = 114
+        versionName = "1.14-icar03"
     }
 
     signingConfigs {
@@ -58,4 +58,5 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    testImplementation("junit:junit:4.13.2")
 }

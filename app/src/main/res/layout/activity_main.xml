@@ -1,366 +1,259 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_main_screen"
-    android:clipToPadding="false"
-    android:fillViewport="true"
-    android:overScrollMode="never">
+    android:background="#090A0E">
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:paddingStart="20dp"
-        android:paddingTop="16dp"
-        android:paddingEnd="20dp"
-        android:paddingBottom="24dp">
+        android:layout_height="match_parent"
+        android:orientation="horizontal">
 
         <LinearLayout
-            android:id="@+id/overlay_section"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="0dp"
-            android:background="@drawable/bg_ui_card"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.36"
+            android:background="#101319"
             android:orientation="vertical"
-            android:padding="18dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="歌词悬浮窗"
-                    android:textColor="#FFFFFF"
-                    android:textSize="19sp" />
-
-                <TextView
-                    android:id="@+id/tv_runtime_badge"
-                    android:layout_width="wrap_content"
-                    android:layout_height="28dp"
-                    android:background="@drawable/bg_ui_status_badge"
-                    android:gravity="center"
-                    android:paddingStart="10dp"
-                    android:paddingEnd="10dp"
-                    android:text="准备就绪"
-                    android:textColor="#8CE8BA"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
+            android:paddingStart="58dp"
+            android:paddingTop="48dp"
+            android:paddingEnd="42dp"
+            android:paddingBottom="42dp">
 
             <TextView
-                android:id="@+id/tv_overlay_status"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="7dp"
-                android:lineSpacingExtra="2dp"
-                android:text="正在检查权限…"
-                android:textColor="#ADB2C1"
-                android:textSize="13sp" />
+                android:id="@+id/settings_close"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/bg_settings_close"
+                android:contentDescription="关闭设置"
+                android:gravity="center"
+                android:text="×"
+                android:textColor="#EAF0F8"
+                android:textSize="30sp" />
 
-            <LinearLayout
-                android:layout_width="match_parent"
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="72dp"
+                android:fontFamily="sans-serif-medium"
+                android:text="零三歌词"
+                android:textColor="#F4F6FA"
+                android:textSize="34sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:orientation="horizontal">
+                android:text="歌词设置"
+                android:textColor="#7F8896"
+                android:textSize="18sp" />
 
-                <Button
-                    android:id="@+id/btn_listener_permission"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_marginEnd="5dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_ui_permission_button"
-                    android:fontFamily="sans-serif-medium"
-                    android:stateListAnimator="@null"
-                    android:text="通知使用权"
-                    android:textAllCaps="false"
-                    android:textColor="#F4F5F8"
-                    android:textSize="12sp" />
-
-                <Button
-                    android:id="@+id/btn_overlay_permission"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_marginStart="5dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_ui_permission_button"
-                    android:fontFamily="sans-serif-medium"
-                    android:stateListAnimator="@null"
-                    android:text="悬浮窗权限"
-                    android:textAllCaps="false"
-                    android:textColor="#F4F5F8"
-                    android:textSize="12sp" />
-            </LinearLayout>
-
-            <Button
-                android:id="@+id/btn_overlay"
+            <View
                 android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/settings_done"
+                android:layout_width="wrap_content"
                 android:layout_height="52dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/bg_ui_primary_button"
-                android:fontFamily="sans-serif-medium"
-                android:stateListAnimator="@null"
-                android:text="开启歌词悬浮窗"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp" />
+                android:background="@drawable/bg_settings_done"
+                android:gravity="center"
+                android:paddingStart="30dp"
+                android:paddingEnd="30dp"
+                android:text="完成"
+                android:textColor="#F7FAFF"
+                android:textSize="18sp" />
         </LinearLayout>
 
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#27303A" />
+
         <LinearLayout
-            android:id="@+id/instruction_section"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_ui_card"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.64"
+            android:gravity="center_vertical"
             android:orientation="vertical"
-            android:padding="18dp">
+            android:paddingStart="68dp"
+            android:paddingEnd="76dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="显示方式"
+                android:textColor="#F4F6FA"
+                android:textSize="28sp" />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:layout_marginTop="48dp"
+                android:orientation="vertical">
 
                 <TextView
-                    android:layout_width="0dp"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="使用说明"
-                    android:textColor="#FFFFFF"
-                    android:textSize="18sp" />
+                    android:text="顶栏显示"
+                    android:textColor="#EEF1F6"
+                    android:textSize="21sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="76dp"
+                    android:layout_marginTop="18dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/topbar_lines_current"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginEnd="10dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_settings_option"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="一行"
+                        android:textColor="#AAB1BE"
+                        android:textSize="19sp" />
+
+                    <TextView
+                        android:id="@+id/topbar_lines_current_next"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_settings_option"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="两行"
+                        android:textColor="#AAB1BE"
+                        android:textSize="19sp" />
+                </LinearLayout>
             </LinearLayout>
 
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="58dp"
+                android:background="#27303A" />
+
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/bg_ui_panel"
+                android:layout_height="76dp"
+                android:layout_marginTop="40dp"
                 android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="12dp">
-
-                <TextView
-                    android:layout_width="42dp"
-                    android:layout_height="42dp"
-                    android:background="@drawable/bg_ui_resize_icon"
-                    android:gravity="center"
-                    android:text="↖"
-                    android:textColor="#202333"
-                    android:textSize="21sp"
-                    android:textStyle="bold" />
+                android:orientation="horizontal">
 
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
                     android:layout_weight="1"
                     android:orientation="vertical">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:fontFamily="sans-serif-medium"
-                        android:text="缩放与查看"
-                        android:textColor="#F8F8FA"
-                        android:textSize="14sp" />
+                        android:text="壁纸歌词"
+                        android:textColor="#EEF1F6"
+                        android:textSize="21sp" />
 
                     <TextView
-                        android:layout_width="match_parent"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="3dp"
-                        android:lineSpacingExtra="1dp"
-                        android:text="单点切换标准 / 收起，长按拖动自定义尺寸；展开时可滑动歌词，稍后自动恢复实时跟随"
-                        android:textColor="#989FAF"
-                        android:textSize="11sp" />
+                        android:layout_marginTop="6dp"
+                        android:text="在壁纸界面显示滚动歌词"
+                        android:textColor="#7F8896"
+                        android:textSize="16sp" />
                 </LinearLayout>
-            </LinearLayout>
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:gravity="center"
-                android:lineSpacingExtra="1dp"
-                android:text="本地实时读取当前歌曲 · 直连多源歌词 · 悬浮同步显示"
-                android:textColor="#747C8E"
-                android:textSize="10sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/appearance_section"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_ui_card"
-            android:orientation="vertical"
-            android:padding="18dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="显示与交互"
-                    android:textColor="#FFFFFF"
-                    android:textSize="18sp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="歌词字号"
-                    android:textColor="#F7F7FA"
-                    android:textSize="14sp" />
-
-                <TextView
-                    android:id="@+id/font_size_value"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="100%"
-                    android:textColor="#AEBBFF"
-                    android:textSize="11sp" />
-            </LinearLayout>
-
-            <SeekBar
-                android:id="@+id/seek_font_size"
-                android:layout_width="match_parent"
-                android:layout_height="34dp"
-                android:layout_marginTop="3dp"
-                android:max="75"
-                android:progress="25"
-                android:progressBackgroundTint="#39404F"
-                android:progressTint="#9BAEFF"
-                android:splitTrack="false"
-                android:thumbTint="#F7F7FA" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="小"
-                    android:textColor="#767E90"
-                    android:textSize="10sp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="大"
-                    android:textColor="#767E90"
-                    android:textSize="10sp" />
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/wallpaper_lyrics_switch"
+                    android:layout_width="76dp"
+                    android:layout_height="48dp"
+                    android:contentDescription="壁纸歌词"
+                    android:minWidth="76dp"
+                    android:padding="4dp"
+                    app:showText="false"
+                    app:thumbTint="@color/settings_switch_thumb"
+                    app:trackTint="@color/settings_switch_track" />
             </LinearLayout>
 
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:layout_marginTop="12dp"
-                android:layout_marginBottom="12dp"
-                android:background="#18FFFFFF" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:text="动态背景"
-                android:textColor="#F7F7FA"
-                android:textSize="14sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:text="在清晰度、透明感与耗电之间选择"
-                android:textColor="#7F8798"
-                android:textSize="11sp" />
+                android:layout_marginTop="40dp"
+                android:background="#27303A" />
 
             <LinearLayout
-                android:id="@+id/background_mode_shell"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/bg_ui_pill"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="4dp">
-
-                <TextView
-                    android:id="@+id/background_mode_transparent"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="透明"
-                    android:textColor="#9DA4B5"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/background_mode_low"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="低负载"
-                    android:textColor="#9DA4B5"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/background_mode_high"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_ui_segment_selected"
-                    android:fontFamily="sans-serif-medium"
-                    android:gravity="center"
-                    android:text="高负载"
-                    android:textColor="#202331"
-                    android:textSize="12sp" />
-            </LinearLayout>
-
-            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:gravity="center"
-                android:text="字号与背景设置会实时应用到悬浮窗"
-                android:textColor="#626A7C"
-                android:textSize="10sp" />
-        </LinearLayout>
+                android:layout_marginTop="40dp"
+                android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/share_footer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center"
-            android:text="B站：@Tcrrrry"
-            android:textColor="#66878E9F"
-            android:textSize="10sp" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="歌词大小"
+                    android:textColor="#EEF1F6"
+                    android:textSize="21sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="76dp"
+                    android:layout_marginTop="18dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/font_size_small"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_settings_option"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="小"
+                        android:textColor="#AAB1BE"
+                        android:textSize="19sp" />
+
+                    <TextView
+                        android:id="@+id/font_size_standard"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="8dp"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_settings_option"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="标准"
+                        android:textColor="#AAB1BE"
+                        android:textSize="19sp" />
+
+                    <TextView
+                        android:id="@+id/font_size_large"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_settings_option"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="大"
+                        android:textColor="#AAB1BE"
+                        android:textSize="19sp" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
     </LinearLayout>
-</ScrollView>
+</FrameLayout>

@@ -4,16 +4,20 @@ import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.ActivityOptions
 import android.app.Service
 import android.Manifest
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
@@ -28,23 +32,22 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
 import android.util.Base64
+import android.util.DisplayMetrics
+import android.util.Log
 import android.view.Gravity
-import android.view.HapticFeedbackConstants
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.webkit.WebResourceRequest
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -72,28 +75,53 @@ class LyricsOverlayService : Service() {
     private val sessionManager by lazy { getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager }
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private val listenerComponent by lazy { ComponentName(this, MediaListenerService::class.java) }
+    private val displayStateMonitor by lazy {
+        IcarDisplayStateMonitor(this, mainHandler, ::onIcarDisplayStateChanged)
+    }
     private val lyricsRepository = DirectLyricsRepository()
+    private val lyricsCache by lazy { LyricsCache(this) }
     private val lyricsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val lyricsUsageLock = Any()
 
     private var overlayRoot: FrameLayout? = null
-    private var chromeBar: LinearLayout? = null
-    private var dragTouchArea: View? = null
-    private var scaleButton: TextView? = null
-    private var closeButton: TextView? = null
     private var webView: WebView? = null
+    private var webContainer: FrameLayout? = null
     private var windowParams: WindowManager.LayoutParams? = null
     private var webReady = false
     private var compact = false
+    private var settingsOpen = false
+    private var topbarLines = TOPBAR_LINES_DEFAULT
+    private var wallpaperLyricsEnabled = WALLPAPER_LYRICS_DEFAULT
     private var backgroundMode = BACKGROUND_DEFAULT
     private var fontScalePercent = FONT_SCALE_DEFAULT_PERCENT
+    private var surfaceMode = LyricsSurfaceMode.TOPBAR
+    private var displayState: IcarDisplayState? = null
     private var monitorStarted = false
     private var audioRouteMonitorStarted = false
+    private var avrcpEventMonitorStarted = false
     private var currentController: MediaController? = null
     private var pendingSnapshot: JSONObject? = null
     private var cachedArtworkKey = ""
     private var cachedArtworkDataUrl = ""
     private var snapshotScheduled = false
+    private var bluetoothTrackKey = ""
+    private var bluetoothPositionMs = 0L
+    private var bluetoothPositionCapturedAtRealtime = 0L
+    private var bluetoothWasPlaying = false
+    private var bluetoothLastReportedPositionMs = -1L
+    private var pendingBluetoothPositionMs: Long? = null
+    private var pendingBluetoothPositionCapturedAtRealtime = 0L
+    private var bluetoothTimelineGenerationStartedAtRealtime = 0L
+    private var bluetoothTimelineReady = false
+    private var bluetoothReportedPlaybackState: Int? = null
+    private var lastLyricsUsageKey = ""
     @Volatile private var latestLyricsRequestId = 0
+
+    private data class PlaybackTimeline(
+        val positionMs: Long,
+        val speed: Double,
+        val timelineReady: Boolean
+    )
 
     private val dispatchRunnable = Runnable {
         snapshotScheduled = false
@@ -123,31 +151,79 @@ class LyricsOverlayService : Service() {
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = scheduleSnapshot()
     }
 
+    @Suppress("DEPRECATION")
+    private val avrcpEventReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val event = intent ?: return
+            val extrasBundle = event.extras
+            val reportedPlaybackState = if (event.action == ACTION_AVRCP_TRACK_EVENT) {
+                extrasBundle?.playbackState(EXTRA_AVRCP_PLAYBACK)
+            } else {
+                null
+            }
+            val position = when (event.action) {
+                ACTION_AVRCP_PLAYBACK_POSITION_CHANGED -> {
+                    extrasBundle?.number(EXTRA_AVRCP_SONG_POSITION)
+                        ?: extrasBundle?.number(EXTRA_AVRCP_PLAY_SONG_POSITION)
+                }
+                ACTION_AVRCP_TRACK_EVENT -> {
+                    @Suppress("DEPRECATION")
+                    val playback = extrasBundle?.getParcelable(EXTRA_AVRCP_PLAYBACK) as? PlaybackState
+                    playback?.position?.takeIf { it >= 0L }
+                        ?: extrasBundle?.number(EXTRA_AVRCP_SONG_POSITION)
+                        ?: extrasBundle?.number(EXTRA_AVRCP_PLAY_SONG_POSITION)
+                }
+                else -> null
+            }
+            val playbackStateChanged = reportedPlaybackState != null &&
+                reportedPlaybackState != bluetoothReportedPlaybackState
+            if (playbackStateChanged) {
+                bluetoothReportedPlaybackState = reportedPlaybackState
+                Log.i(LOG_TAG, "AVRCP playback state update=$reportedPlaybackState")
+            }
+            if (position != null && position >= 0L) {
+                Log.i(LOG_TAG, "AVRCP position update=$position action=${event.action}")
+                pendingBluetoothPositionMs = position
+                pendingBluetoothPositionCapturedAtRealtime = SystemClock.elapsedRealtime()
+            }
+            if (playbackStateChanged || (position != null && position >= 0L)) scheduleSnapshot()
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
         announceOverlayState()
-        backgroundMode = normalizedBackgroundMode(
-            prefs.getString(PREF_BACKGROUND_MODE, BACKGROUND_DEFAULT)
-        )
+        backgroundMode = BACKGROUND_TRANSPARENT
         fontScalePercent = normalizedFontScale(
             prefs.getInt(PREF_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
         )
+        // launcherState is the only source of the desktop/topbar surface.
+        compact = true
+        topbarLines = normalizedTopbarLines(
+            prefs.getInt(PREF_TOPBAR_LINES, TOPBAR_LINES_DEFAULT)
+        )
+        wallpaperLyricsEnabled = prefs.getBoolean(
+            PREF_WALLPAPER_LYRICS_ENABLED,
+            WALLPAPER_LYRICS_DEFAULT
+        )
+        prefs.edit()
+            .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
+            .apply()
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
             stopSelf()
             return START_NOT_STICKY
         }
 
         if (intent?.action == ACTION_SET_BACKGROUND) {
-            backgroundMode = normalizedBackgroundMode(
-                intent.getStringExtra(EXTRA_BACKGROUND_MODE)
-            )
+            backgroundMode = BACKGROUND_TRANSPARENT
             prefs.edit().putString(PREF_BACKGROUND_MODE, backgroundMode).apply()
             applyBackgroundMode()
             if (overlayRoot != null) return START_STICKY
@@ -163,12 +239,51 @@ class LyricsOverlayService : Service() {
             if (overlayRoot != null) return START_STICKY
         }
 
+        if (intent?.action == ACTION_SET_TOPBAR_LINES) {
+            topbarLines = normalizedTopbarLines(
+                intent.getIntExtra(EXTRA_TOPBAR_LINES, TOPBAR_LINES_DEFAULT)
+            )
+            prefs.edit().putInt(PREF_TOPBAR_LINES, topbarLines).apply()
+            applyTopbarLines()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_WALLPAPER_LYRICS) {
+            wallpaperLyricsEnabled = intent.getBooleanExtra(
+                EXTRA_WALLPAPER_LYRICS_ENABLED,
+                WALLPAPER_LYRICS_DEFAULT
+            )
+            prefs.edit()
+                .putBoolean(PREF_WALLPAPER_LYRICS_ENABLED, wallpaperLyricsEnabled)
+                .apply()
+            applyCurrentSurface()
+            return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SETTINGS_OPENED) {
+            settingsOpen = true
+            applyCurrentSurface()
+            return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SETTINGS_CLOSED) {
+            settingsOpen = false
+            // Re-read the car's final state instead of restoring the mode that
+            // was active before settings opened. A launcher action may have
+            // closed settings while switching from wallpaper to map.
+            displayStateMonitor.refresh()
+            applyCurrentSurface()
+            return START_STICKY
+        }
+
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return START_NOT_STICKY
         }
 
+        prefs.edit().putBoolean(PREF_AUTO_START, true).apply()
         startAsForeground()
+        displayStateMonitor.start()
         if (overlayRoot == null) createOverlay()
         startMediaMonitor()
         return START_STICKY
@@ -178,6 +293,8 @@ class LyricsOverlayService : Service() {
         mainHandler.removeCallbacksAndMessages(null)
         lyricsScope.cancel()
         lyricsRepository.close()
+        lyricsCache.close()
+        displayStateMonitor.stop()
         stopMediaMonitor()
         val player = webView
         (player?.parent as? ViewGroup)?.removeView(player)
@@ -193,11 +310,8 @@ class LyricsOverlayService : Service() {
             destroy()
         }
         webView = null
+        webContainer = null
         overlayRoot = null
-        chromeBar = null
-        dragTouchArea = null
-        scaleButton = null
-        closeButton = null
         isRunning = false
         announceOverlayState()
         super.onDestroy()
@@ -213,15 +327,46 @@ class LyricsOverlayService : Service() {
 
     private inner class LyricsJavascriptBridge {
         @JavascriptInterface
-        fun requestLyrics(track: String, artist: String, requestId: Int, needsRemoteCover: Boolean) {
+        fun requestSettings() {
+            mainHandler.post {
+                if (surfaceMode == LyricsSurfaceMode.TOPBAR && !settingsOpen) {
+                    openSettings()
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun requestLyrics(
+            track: String,
+            artist: String,
+            album: String,
+            durationMsText: String,
+            requestId: Int,
+            needsRemoteCover: Boolean
+        ) {
             if (track.isBlank() || requestId <= 0) return
+            val cacheKey = LyricsCache.key(track, artist, album)
+            val recordUse = synchronized(lyricsUsageLock) {
+                val changed = cacheKey != lastLyricsUsageKey
+                lastLyricsUsageKey = cacheKey
+                changed
+            }
             latestLyricsRequestId = requestId
             lyricsScope.launch {
+                val nowMs = System.currentTimeMillis()
+                val cached = lyricsCache.get(cacheKey, recordUse, nowMs)
+                if (requestId != latestLyricsRequestId) return@launch
+                if (cached != null) {
+                    deliverLyricsResult(requestId, cached.result)
+                    if (!cached.needsRefresh(nowMs)) return@launch
+                }
+
                 val startedAt = SystemClock.elapsedRealtime()
+                val durationMs = durationMsText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
                 val coverLookup = if (needsRemoteCover) {
                     async { lyricsRepository.resolveCover(track, artist) }
                 } else null
-                val result = lyricsRepository.resolveLyrics(track, artist)
+                val result = lyricsRepository.resolveLyrics(track, artist, album, durationMs)
                 if (requestId != latestLyricsRequestId) {
                     coverLookup?.cancel()
                     return@launch
@@ -229,9 +374,15 @@ class LyricsOverlayService : Service() {
                 Log.i(
                     LOG_TAG,
                     "Direct lyrics source=${result.source.ifBlank { "none" }} " +
+                        "kind=${result.lyricsKind} score=${result.score} " +
                         "found=${result.lyrics.isNotBlank()} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                 )
-                deliverLyricsResult(requestId, result)
+                if (classifyLyrics(result.lyrics) == LyricsKind.SYNCHRONIZED) {
+                    lyricsCache.put(cacheKey, result)
+                    deliverLyricsResult(requestId, result)
+                } else if (cached == null) {
+                    deliverLyricsResult(requestId, result)
+                }
 
                 if (needsRemoteCover && result.cover.isBlank()) {
                     val cover = runCatching { coverLookup?.await().orEmpty() }.getOrDefault("")
@@ -268,13 +419,6 @@ class LyricsOverlayService : Service() {
     }
 
     private fun startAsForeground() {
-        val openIntent = Intent(this, MainActivity::class.java)
-        val openPendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
         val stopIntent = Intent(this, LyricsOverlayService::class.java).apply { action = ACTION_STOP }
         val stopPendingIntent = PendingIntent.getService(
             this,
@@ -287,7 +431,6 @@ class LyricsOverlayService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("${getString(R.string.app_name)} 正在监听")
             .setContentText("本地实时同步当前媒体会话")
-            .setContentIntent(openPendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -311,7 +454,7 @@ class LyricsOverlayService : Service() {
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "歌词悬浮窗",
+                "顶栏歌词",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "保持本地歌词悬浮窗与 MediaSession 实时同步"
@@ -322,35 +465,16 @@ class LyricsOverlayService : Service() {
 
     @Suppress("SetJavaScriptEnabled")
     private fun createOverlay() {
-        val screenWidth = resources.displayMetrics.widthPixels
-        val screenHeight = resources.displayMetrics.heightPixels
-        val minWidth = minimumOverlayWidth()
-        val maxWidth = max(minWidth, screenWidth - dp(8))
-        val maxHeight = max(dp(300), screenHeight - dp(48))
-        val normalWidth = prefs.getInt("width", min(dp(360), screenWidth - dp(24)))
-            .coerceIn(minWidth, maxWidth)
-        val wasCompact = prefs.getBoolean("compact", false)
-        val storedNormalHeight = prefs.getInt("height", dp(520))
-        val compactMinimumHeight = dp(compactMinimumHeightDp(fontScalePercent))
-        val storedCompactHeight = prefs.getInt("compact_height_v3", max(dp(48), compactMinimumHeight))
-        val activeStoredHeight = if (wasCompact) storedCompactHeight else storedNormalHeight
-        compact = activeStoredHeight <= dp(COMPACT_MAX_HEIGHT_DP)
-        val normalHeightSource = if (!compact && wasCompact) activeStoredHeight else storedNormalHeight
-        val compactHeightSource = if (compact && !wasCompact) activeStoredHeight else storedCompactHeight
-        val normalHeight = normalHeightSource
-            .coerceIn(dp(COMPACT_MAX_HEIGHT_DP + 1), maxHeight)
-        val compactHeight = compactHeightSource
-            .coerceIn(compactMinimumHeight, dp(COMPACT_MAX_HEIGHT_DP))
-        if (compact != wasCompact) {
-            val migration = prefs.edit().putBoolean("compact", compact)
-            if (compact) migration.putInt("compact_height_v3", compactHeight)
-            else migration.putInt("height", normalHeight)
-            migration.apply()
+        compact = surfaceMode == LyricsSurfaceMode.TOPBAR
+        val geometry = overlayGeometry(surfaceMode, displayState)
+        if (geometry.width <= 0 || geometry.height <= 0) {
+            Log.i(LOG_TAG, "Lyric surface withheld because no safe width is available")
+            return
         }
 
         val params = WindowManager.LayoutParams(
-            normalWidth,
-            if (compact) compactHeight else normalHeight,
+            geometry.width,
+            geometry.height,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
@@ -358,183 +482,31 @@ class LyricsOverlayService : Service() {
                 WindowManager.LayoutParams.TYPE_PHONE
             },
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                (if (compact) 0 else WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = prefs.getInt("x", max(dp(12), screenWidth - normalWidth - dp(12)))
-                .coerceIn(0, max(0, screenWidth - normalWidth))
-            y = prefs.getInt("y", dp(96))
-                .coerceIn(0, max(0, screenHeight - if (compact) compactHeight else normalHeight))
+            x = geometry.x
+            y = geometry.y
         }
         windowParams = params
 
         val root = FrameLayout(this).apply {
             clipToOutline = true
-            elevation = dp(14).toFloat()
+            elevation = 0f
             background = overlayBackground(compact)
         }
         overlayRoot = root
 
-        val chrome = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 0)
-            setBackgroundColor(Color.TRANSPARENT)
-        }
-        chromeBar = chrome
-
-        val dragArea = View(this)
-        dragTouchArea = dragArea
-
-        val closeControl = chromeButton("×") {
-            stopSelf()
-        }.apply { textSize = 17f }
-        closeButton = closeControl
-        chrome.addView(closeControl, LinearLayout.LayoutParams(dp(26), dp(26)))
-
-        val resizeButton = chromeButton("↘") {
-            toggleCompact(normalHeight)
-        }.apply { textSize = 14f }
-        scaleButton = resizeButton
-        chrome.addView(resizeButton, LinearLayout.LayoutParams(dp(26), dp(26)))
-
-        val dragTouch = object : View.OnTouchListener {
-            var downRawX = 0f
-            var downRawY = 0f
-            var downX = 0
-            var downY = 0
-
-            override fun onTouch(view: View, event: MotionEvent): Boolean {
-                val lp = windowParams ?: return false
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downRawX = event.rawX
-                        downRawY = event.rawY
-                        downX = lp.x
-                        downY = lp.y
-                        return true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val maxX = max(0, resources.displayMetrics.widthPixels - lp.width)
-                        val maxY = max(0, resources.displayMetrics.heightPixels - lp.height)
-                        lp.x = (downX + event.rawX - downRawX).toInt().coerceIn(0, maxX)
-                        lp.y = (downY + event.rawY - downRawY).toInt().coerceIn(0, maxY)
-                        overlayRoot?.let { windowManager.updateViewLayout(it, lp) }
-                        return true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        prefs.edit().putInt("x", lp.x).putInt("y", lp.y).apply()
-                        return true
-                    }
-                }
-                return false
-            }
-        }
-        dragArea.setOnTouchListener(dragTouch)
-
-        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
-        resizeButton.setOnTouchListener(object : View.OnTouchListener {
-            var downRawX = 0f
-            var downRawY = 0f
-            var downX = 0
-            var downY = 0
-            var downWidth = 0
-            var downHeight = 0
-            var resizing = false
-            var movedBeforeLongPress = false
-            var pendingLongPress: Runnable? = null
-
-            fun cancelLongPress() {
-                pendingLongPress?.let(mainHandler::removeCallbacks)
-                pendingLongPress = null
-            }
-
-            fun saveSize(lp: WindowManager.LayoutParams) {
-                val edit = prefs.edit()
-                    .putInt("width", lp.width)
-                    .putInt("x", lp.x)
-                    .putInt("y", lp.y)
-                    .putBoolean("compact", compact)
-                if (compact) {
-                    edit.putInt("compact_height_v3", lp.height)
-                } else {
-                    edit.putInt("height", lp.height)
-                }
-                edit.apply()
-            }
-
-            override fun onTouch(view: View, event: MotionEvent): Boolean {
-                val lp = windowParams ?: return false
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downRawX = event.rawX
-                        downRawY = event.rawY
-                        downX = lp.x
-                        downY = lp.y
-                        downWidth = lp.width
-                        downHeight = lp.height
-                        resizing = false
-                        movedBeforeLongPress = false
-                        pendingLongPress = Runnable {
-                            resizing = true
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        }.also {
-                            mainHandler.postDelayed(it, ViewConfiguration.getLongPressTimeout().toLong())
-                        }
-                        return true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val deltaX = event.rawX - downRawX
-                        val deltaY = event.rawY - downRawY
-                        if (!resizing && max(kotlin.math.abs(deltaX), kotlin.math.abs(deltaY)) > touchSlop.toFloat()) {
-                            movedBeforeLongPress = true
-                            cancelLongPress()
-                        }
-                        if (!resizing) return true
-                        val minimumWidth = minimumOverlayWidth()
-                        val availableWidth = max(minimumWidth, resources.displayMetrics.widthPixels - downX)
-                        lp.width = (downWidth + deltaX).toInt()
-                            .coerceIn(minimumWidth, availableWidth)
-                        val bottomEdge = downY + downHeight
-                        val minimumHeight = dp(compactMinimumHeightDp(fontScalePercent))
-                        val maximumHeight = max(minimumHeight, bottomEdge)
-                        lp.height = (downHeight - deltaY).toInt()
-                            .coerceIn(minimumHeight, maximumHeight)
-                        lp.y = bottomEdge - lp.height
-                        overlayRoot?.let { windowManager.updateViewLayout(it, lp) }
-                        return true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        cancelLongPress()
-                        if (resizing) {
-                            val compactForSize = lp.height <= dp(COMPACT_MAX_HEIGHT_DP)
-                            if (compactForSize != compact) {
-                                setCompactUi(compactForSize)
-                            }
-                            saveSize(lp)
-                        } else if (!movedBeforeLongPress) {
-                            view.performClick()
-                        }
-                        resizing = false
-                        return true
-                    }
-                    MotionEvent.ACTION_CANCEL -> {
-                        cancelLongPress()
-                        if (resizing) saveSize(lp)
-                        resizing = false
-                        return true
-                    }
-                }
-                return false
-            }
-        })
-
-        val webContainer = FrameLayout(this)
-        root.addView(webContainer, FrameLayout.LayoutParams(
+        val webContainerView = FrameLayout(this)
+        webContainer = webContainerView
+        root.addView(webContainerView, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
+            if (compact) statusBarHeight() else ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.TOP
         ))
 
         val player = WebView(this).apply {
@@ -557,81 +529,173 @@ class LyricsOverlayService : Service() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     webReady = true
                     applyFontScale(fontScalePercent, adjustCompactHeight = false)
-                    evaluateJavascript(
-                        "window.LobstaOverlay && window.LobstaOverlay.setCompact($compact);",
-                        null
-                    )
+                    applySurfaceModeToWeb()
+                    applyTopbarLines()
                     applyBackgroundMode()
                     pendingSnapshot?.let { deliverToWeb(it) } ?: scheduleSnapshot()
+                }
+            }
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                    val message = consoleMessage ?: return false
+                    if (message.messageLevel() != ConsoleMessage.MessageLevel.ERROR) return false
+                    Log.e(LOG_TAG, "WebView ${message.sourceId()}:${message.lineNumber()} ${message.message()}")
+                    return true
                 }
             }
             loadUrl("file:///android_asset/lyrics_overlay.html")
         }
         webView = player
-        webContainer.addView(player, FrameLayout.LayoutParams(
+        webContainerView.addView(player, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ))
-        root.addView(dragArea, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        ))
-        root.addView(chrome, FrameLayout.LayoutParams(
-            if (compact) dp(26) else ViewGroup.LayoutParams.WRAP_CONTENT,
-            if (compact) ViewGroup.LayoutParams.MATCH_PARENT else dp(28),
-            if (compact) Gravity.END or Gravity.CENTER_VERTICAL else Gravity.END or Gravity.BOTTOM
-        ))
-        updateControlLayout(compact)
+        updateWebContainerLayout(compact)
 
         windowManager.addView(root, params)
     }
 
-    private fun minimumOverlayWidth(): Int {
-        val oneThirdScreen = resources.displayMetrics.widthPixels / 3
-        return oneThirdScreen.coerceIn(dp(112), dp(140))
+    private data class OverlayGeometry(
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int
+    )
+
+    private fun onIcarDisplayStateChanged(state: IcarDisplayState) {
+        val previous = displayState
+        displayState = state
+        applyCurrentSurface(previous)
     }
 
-    private fun chromeButton(label: String, action: () -> Unit): TextView = TextView(this).apply {
-        text = label
-        setTextColor(Color.argb(225, 255, 255, 255))
-        textSize = 11f
-        gravity = Gravity.CENTER
-        setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat(), Color.argb(190, 0, 0, 0))
-        setOnClickListener { action() }
-    }
-
-    private fun overlayBackground(isCompact: Boolean): GradientDrawable = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(22).toFloat()
-        setColor(Color.TRANSPARENT)
-        if (!isCompact) {
-            setStroke(dp(1), Color.argb(45, 255, 255, 255))
+    /** Reconciles raw launcher state with the temporary settings page and preference state. */
+    private fun applyCurrentSurface(previousState: IcarDisplayState? = null) {
+        val nextSurfaceMode = IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+            displayState = displayState,
+            wallpaperLyricsEnabled = wallpaperLyricsEnabled,
+            settingsOpen = settingsOpen
+        )
+        val geometry = overlayGeometry(nextSurfaceMode, displayState)
+        if (overlayRoot == null && geometry.width > 0 && geometry.height > 0) {
+            surfaceMode = nextSurfaceMode
+            createOverlay()
+            return
         }
-    }
-
-    private fun toggleCompact(normalHeight: Int) {
-        val nextCompact = !compact
-        val lp = windowParams ?: return
-        lp.height = if (nextCompact) {
-            prefs.getInt("compact_height_v3", dp(48))
-                .coerceIn(dp(compactMinimumHeightDp(fontScalePercent)), dp(COMPACT_MAX_HEIGHT_DP))
-        } else {
-            prefs.getInt("height", normalHeight)
-                .coerceAtLeast(dp(COMPACT_MAX_HEIGHT_DP + 1))
+        if (surfaceMode != nextSurfaceMode) {
+            applySurfaceMode(nextSurfaceMode)
+        } else if (nextSurfaceMode == LyricsSurfaceMode.TOPBAR &&
+            previousState?.topbarGeometry() != displayState?.topbarGeometry()
+        ) {
+            displayState?.let(::applyTopbarGeometry)
         }
-        setCompactUi(nextCompact)
-        overlayRoot?.let { windowManager.updateViewLayout(it, lp) }
+        updateOverlayVisibility(geometry)
     }
 
-    private fun setCompactUi(value: Boolean) {
-        compact = value
-        prefs.edit().putBoolean("compact", compact).apply()
+    private fun applySurfaceMode(nextSurfaceMode: LyricsSurfaceMode) {
+        surfaceMode = nextSurfaceMode
+        compact = surfaceMode == LyricsSurfaceMode.TOPBAR
+        val params = windowParams ?: return
+        applyOverlayGeometry(params, overlayGeometry(surfaceMode, displayState))
         overlayRoot?.background = overlayBackground(compact)
-        updateControlLayout(compact)
+        updateWindowTouchability(compact)
+        updateWebContainerLayout(compact)
+        applySurfaceModeToWeb()
+    }
+
+    /** Icon updates reach here only while already in topbar mode. */
+    private fun applyTopbarGeometry(state: IcarDisplayState) {
+        val params = windowParams ?: return
+        applyOverlayGeometry(params, overlayGeometry(LyricsSurfaceMode.TOPBAR, state))
+    }
+
+    private fun applyOverlayGeometry(params: WindowManager.LayoutParams, geometry: OverlayGeometry) {
+        if (geometry.width <= 0 || geometry.height <= 0) {
+            overlayRoot?.visibility = View.GONE
+            return
+        }
+        params.x = geometry.x
+        params.y = geometry.y
+        params.width = geometry.width
+        params.height = geometry.height
+        overlayRoot?.let { root ->
+            root.visibility = if (settingsOpen) View.GONE else View.VISIBLE
+            runCatching { windowManager.updateViewLayout(root, params) }
+                .onFailure { error -> Log.w(LOG_TAG, "Unable to update lyric surface", error) }
+        }
+    }
+
+    private fun updateOverlayVisibility(geometry: OverlayGeometry = overlayGeometry(surfaceMode, displayState)) {
+        overlayRoot?.visibility = if (!settingsOpen && geometry.width > 0 && geometry.height > 0) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+    }
+
+    private fun overlayGeometry(
+        mode: LyricsSurfaceMode,
+        state: IcarDisplayState?
+    ): OverlayGeometry {
+        val realMetrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(realMetrics)
+        val screenWidth = realMetrics.widthPixels
+        val screenHeight = realMetrics.heightPixels
+        fun scaledX(value: Int): Int = (screenWidth * value / DESIGN_WIDTH.toFloat()).roundToInt()
+        fun scaledY(value: Int): Int = (screenHeight * value / DESIGN_HEIGHT.toFloat()).roundToInt()
+
+        if (mode == LyricsSurfaceMode.DESKTOP) {
+            val left = scaledX(DESKTOP_LEFT)
+            val top = scaledY(DESKTOP_TOP)
+            val right = scaledX(DESKTOP_RIGHT).coerceAtMost(screenWidth)
+            val bottom = scaledY(DESKTOP_BOTTOM).coerceAtMost(screenHeight)
+            return OverlayGeometry(
+                x = left,
+                y = top,
+                width = max(1, right - left),
+                height = max(1, bottom - top)
+            )
+        }
+
+        val topbarGeometry = state?.topbarGeometry() ?: IcarTopbarGeometry(
+            leftPx = IcarTopbarLayout.LYRICS_LEFT_WITHOUT_DYNAMIC_ICONS_PX,
+            rightPx = IcarTopbarLayout.LYRICS_RIGHT_PX
+        )
+        if (!topbarGeometry.canShowLyrics) return OverlayGeometry(0, 0, 0, 0)
+        val right = scaledX(topbarGeometry.rightPx).coerceAtMost(screenWidth)
+        val left = scaledX(topbarGeometry.leftPx).coerceAtMost(right)
+        return OverlayGeometry(
+            x = left,
+            y = 0,
+            width = max(0, right - left),
+            height = statusBarHeight()
+        )
+    }
+
+    private fun applySurfaceModeToWeb() {
+        if (!webReady) return
+        val encodedMode = JSONObject.quote(
+            if (surfaceMode == LyricsSurfaceMode.DESKTOP) "desktop" else "topbar"
+        )
         webView?.evaluateJavascript(
-            "window.LobstaOverlay && window.LobstaOverlay.setCompact($compact);",
+            "window.LobstaOverlay && window.LobstaOverlay.setSurfaceMode($encodedMode);",
             null
         )
+    }
+
+    private fun overlayBackground(@Suppress("UNUSED_PARAMETER") isCompact: Boolean) =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(Color.TRANSPARENT)
+        }
+
+    private fun statusBarHeight(): Int {
+        val realMetrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(realMetrics)
+        return (realMetrics.heightPixels * 72 / 1080f)
+            .toInt()
+            .coerceAtLeast(dp(48))
     }
 
     private fun applyBackgroundMode() {
@@ -642,25 +706,14 @@ class LyricsOverlayService : Service() {
         )
     }
 
-    private fun applyFontScale(previousPercent: Int, adjustCompactHeight: Boolean) {
+    private fun applyFontScale(
+        @Suppress("UNUSED_PARAMETER") previousPercent: Int,
+        @Suppress("UNUSED_PARAMETER") adjustCompactHeight: Boolean
+    ) {
         webView?.evaluateJavascript(
             "window.LobstaOverlay && window.LobstaOverlay.setFontScale($fontScalePercent);",
             null
         )
-        if (!adjustCompactHeight || !compact) return
-
-        val lp = windowParams ?: return
-        val previousMinimum = dp(compactMinimumHeightDp(previousPercent))
-        val nextMinimum = dp(compactMinimumHeightDp(fontScalePercent))
-        val wasAtMinimum = lp.height <= previousMinimum + dp(2)
-        val nextHeight = if (wasAtMinimum) nextMinimum else max(lp.height, nextMinimum)
-        if (nextHeight == lp.height) return
-
-        lp.height = nextHeight.coerceAtMost(dp(COMPACT_MAX_HEIGHT_DP))
-        val screenHeight = resources.displayMetrics.heightPixels
-        lp.y = lp.y.coerceIn(0, max(0, screenHeight - lp.height))
-        overlayRoot?.let { windowManager.updateViewLayout(it, lp) }
-        prefs.edit().putInt("compact_height_v3", lp.height).apply()
     }
 
     private fun normalizedBackgroundMode(value: String?): String = when (value) {
@@ -670,65 +723,76 @@ class LyricsOverlayService : Service() {
         else -> BACKGROUND_DEFAULT
     }
 
+    private fun normalizedTopbarLines(value: Int): Int = if (value == 1) 1 else 2
+
     private fun normalizedFontScale(value: Int): Int =
         value.coerceIn(FONT_SCALE_MIN_PERCENT, FONT_SCALE_MAX_PERCENT)
 
-    private fun updateControlLayout(isCompact: Boolean) {
-        val chrome = chromeBar ?: return
-        chrome.orientation = if (isCompact) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-        chrome.gravity = Gravity.CENTER
-        scaleButton?.text = if (isCompact) "↙" else "↖"
-
-        chrome.removeAllViews()
-        if (isCompact) {
-            scaleButton?.let(chrome::addView)
-            closeButton?.let(chrome::addView)
-        } else {
-            scaleButton?.let(chrome::addView)
-            closeButton?.let(chrome::addView)
-        }
-
-        val params = (chrome.layoutParams as? FrameLayout.LayoutParams)
-            ?: FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28))
-        params.width = if (isCompact) dp(26) else ViewGroup.LayoutParams.WRAP_CONTENT
-        params.height = if (isCompact) ViewGroup.LayoutParams.MATCH_PARENT else dp(24)
-        params.gravity = if (isCompact) {
-            Gravity.END or Gravity.CENTER_VERTICAL
-        } else {
-            Gravity.END or Gravity.TOP
-        }
-        params.setMargins(0, if (isCompact) 0 else dp(16), if (isCompact) 0 else dp(17), 0)
-        chrome.layoutParams = params
-
-        if (isCompact) {
-            closeButton?.layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-            scaleButton?.layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        } else {
-            closeButton?.layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
-            scaleButton?.layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
-        }
-        chrome.requestLayout()
-
-        dragTouchArea?.let { area ->
-            val areaParams = (area.layoutParams as? FrameLayout.LayoutParams)
+    private fun updateWebContainerLayout(isTopbar: Boolean) {
+        webContainer?.let { container ->
+            val containerParams = (container.layoutParams as? FrameLayout.LayoutParams)
                 ?: FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    Gravity.TOP
                 )
-            areaParams.width = ViewGroup.LayoutParams.MATCH_PARENT
-            areaParams.height = if (isCompact) ViewGroup.LayoutParams.MATCH_PARENT else dp(112)
-            areaParams.gravity = Gravity.TOP
-            area.layoutParams = areaParams
-            area.requestLayout()
+            containerParams.width = ViewGroup.LayoutParams.MATCH_PARENT
+            containerParams.height = if (isTopbar) {
+                statusBarHeight()
+            } else {
+                ViewGroup.LayoutParams.MATCH_PARENT
+            }
+            containerParams.gravity = Gravity.TOP
+            container.layoutParams = containerParams
+            container.requestLayout()
         }
+    }
+
+    private fun updateWindowTouchability(isTopbar: Boolean) {
+        val params = windowParams ?: return
+        val nextFlags = if (isTopbar) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        if (params.flags == nextFlags) return
+        params.flags = nextFlags
+        overlayRoot?.let { root ->
+            runCatching { windowManager.updateViewLayout(root, params) }
+                .onFailure { error -> Log.w(LOG_TAG, "Unable to update lyric touch mode", error) }
+        }
+    }
+
+    private fun openSettings() {
+        settingsOpen = true
+        applyCurrentSurface()
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+        val options = ActivityOptions.makeBasic().setLaunchBounds(
+            Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+        )
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                },
+                options.toBundle()
+            )
+        }.onFailure {
+            settingsOpen = false
+            displayStateMonitor.refresh()
+            applyCurrentSurface()
+            Log.w(LOG_TAG, "Unable to open lyric settings", it)
+        }
+    }
+
+    private fun applyTopbarLines() {
+        if (!webReady) return
+        webView?.evaluateJavascript(
+            "window.LobstaOverlay && window.LobstaOverlay.setCompactLines($topbarLines);",
+            null
+        )
     }
 
     private fun startMediaMonitor() {
@@ -737,6 +801,7 @@ class LyricsOverlayService : Service() {
             return
         }
         startAudioRouteMonitor()
+        startAvrcpEventMonitor()
         try {
             sessionManager.addOnActiveSessionsChangedListener(activeSessionsListener, listenerComponent)
             monitorStarted = true
@@ -757,6 +822,7 @@ class LyricsOverlayService : Service() {
     private fun stopMediaMonitor() {
         mainHandler.removeCallbacks(sessionRefreshRunnable)
         stopAudioRouteMonitor()
+        stopAvrcpEventMonitor()
         if (monitorStarted) {
             try {
                 sessionManager.removeOnActiveSessionsChangedListener(activeSessionsListener)
@@ -766,6 +832,7 @@ class LyricsOverlayService : Service() {
         monitorStarted = false
         currentController?.unregisterCallback(controllerCallback)
         currentController = null
+        resetBluetoothTimeline()
     }
 
     private fun startAudioRouteMonitor() {
@@ -784,6 +851,35 @@ class LyricsOverlayService : Service() {
         } catch (_: Exception) {
         }
         audioRouteMonitorStarted = false
+    }
+
+    private fun startAvrcpEventMonitor() {
+        if (avrcpEventMonitorStarted) return
+        val filter = IntentFilter().apply {
+            addAction(ACTION_AVRCP_PLAYBACK_POSITION_CHANGED)
+            addAction(ACTION_AVRCP_TRACK_EVENT)
+        }
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                avrcpEventReceiver,
+                filter,
+                ContextCompat.RECEIVER_EXPORTED
+            )
+            avrcpEventMonitorStarted = true
+            Log.i(LOG_TAG, "AVRCP passive event monitor registered")
+        } catch (error: Exception) {
+            Log.w(LOG_TAG, "AVRCP passive event monitor unavailable", error)
+        }
+    }
+
+    private fun stopAvrcpEventMonitor() {
+        if (!avrcpEventMonitorStarted) return
+        try {
+            unregisterReceiver(avrcpEventReceiver)
+        } catch (_: Exception) {
+        }
+        avrcpEventMonitorStarted = false
     }
 
     private fun refreshActiveSessions() {
@@ -812,6 +908,7 @@ class LyricsOverlayService : Service() {
 
         currentController?.unregisterCallback(controllerCallback)
         currentController = best
+        resetBluetoothTimeline()
         cachedArtworkKey = ""
         cachedArtworkDataUrl = ""
         best?.registerCallback(controllerCallback, mainHandler)
@@ -832,6 +929,7 @@ class LyricsOverlayService : Service() {
     private fun isSupportedMusicPackage(packageName: String): Boolean {
         val p = packageName.lowercase(Locale.ROOT)
         val exactOrPrefix = listOf(
+            BLUETOOTH_PACKAGE,
             "com.apple.android.music",
             "com.spotify.music",
             "com.netease.cloudmusic",
@@ -887,17 +985,33 @@ class LyricsOverlayService : Service() {
         ).orEmpty()
         val album = firstMetadataString(metadata, MediaMetadata.METADATA_KEY_ALBUM).orEmpty()
         val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
-        val state = when (playback?.state) {
+        val mediaSessionState = when (playback?.state) {
             PlaybackState.STATE_PLAYING -> "playing"
             PlaybackState.STATE_PAUSED -> "paused"
             PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING -> "buffering"
             PlaybackState.STATE_STOPPED, PlaybackState.STATE_NONE -> "stopped"
             else -> "paused"
         }
-        val speed = playback?.playbackSpeed?.toDouble() ?: 0.0
-        val position = currentPosition(playback, duration)
-        val artwork = artworkDataUrl(metadata, "$title\u0000$artist\u0000$album")
-
+        val state = if (controller.packageName == BLUETOOTH_PACKAGE) {
+            bluetoothPlaybackState(mediaSessionState)
+        } else {
+            mediaSessionState
+        }
+        val rawSpeed = playback?.playbackSpeed?.toDouble() ?: 0.0
+        val timeline = if (controller.packageName == BLUETOOTH_PACKAGE) {
+            bluetoothTimeline(
+                bluetoothTrackIdentity(title, artist, album),
+                state,
+                playback?.position ?: 0L,
+                duration
+            )
+        } else {
+            PlaybackTimeline(
+                positionMs = currentPosition(playback, duration),
+                speed = rawSpeed,
+                timelineReady = true
+            )
+        }
         return JSONObject()
             .put("hasSession", title.isNotBlank() || playback != null)
             .put("permissionRequired", false)
@@ -906,13 +1020,19 @@ class LyricsOverlayService : Service() {
             .put("album", album)
             .put("packageName", controller.packageName)
             .put("state", state)
-            .put("positionMs", position)
+            .put("positionMs", timeline.positionMs)
             .put("durationMs", max(0L, duration))
-            .put("speed", if (speed.isFinite()) speed else 1.0)
+            .put("speed", if (timeline.speed.isFinite()) timeline.speed else 1.0)
+            .put("timelineReady", timeline.timelineReady)
             .put("capturedAtMs", System.currentTimeMillis())
-            .put("cover", artwork)
-            .put("volumePct", mediaVolumePercent())
-            .put("audioDevice", currentAudioDeviceLabel())
+    }
+
+    private fun bluetoothTrackIdentity(
+        title: String,
+        artist: String,
+        album: String
+    ): String {
+        return "text:$title\u0000$artist\u0000$album"
     }
 
     private fun mediaVolumePercent(): Int {
@@ -1048,6 +1168,108 @@ class LyricsOverlayService : Service() {
         return if (duration > 0) min(position, duration) else position
     }
 
+    private fun bluetoothTimeline(
+        trackKey: String,
+        state: String,
+        reportedPositionMs: Long,
+        durationMs: Long
+    ): PlaybackTimeline {
+        val now = SystemClock.elapsedRealtime()
+        val isPlaying = state == "playing"
+        val eventPosition = pendingBluetoothPositionMs
+        val eventPositionCapturedAt = pendingBluetoothPositionCapturedAtRealtime
+        pendingBluetoothPositionMs = null
+
+        if (trackKey != bluetoothTrackKey) {
+            bluetoothTrackKey = trackKey
+            bluetoothLastReportedPositionMs = -1L
+            // A metadata update can still carry the prior track's position.
+            // Start every new generation at zero and wait for a fresh low
+            // position before trusting later AVRCP progress.
+            bluetoothPositionMs = 0L
+            bluetoothPositionCapturedAtRealtime = now
+            bluetoothWasPlaying = isPlaying
+            bluetoothTimelineGenerationStartedAtRealtime = now
+            bluetoothTimelineReady = false
+        } else {
+            if (eventPosition != null) {
+                val eventBelongsToGeneration = eventPositionCapturedAt >=
+                    bluetoothTimelineGenerationStartedAtRealtime
+                if (bluetoothTimelineReady || eventBelongsToGeneration ||
+                    eventPosition <= BLUETOOTH_POSITION_RESET_TOLERANCE_MS
+                ) {
+                    bluetoothPositionMs = eventPosition
+                    bluetoothPositionCapturedAtRealtime = eventPositionCapturedAt
+                    bluetoothTimelineReady = true
+                }
+            } else if (reportedPositionMs >= 0L &&
+                reportedPositionMs != bluetoothLastReportedPositionMs
+            ) {
+                if (bluetoothTimelineReady || reportedPositionMs <= BLUETOOTH_POSITION_RESET_TOLERANCE_MS) {
+                    bluetoothPositionMs = reportedPositionMs
+                    bluetoothPositionCapturedAtRealtime = now
+                    bluetoothTimelineReady = true
+                }
+            } else if (bluetoothWasPlaying && !isPlaying) {
+                bluetoothPositionMs += max(0L, now - bluetoothPositionCapturedAtRealtime)
+                bluetoothPositionCapturedAtRealtime = now
+            } else if (!bluetoothWasPlaying && isPlaying) {
+                bluetoothPositionCapturedAtRealtime = now
+            }
+            bluetoothLastReportedPositionMs = reportedPositionMs
+            bluetoothWasPlaying = isPlaying
+        }
+
+        var position = bluetoothPositionMs
+        if (isPlaying) {
+            position += max(0L, now - bluetoothPositionCapturedAtRealtime)
+        }
+        if (durationMs > 0L) position = min(position, durationMs)
+        return PlaybackTimeline(
+            positionMs = max(0L, position),
+            speed = if (isPlaying) 1.0 else 0.0,
+            timelineReady = bluetoothTimelineReady
+        )
+    }
+
+    private fun resetBluetoothTimeline() {
+        bluetoothTrackKey = ""
+        bluetoothPositionMs = 0L
+        bluetoothPositionCapturedAtRealtime = 0L
+        bluetoothWasPlaying = false
+        bluetoothLastReportedPositionMs = -1L
+        pendingBluetoothPositionMs = null
+        pendingBluetoothPositionCapturedAtRealtime = 0L
+        bluetoothTimelineGenerationStartedAtRealtime = 0L
+        bluetoothTimelineReady = false
+        bluetoothReportedPlaybackState = null
+    }
+
+    private fun bluetoothPlaybackState(fallback: String): String = when (bluetoothReportedPlaybackState) {
+        PlaybackState.STATE_PLAYING,
+        PlaybackState.STATE_FAST_FORWARDING,
+        PlaybackState.STATE_REWINDING -> "playing"
+        PlaybackState.STATE_PAUSED -> "paused"
+        PlaybackState.STATE_STOPPED,
+        PlaybackState.STATE_NONE -> "stopped"
+        PlaybackState.STATE_BUFFERING,
+        PlaybackState.STATE_CONNECTING -> "buffering"
+        else -> fallback
+    }
+
+    @Suppress("DEPRECATION")
+    private fun android.os.Bundle.number(key: String): Long? =
+        (runCatching { get(key) }.getOrNull() as? Number)?.toLong()
+
+    @Suppress("DEPRECATION")
+    private fun android.os.Bundle.playbackState(key: String): Int? = when (
+        val value = runCatching { get(key) }.getOrNull()
+    ) {
+        is PlaybackState -> value.state
+        is Number -> value.toInt()
+        else -> null
+    }?.takeIf { it in PlaybackState.STATE_NONE..PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM }
+
     private fun mediaTitle(metadata: MediaMetadata?): String? = firstMetadataString(
         metadata,
         MediaMetadata.METADATA_KEY_TITLE,
@@ -1121,19 +1343,30 @@ class LyricsOverlayService : Service() {
         const val ACTION_STATE_CHANGED = "com.tcrrry.desktoplyrics.action.LYRICS_OVERLAY_STATE_CHANGED"
         const val ACTION_SET_BACKGROUND = "com.tcrrry.desktoplyrics.action.SET_LYRICS_BACKGROUND"
         const val ACTION_SET_FONT_SCALE = "com.tcrrry.desktoplyrics.action.SET_LYRICS_FONT_SCALE"
+        const val ACTION_SET_TOPBAR_LINES = "com.tcrrry.desktoplyrics.action.SET_TOPBAR_LINES"
+        const val ACTION_SET_WALLPAPER_LYRICS =
+            "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_LYRICS"
+        const val ACTION_SETTINGS_OPENED = "com.tcrrry.desktoplyrics.action.SETTINGS_OPENED"
+        const val ACTION_SETTINGS_CLOSED = "com.tcrrry.desktoplyrics.action.SETTINGS_CLOSED"
         const val EXTRA_BACKGROUND_MODE = "background_mode"
         const val EXTRA_FONT_SCALE_PERCENT = "font_scale_percent"
+        const val EXTRA_TOPBAR_LINES = "topbar_lines"
+        const val EXTRA_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled"
         const val EXTRA_RUNNING = "running"
         const val PREFS_NAME = "lyrics_overlay_prefs"
         const val PREF_BACKGROUND_MODE = "background_mode"
         const val PREF_FONT_SCALE_PERCENT = "font_scale_percent"
+        const val PREF_AUTO_START = "auto_start"
+        const val PREF_TOPBAR_LINES = "topbar_lines_v1"
+        const val PREF_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled_v1"
         const val BACKGROUND_TRANSPARENT = "transparent"
         const val BACKGROUND_LOW = "low"
         const val BACKGROUND_HIGH = "high"
-        const val BACKGROUND_DEFAULT = BACKGROUND_HIGH
+        const val BACKGROUND_DEFAULT = BACKGROUND_TRANSPARENT
         const val FONT_SCALE_MIN_PERCENT = 75
         const val FONT_SCALE_MAX_PERCENT = 150
         const val FONT_SCALE_DEFAULT_PERCENT = 100
+        const val WALLPAPER_LYRICS_DEFAULT = true
 
         fun compactMinimumHeightDp(percent: Int): Int {
             val scale = percent.coerceIn(FONT_SCALE_MIN_PERCENT, FONT_SCALE_MAX_PERCENT) / 100f
@@ -1141,8 +1374,26 @@ class LyricsOverlayService : Service() {
         }
         private const val LOG_TAG = "DesktopLyrics"
         private const val CHANNEL_ID = "lobsta_lyrics_overlay"
-        private const val COMPACT_MAX_HEIGHT_DP = 130
         private const val NOTIFICATION_ID = 4202
+        private const val BLUETOOTH_POSITION_RESET_TOLERANCE_MS = 2_500L
+        private const val TOPBAR_LINES_DEFAULT = 2
+        private const val DESIGN_WIDTH = 1920
+        private const val DESIGN_HEIGHT = 1080
+        private const val DESKTOP_LEFT = 660
+        private const val DESKTOP_TOP = 90
+        private const val DESKTOP_RIGHT = 1890
+        private const val DESKTOP_BOTTOM = 900
+        private const val BLUETOOTH_PACKAGE = "com.android.bluetooth"
+        private const val ACTION_AVRCP_PLAYBACK_POSITION_CHANGED =
+            "android.bluetooth.avrcp-controller.profile.action.PLAYBACK_POS_CHANGEDS"
+        private const val ACTION_AVRCP_TRACK_EVENT =
+            "android.bluetooth.avrcp-controller.profile.action.TRACK_EVENT"
+        private const val EXTRA_AVRCP_SONG_POSITION =
+            "android.bluetooth.avrcp-controller.profile.extra.SONG_POS"
+        private const val EXTRA_AVRCP_PLAY_SONG_POSITION =
+            "android.bluetooth.avrcp-controller.extra.PLAY_SONG_POS"
+        private const val EXTRA_AVRCP_PLAYBACK =
+            "android.bluetooth.avrcp-controller.profile.extra.PLAYBACK"
 
         @Volatile
         var isRunning: Boolean = false
