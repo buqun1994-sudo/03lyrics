@@ -41,6 +41,7 @@ internal class LyricsCache(
         if (closed || !LyricsCandidateSelector.hasKnownDuration(playbackDurationMs)) return null
         return runCatching {
             val database = helper.writableDatabase
+            val query = LyricsLookup(track, artist, album, playbackDurationMs)
             val matches = lookupKeys(track, artist, album, playbackDurationMs).mapNotNull { cacheKey ->
                 database.query(
                     TABLE_CACHE,
@@ -55,10 +56,7 @@ internal class LyricsCache(
                     if (!cursor.moveToFirst()) return@use null
                     decodeEntry(cursor.getString(0), cursor.getLong(1))
                         ?.takeIf {
-                            LyricsCandidateSelector.hasMatchingDuration(
-                                playbackDurationMs,
-                                it.result.durationMs
-                            )
+                            LyricsCandidateSelector.matchesVersion(query, it.result)
                         }
                         ?.let { CachedEntry(cacheKey, it, cursor.getInt(2)) }
                 }

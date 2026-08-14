@@ -23,7 +23,6 @@
     <dimen name="settings_switch_caption_spacing">5dp</dimen>
     <dimen name="settings_switch_width">73dp</dimen>
     <dimen name="settings_switch_height">41dp</dimen>
-    <dimen name="settings_switch_thumb_size">34dp</dimen>
 
     <dimen name="settings_window_radius">20dp</dimen>
     <dimen name="settings_control_radius">20dp</dimen>

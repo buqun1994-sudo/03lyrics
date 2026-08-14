@@ -89,6 +89,7 @@ class DirectLyricsRepository {
             Log.i(
                 LOG_TAG,
                 "Lyrics path=lrclib-exact selected=${exact.source} " +
+                    "evidence=${LyricsCandidateSelector.selectionSummary(query, listOf(exact), exact)} " +
                     "elapsedMs=${elapsedMs(startedAtNanos)}"
             )
             return exact
@@ -107,6 +108,7 @@ class DirectLyricsRepository {
                 LOG_TAG,
                 "Lyrics path=catalog catalogCandidates=${candidates.size} " +
                     "confirmed=${confirmed.size} selected=${selected.source} " +
+                    "evidence=${LyricsCandidateSelector.selectionSummary(query, candidates, selected)} " +
                     "elapsedMs=${elapsedMs(startedAtNanos)}"
             )
             return selected
@@ -123,6 +125,7 @@ class DirectLyricsRepository {
                 "confirmed=${confirmed.size} fallbackCandidates=${fallbackCandidates.size} " +
                 "fallbackConfirmed=${fallbackConfirmed.size} " +
                 "selected=${fallbackSelected?.source ?: "none"} " +
+                "evidence=${LyricsCandidateSelector.selectionSummary(query, fallbackCandidates, fallbackSelected)} " +
                 "elapsedMs=${elapsedMs(startedAtNanos)}"
         )
         return fallbackSelected ?: Result()
@@ -512,7 +515,32 @@ internal object LyricsCandidateSelector {
     fun selectCandidates(
         query: LyricsLookup,
         candidates: Iterable<DirectLyricsRepository.Result>
-    ): List<DirectLyricsRepository.Result> {
+    ): List<DirectLyricsRepository.Result> = rankCandidates(query, candidates)
+        .map(CandidateEvidence::candidate)
+
+    fun selectionSummary(
+        query: LyricsLookup,
+        candidates: Iterable<DirectLyricsRepository.Result>,
+        selected: DirectLyricsRepository.Result? = null
+    ): String {
+        val ranked = rankCandidates(query, candidates, includeRejected = true)
+        val selectedIdentity = selected?.let(::candidateIdentity)
+        val selectedEvidence = selectedIdentity?.let { identity ->
+            ranked.firstOrNull { evidence -> candidateIdentity(evidence.candidate) == identity }
+        }
+        val summaries = (listOfNotNull(selectedEvidence) + ranked.filterNot { it === selectedEvidence })
+            .take(MAX_DIAGNOSTIC_CANDIDATES)
+            .joinToString("|") { evidence ->
+                "${evidence.candidate.source}/${evidence.candidate.sourceId}:${evidence.summary()}"
+            }
+        return summaries.ifBlank { "none" }
+    }
+
+    private fun rankCandidates(
+        query: LyricsLookup,
+        candidates: Iterable<DirectLyricsRepository.Result>,
+        includeRejected: Boolean = false
+    ): List<CandidateEvidence> {
         if (!canConfirm(query)) return emptyList()
         val uniqueCandidates = candidates.asSequence()
             .distinctBy(::candidateIdentity)
@@ -521,35 +549,42 @@ internal object LyricsCandidateSelector {
         val eligibleCandidates = uniqueCandidates.asSequence()
             .mapNotNull { candidate -> candidateMetadata(query, candidate) }
             .toList()
-        val eligibleEvidence = eligibleCandidates.mapNotNull { metadata ->
+        val hasMultipleSources = eligibleCandidates.asSequence()
+            .map { metadata -> metadata.candidate.source }
+            .filter(String::isNotBlank)
+            .distinct()
+            .take(MINIMUM_SUPPORTING_SOURCES)
+            .count() >= MINIMUM_SUPPORTING_SOURCES
+        val eligibleEvidence = eligibleCandidates.map { metadata ->
             val directTitleEvidence = titleEvidence(queryTitle, metadata.title)
             val effectiveTitleEvidence = when {
                 directTitleEvidence.isConfirmed() -> directTitleEvidence
-                hasIndependentTitleBridge(queryTitle, metadata, eligibleCandidates) ->
+                directTitleEvidence == EvidenceLevel.UNKNOWN &&
+                    hasIndependentTitleBridge(queryTitle, metadata, eligibleCandidates) ->
                     EvidenceLevel.NEAR
-                else -> return@mapNotNull null
+                else -> directTitleEvidence
             }
             candidateEvidence(query, metadata.candidate, effectiveTitleEvidence)
         }
         val matched = eligibleEvidence.asSequence()
             .map { evidence ->
                 evidence.copy(
-                    supportingSources = supportingSourceCount(
-                        evidence,
-                        eligibleEvidence
-                    )
+                    supportingSources = if (hasMultipleSources) {
+                        supportingSourceCount(evidence, eligibleEvidence)
+                    } else {
+                        1
+                    }
                 )
             }
-            .filter(CandidateEvidence::isConfirmed)
+            .filter { evidence -> includeRejected || evidence.isConfirmed() }
             .sortedWith(
-                compareBy<CandidateEvidence> { it.titleAnnotationRank }
-                    .thenBy(CandidateEvidence::confirmationRank)
+                compareByDescending<CandidateEvidence> { it.score() }
+                    .thenBy { it.titleAnnotationRank }
                     .thenByDescending { it.supportingSources }
                     .thenBy { abs(query.durationMs - it.candidate.durationMs) }
                     .thenBy { it.candidate.source }
                     .thenBy { it.candidate.sourceId }
             )
-            .map(CandidateEvidence::candidate)
             .toList()
         return matched
     }
@@ -558,7 +593,6 @@ internal object LyricsCandidateSelector {
         if (!canConfirm(query)) return false
         val metadata = candidateMetadata(query, candidate) ?: return false
         val directTitleEvidence = titleEvidence(titleIdentity(query.track), metadata.title)
-        if (!directTitleEvidence.isConfirmed()) return false
         val evidence = candidateEvidence(query, candidate, directTitleEvidence)
         return evidence.copy(supportingSources = 1).isConfirmed()
     }
@@ -672,6 +706,7 @@ internal object LyricsCandidateSelector {
         evidence: CandidateEvidence,
         candidates: List<CandidateEvidence>
     ): Int {
+        if (!evidence.titleEvidence.isConfirmed()) return 1
         val sources = candidates.asSequence()
             .filter { peer -> candidatesDescribeSameRecording(evidence.candidate, peer.candidate) }
             .map { peer -> peer.candidate.source }
@@ -695,7 +730,7 @@ internal object LyricsCandidateSelector {
         val secondTitle = titleIdentity(second.candidateTrack)
         if (!firstTitle.isValid || !secondTitle.isValid ||
             !versionsMatch(firstTitle, secondTitle) ||
-            titleEvidence(firstTitle, secondTitle) == EvidenceLevel.DIFFERENT
+            !titleEvidence(firstTitle, secondTitle).isConfirmed()
         ) {
             return false
         }
@@ -767,6 +802,19 @@ internal object LyricsCandidateSelector {
         val secondBases = second.alternateBases + second.base
         return if (firstBases.any(secondBases::contains)) {
             EvidenceLevel.NEAR
+        } else if (firstBases.any { firstBase ->
+                secondBases.any { secondBase ->
+                    hasMinimumTextSimilarity(
+                        firstBase,
+                        secondBase,
+                        MINIMUM_TITLE_SIMILARITY_PERCENT
+                    )
+                }
+            }
+        ) {
+            EvidenceLevel.NEAR
+        } else if (haveDisjointScripts(first.base, second.base)) {
+            EvidenceLevel.UNKNOWN
         } else {
             EvidenceLevel.DIFFERENT
         }
@@ -865,6 +913,18 @@ internal object LyricsCandidateSelector {
                 return EvidenceLevel.NEAR
             }
         }
+        if (first.effective.any { firstName ->
+                second.effective.any { secondName ->
+                    hasMinimumTextSimilarity(
+                        firstName,
+                        secondName,
+                        MINIMUM_ARTIST_SIMILARITY_PERCENT
+                    )
+                }
+            }
+        ) {
+            return EvidenceLevel.NEAR
+        }
         return if (haveDisjointScripts(firstArtist, secondArtist)) {
             EvidenceLevel.UNKNOWN
         } else {
@@ -894,19 +954,62 @@ internal object LyricsCandidateSelector {
         .orEmpty()
 
     private fun nearMetadataText(first: String, second: String): Boolean {
+        val firstNormalized = normalizeText(first)
+        val secondNormalized = normalizeText(second)
         val firstTokens = metadataTokens(first)
         val secondTokens = metadataTokens(second)
         if (firstTokens.isEmpty() || secondTokens.isEmpty()) return false
         if (firstTokens == secondTokens) return true
-        val (smaller, larger) = if (firstTokens.size <= secondTokens.size) {
-            firstTokens to secondTokens
-        } else {
-            secondTokens to firstTokens
+        if (hasMinimumTextSimilarity(
+                firstNormalized,
+                secondNormalized,
+                MINIMUM_ALBUM_SIMILARITY_PERCENT
+            )
+        ) {
+            return true
         }
-        if (!larger.containsAll(smaller)) return false
-        val extraTokens = larger - smaller
-        return extraTokens.isNotEmpty() &&
-            extraTokens.all { token -> token.length <= MAX_SHORT_METADATA_TOKEN_LENGTH }
+        val (shorter, longer) = if (firstNormalized.length <= secondNormalized.length) {
+            firstNormalized to secondNormalized
+        } else {
+            secondNormalized to firstNormalized
+        }
+        return longer.contains(shorter) &&
+            shorter.length * 100 >= longer.length * MINIMUM_NEAR_TEXT_PERCENT
+    }
+
+    private fun hasMinimumTextSimilarity(
+        first: String,
+        second: String,
+        minimumPercent: Int
+    ): Boolean {
+        if (first.isBlank() || second.isBlank()) return false
+        if (first == second) return true
+        val maximumLength = maxOf(first.length, second.length)
+        if (maximumLength < MINIMUM_FUZZY_TEXT_LENGTH) return false
+        val allowedDistance = maximumLength * (100 - minimumPercent) / 100
+        if (abs(first.length - second.length) > allowedDistance) return false
+        return editDistanceAtMost(first, second, allowedDistance)
+    }
+
+    private fun editDistanceAtMost(first: String, second: String, maximumDistance: Int): Boolean {
+        if (maximumDistance < 0) return false
+        var previous = IntArray(second.length + 1) { it }
+        var current = IntArray(second.length + 1)
+        for (firstIndex in first.indices) {
+            current[0] = firstIndex + 1
+            for (secondIndex in second.indices) {
+                val substitutionCost = if (first[firstIndex] == second[secondIndex]) 0 else 1
+                current[secondIndex + 1] = minOf(
+                    previous[secondIndex + 1] + 1,
+                    current[secondIndex] + 1,
+                    previous[secondIndex] + substitutionCost
+                )
+            }
+            val swap = previous
+            previous = current
+            current = swap
+        }
+        return previous[second.length] <= maximumDistance
     }
 
     private fun metadataTokens(value: String): Set<String> =
@@ -1035,21 +1138,27 @@ internal object LyricsCandidateSelector {
         val titleAnnotationRank: Int,
         val supportingSources: Int = 1
     ) {
-        fun isConfirmed(): Boolean {
-            val directConfirmation = artistEvidence.isConfirmed() || albumEvidence.isConfirmed()
-            val consensusConfirmation = supportingSources >= MINIMUM_SUPPORTING_SOURCES &&
-                artistEvidence != EvidenceLevel.DIFFERENT &&
-                albumEvidence != EvidenceLevel.DIFFERENT
-            return titleEvidence.isConfirmed() && (directConfirmation || consensusConfirmation)
-        }
+        fun isConfirmed(): Boolean =
+            titleEvidence.isConfirmed() && score() >= MINIMUM_CONFIRMATION_SCORE
 
-        fun confirmationRank(): Int = when {
-            artistEvidence == EvidenceLevel.EXACT && albumEvidence == EvidenceLevel.EXACT -> 0
-            artistEvidence.isConfirmed() && albumEvidence.isConfirmed() -> 1
-            artistEvidence.isConfirmed() -> 2
-            albumEvidence.isConfirmed() -> 3
-            supportingSources >= MINIMUM_SUPPORTING_SOURCES -> 4
-            else -> 5
+        fun score(): Int =
+            titleEvidence.titleScore() +
+                artistEvidence.artistScore() +
+                albumEvidence.albumScore() +
+                consensusBonus()
+
+        fun summary(): String =
+            "score=${score()} title=$titleEvidence artist=$artistEvidence " +
+                "album=$albumEvidence sources=$supportingSources"
+
+        private fun consensusBonus(): Int {
+            return if (titleEvidence.isConfirmed() &&
+                supportingSources >= MINIMUM_SUPPORTING_SOURCES
+            ) {
+                CONSENSUS_BONUS
+            } else {
+                0
+            }
         }
     }
 
@@ -1065,6 +1174,27 @@ internal object LyricsCandidateSelector {
         DIFFERENT;
 
         fun isConfirmed(): Boolean = this == EXACT || this == NEAR
+
+        fun titleScore(): Int = when (this) {
+            EXACT -> 4
+            NEAR -> 3
+            UNKNOWN -> 0
+            DIFFERENT -> -5
+        }
+
+        fun artistScore(): Int = when (this) {
+            EXACT -> 3
+            NEAR -> 2
+            UNKNOWN -> 0
+            DIFFERENT -> -2
+        }
+
+        fun albumScore(): Int = when (this) {
+            EXACT -> 3
+            NEAR -> 2
+            UNKNOWN -> 0
+            DIFFERENT -> -1
+        }
     }
 
     private val BRACKET_PATTERN = Regex("[（(\\[【{]([^）)\\]】}]{1,80})[）)\\]】}]")
@@ -1108,8 +1238,15 @@ internal object LyricsCandidateSelector {
     private val COMBINING_MARK_PATTERN = Regex("\\p{M}+")
     private val CJK_SEQUENCE_PATTERN = Regex("[\\u3400-\\u9fff\\uF900-\\uFAFF]+")
     private val ANNOTATION_STOP_WORDS = setOf("the", "and", "from", "with", "of")
-    private const val MAX_SHORT_METADATA_TOKEN_LENGTH = 3
+    private const val MINIMUM_NEAR_TEXT_PERCENT = 70
+    private const val MINIMUM_FUZZY_TEXT_LENGTH = 8
+    private const val MINIMUM_TITLE_SIMILARITY_PERCENT = 85
+    private const val MINIMUM_ARTIST_SIMILARITY_PERCENT = 90
+    private const val MINIMUM_ALBUM_SIMILARITY_PERCENT = 80
     private const val MINIMUM_SUPPORTING_SOURCES = 2
+    private const val CONSENSUS_BONUS = 2
+    private const val MINIMUM_CONFIRMATION_SCORE = 5
+    private const val MAX_DIAGNOSTIC_CANDIDATES = 3
     private val LANGUAGE_DISPLAY_LOCALES = listOf(
         Locale.ENGLISH,
         Locale.SIMPLIFIED_CHINESE,

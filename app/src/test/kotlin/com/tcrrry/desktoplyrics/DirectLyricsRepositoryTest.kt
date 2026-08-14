@@ -68,6 +68,54 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
+    fun `accepts a small title spelling difference as near evidence`() {
+        val query = LyricsLookup(
+            track = "Beautiful Tonight",
+            artist = "Artist",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "title-typo",
+                    track = "Beautifull Tonight",
+                    artist = "Artist",
+                    durationMs = 200_000L
+                )
+            )
+        )
+
+        assertEquals(listOf("title-typo"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `accepts a small artist spelling difference as near evidence`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "The Weeknd",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "artist-typo",
+                    track = "A Song",
+                    artist = "The Weekend",
+                    durationMs = 200_000L
+                )
+            )
+        )
+
+        assertEquals(listOf("artist-typo"), selected.map { it.sourceId })
+    }
+
+    @Test
     fun `selects Mandarin Super Girl candidates without accepting Korean or wrong duration versions`() {
         val query = LyricsLookup(
             track = "Super Girl",
@@ -331,6 +379,224 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
+    fun `two sources can confirm an artist that cannot be compared across writing systems`() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            durationMs = 199_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "QQ音乐",
+                    sourceId = "localized-a",
+                    track = "마리아",
+                    artist = "华莎",
+                    album = "María",
+                    durationMs = 199_000L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "localized-b",
+                    track = "마리아 (Maria)",
+                    artist = "华莎",
+                    album = "María",
+                    durationMs = 199_100L
+                )
+            )
+        )
+
+        assertEquals(listOf("localized-a", "localized-b"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `source consensus cannot override both a different artist and a different album`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Artist A",
+            album = "Album A",
+            durationMs = 200_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "different-a",
+                        track = "A Song",
+                        artist = "Artist B",
+                        album = "Album B",
+                        durationMs = 200_000L
+                    ),
+                    candidate(
+                        source = "网易云音乐",
+                        sourceId = "different-b",
+                        track = "A Song",
+                        artist = "Artist B",
+                        album = "Album B",
+                        durationMs = 200_100L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `source consensus can offset one different display name when title and album agree`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Stage Name",
+            album = "Release - EP",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "QQ音乐",
+                    sourceId = "legal-name-a",
+                    track = "A Song",
+                    artist = "Legal Name",
+                    album = "Release",
+                    durationMs = 200_000L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "legal-name-b",
+                    track = "A Song",
+                    artist = "Legal Name",
+                    album = "Release",
+                    durationMs = 200_100L
+                )
+            )
+        )
+
+        assertEquals(listOf("legal-name-a", "legal-name-b"), selected.map { it.sourceId })
+    }
+
+    @Test
+    fun `moya ignores an unrelated cross-script title beside three matching sources`() {
+        val query = LyricsLookup(
+            track = "MOYA",
+            artist = "AOA",
+            album = "MOYA - EP",
+            durationMs = 220_427L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "QQ音乐",
+                    sourceId = "qq-moya",
+                    track = "MOYA (모야)",
+                    artist = "AOA",
+                    album = "MOYA",
+                    durationMs = 220_000L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "netease-moya",
+                    track = "MOYA (모야)",
+                    artist = "AOA",
+                    album = "MOYA",
+                    durationMs = 220_355L
+                ),
+                candidate(
+                    source = "LRCLIB",
+                    sourceId = "lrclib-moya",
+                    track = "MOYA",
+                    artist = "AOA",
+                    album = "MOYA",
+                    durationMs = 220_000L
+                ),
+                candidate(
+                    source = "网易云音乐",
+                    sourceId = "unrelated-korean-title",
+                    track = "사뿐사뿐",
+                    artist = "AOA",
+                    album = "사뿐사뿐",
+                    durationMs = 219_533L
+                )
+            )
+        )
+
+        assertEquals(
+            setOf("qq-moya", "netease-moya", "lrclib-moya"),
+            selected.map { it.sourceId }.toSet()
+        )
+        assertFalse(selected.any { it.sourceId == "unrelated-korean-title" })
+    }
+
+    @Test
+    fun `unknown cross-script title cannot qualify from matching artist and album alone`() {
+        val query = LyricsLookup(
+            track = "MOYA",
+            artist = "AOA",
+            album = "Shared Release",
+            durationMs = 220_427L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "网易云音乐",
+                        sourceId = "unrelated-korean-title",
+                        track = "사뿐사뿐",
+                        artist = "AOA",
+                        album = "Shared Release",
+                        durationMs = 219_533L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `ranks stronger evidence ahead of a simpler title annotation`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Artist",
+            album = "Current Release",
+            durationMs = 200_000L
+        )
+
+        val selected = LyricsCandidateSelector.selectCandidates(
+            query,
+            listOf(
+                candidate(
+                    source = "source",
+                    sourceId = "simple-title-weaker-evidence",
+                    track = "A Song",
+                    artist = "Artist",
+                    album = "Other Release",
+                    durationMs = 200_000L
+                ),
+                candidate(
+                    source = "source",
+                    sourceId = "annotated-title-stronger-evidence",
+                    track = "A Song (Movie Theme)",
+                    artist = "Artist",
+                    album = "Current Release",
+                    durationMs = 201_500L
+                )
+            )
+        )
+
+        assertEquals(
+            listOf("annotated-title-stronger-evidence", "simple-title-weaker-evidence"),
+            selected.map { it.sourceId }
+        )
+    }
+
+    @Test
     fun `independent support cannot override an explicit recording version conflict`() {
         val query = LyricsLookup(
             track = "마리아",
@@ -425,7 +691,7 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
-    fun `ranks exact omitted and unrelated bracket information without losing the recording`() {
+    fun `ranks stronger metadata before bracket detail without losing the recording`() {
         val query = LyricsLookup(
             track = "错错错 (feat. 陈娟儿)",
             artist = "六哲",
@@ -464,7 +730,7 @@ class DirectLyricsRepositoryTest {
         )
 
         assertEquals(
-            listOf("feature-in-artist", "omitted-feature", "unrelated-brackets"),
+            listOf("omitted-feature", "unrelated-brackets", "feature-in-artist"),
             selected.map { it.sourceId }
         )
     }

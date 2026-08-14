@@ -10,10 +10,12 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SwitchCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
@@ -28,12 +30,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var standardSizeOption: TextView
     private lateinit var largeSizeOption: TextView
     private lateinit var displayNavigationItem: TextView
+    private lateinit var systemNavigationItem: TextView
+    private lateinit var displayContent: View
+    private lateinit var systemContent: View
     private lateinit var wallpaperLyricsSetting: LinearLayout
-    private lateinit var wallpaperLyricsSwitch: SwitchCompat
+    private lateinit var wallpaperLyricsSwitch: IcarSwitch
+    private lateinit var restartLyricsSetting: LinearLayout
     private var themePalette = IcarThemeColorPalette.resolve(null, false)
     private var renderedNightMode = false
     private var themeObserverRegistered = false
     private var renderingOptions = false
+    private var selectedSection = SettingsSection.DISPLAY
 
     private val themeColorObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
@@ -52,8 +59,14 @@ class MainActivity : AppCompatActivity() {
         standardSizeOption = findViewById(R.id.font_size_standard)
         largeSizeOption = findViewById(R.id.font_size_large)
         displayNavigationItem = findViewById(R.id.settings_navigation_display)
+        systemNavigationItem = findViewById(R.id.settings_navigation_system)
+        displayContent = findViewById(R.id.settings_display_content)
+        systemContent = findViewById(R.id.settings_system_content)
         wallpaperLyricsSetting = findViewById(R.id.wallpaper_lyrics_setting)
         wallpaperLyricsSwitch = findViewById(R.id.wallpaper_lyrics_switch)
+        restartLyricsSetting = findViewById(R.id.restart_lyrics_setting)
+
+        selectedSection = SettingsSection.from(savedInstanceState?.getString(STATE_SELECTED_SECTION))
 
         currentLineOption.setOnClickListener { setTopbarLines(1) }
         currentAndNextOption.setOnClickListener { setTopbarLines(2) }
@@ -66,8 +79,12 @@ class MainActivity : AppCompatActivity() {
         wallpaperLyricsSwitch.setOnCheckedChangeListener { _, enabled ->
             if (!renderingOptions) setWallpaperLyricsEnabled(enabled)
         }
+        displayNavigationItem.setOnClickListener { showSection(SettingsSection.DISPLAY) }
+        systemNavigationItem.setOnClickListener { showSection(SettingsSection.SYSTEM) }
+        restartLyricsSetting.setOnClickListener { restartLyricsOverlay() }
 
         refreshThemePalette()
+        showSection(selectedSection)
     }
 
     override fun onResume() {
@@ -76,14 +93,16 @@ class MainActivity : AppCompatActivity() {
             recreate()
             return
         }
-        if (::currentLineOption.isInitialized) refreshThemePalette()
+        if (::currentLineOption.isInitialized) {
+            refreshThemePalette()
+        }
     }
 
     override fun onStart() {
         super.onStart()
         registerThemeColorObserver()
         refreshThemePalette()
-        notifyOverlay(LyricsOverlayService.ACTION_SETTINGS_OPENED)
+        ensureLyricsOverlayForSettings()
     }
 
     override fun onStop() {
@@ -92,6 +111,11 @@ class MainActivity : AppCompatActivity() {
             notifyOverlay(LyricsOverlayService.ACTION_SETTINGS_CLOSED)
         }
         super.onStop()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(STATE_SELECTED_SECTION, selectedSection.name)
+        super.onSaveInstanceState(outState)
     }
 
     private fun setTopbarLines(lines: Int) {
@@ -167,7 +191,7 @@ class MainActivity : AppCompatActivity() {
                     LyricsOverlayService.WALLPAPER_LYRICS_DEFAULT
                 )
             )
-            setNavigationSelected(displayNavigationItem)
+            renderNavigation()
             setOptionSelected(currentLineOption, lines == 1)
             setOptionSelected(currentAndNextOption, lines == 2)
 
@@ -208,18 +232,69 @@ class MainActivity : AppCompatActivity() {
         item.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     }
 
-    private fun renderWallpaperLyricsSwitch(enabled: Boolean) {
-        wallpaperLyricsSwitch.trackTintList = ColorStateList(
-            arrayOf(
-                intArrayOf(android.R.attr.state_checked),
-                intArrayOf()
-            ),
-            intArrayOf(
-                themePalette.accentColor,
-                ContextCompat.getColor(this, R.color.settings_switch_track_off)
-            )
+    private fun setNavigationUnselected(item: TextView) {
+        item.background = null
+        item.backgroundTintList = null
+        item.setTextColor(ContextCompat.getColor(this, R.color.settings_text_primary))
+        item.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        item.isSelected = false
+        item.contentDescription = item.text
+    }
+
+    private fun renderNavigation() {
+        val selectedItem = when (selectedSection) {
+            SettingsSection.DISPLAY -> displayNavigationItem
+            SettingsSection.SYSTEM -> systemNavigationItem
+        }
+        val unselectedItem = when (selectedSection) {
+            SettingsSection.DISPLAY -> systemNavigationItem
+            SettingsSection.SYSTEM -> displayNavigationItem
+        }
+        setNavigationUnselected(unselectedItem)
+        setNavigationSelected(selectedItem)
+        selectedItem.isSelected = true
+        selectedItem.contentDescription = getString(
+            R.string.accessibility_navigation_selected,
+            selectedItem.text
         )
+    }
+
+    private fun renderWallpaperLyricsSwitch(enabled: Boolean) {
+        wallpaperLyricsSwitch.accentColor = themePalette.accentColor
         wallpaperLyricsSwitch.isChecked = enabled
+    }
+
+    private fun showSection(section: SettingsSection) {
+        selectedSection = section
+        displayContent.visibility = if (section == SettingsSection.DISPLAY) View.VISIBLE else View.GONE
+        systemContent.visibility = if (section == SettingsSection.SYSTEM) View.VISIBLE else View.GONE
+        renderNavigation()
+    }
+
+    private fun hasNotificationListenerAccess(): Boolean =
+        NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+
+    private fun restartLyricsOverlay() {
+        if (!SettingsAuthorizationPolicy.canRunLyrics(
+                notificationAccess = hasNotificationListenerAccess(),
+                overlayAccess = Settings.canDrawOverlays(this)
+            )
+        ) {
+            Toast.makeText(
+                this,
+                R.string.settings_restart_requires_authorization,
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        val intent = Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_RESTART
+        }
+        if (LyricsOverlayService.isRunning) {
+            startService(intent)
+        } else {
+            ContextCompat.startForegroundService(this, intent)
+        }
     }
 
     private fun refreshThemePalette() {
@@ -254,6 +329,22 @@ class MainActivity : AppCompatActivity() {
         resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
             Configuration.UI_MODE_NIGHT_YES
 
+    private fun ensureLyricsOverlayForSettings() {
+        if (!SettingsAuthorizationPolicy.canRunLyrics(
+                notificationAccess = hasNotificationListenerAccess(),
+                overlayAccess = Settings.canDrawOverlays(this)
+            )
+        ) return
+        val intent = Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_SETTINGS_OPENED
+        }
+        if (LyricsOverlayService.isRunning) {
+            startService(intent)
+        } else {
+            ContextCompat.startForegroundService(this, intent)
+        }
+    }
+
     private fun notifyOverlay(action: String) {
         if (!LyricsOverlayService.isRunning) return
         startService(Intent(this, LyricsOverlayService::class.java).apply {
@@ -262,9 +353,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private companion object {
+        const val STATE_SELECTED_SECTION = "selected_settings_section"
         const val TOPBAR_LINES_DEFAULT = 2
         const val FONT_SCALE_SMALL = 88
         const val FONT_SCALE_STANDARD = 100
         const val FONT_SCALE_LARGE = 108
     }
+
+    private enum class SettingsSection {
+        DISPLAY,
+        SYSTEM;
+
+        companion object {
+            fun from(value: String?): SettingsSection = entries.firstOrNull { it.name == value }
+                ?: DISPLAY
+        }
+    }
+}
+
+internal object SettingsAuthorizationPolicy {
+    fun canRunLyrics(notificationAccess: Boolean, overlayAccess: Boolean): Boolean =
+        notificationAccess && overlayAccess
 }

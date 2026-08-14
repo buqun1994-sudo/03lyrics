@@ -53,11 +53,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -81,7 +81,8 @@ class LyricsOverlayService : Service() {
     }
     private val lyricsRepository = DirectLyricsRepository()
     private val lyricsCache by lazy { LyricsCache(this) }
-    private val lyricsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var lyricsJob = SupervisorJob()
+    private var lyricsScope = CoroutineScope(lyricsJob + Dispatchers.IO)
     private val lyricsUsageLock = Any()
 
     private var overlayRoot: FrameLayout? = null
@@ -118,6 +119,7 @@ class LyricsOverlayService : Service() {
     private var bluetoothTimelineReady = false
     private var bluetoothReportedPlaybackState: Int? = null
     private var lastLyricsUsageKey = ""
+    private val runtimeGeneration = AtomicLong(0L)
     @Volatile private var latestLyricsRequestId = 0
 
     private data class PlaybackTimeline(
@@ -137,7 +139,9 @@ class LyricsOverlayService : Service() {
             mainHandler.postDelayed(this, 2_000L)
         }
     }
-
+    private val sessionRetryRunnable = Runnable {
+        if (isRunning && !monitorStarted) startMediaMonitor()
+    }
     private val surfaceOccupancyListener: (Boolean) -> Unit = { occupied ->
         if (desktopSurfaceOccupied != occupied) {
             desktopSurfaceOccupied = occupied
@@ -147,24 +151,38 @@ class LyricsOverlayService : Service() {
     }
 
     private val controllerCallback = object : MediaController.Callback() {
-        override fun onMetadataChanged(metadata: MediaMetadata?) = scheduleSnapshot()
-        override fun onPlaybackStateChanged(state: PlaybackState?) = scheduleSnapshot()
-        override fun onSessionDestroyed() = refreshActiveSessions()
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            if (monitorStarted) scheduleSnapshot()
+        }
+
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            if (monitorStarted) scheduleSnapshot()
+        }
+
+        override fun onSessionDestroyed() {
+            if (monitorStarted) refreshActiveSessions()
+        }
     }
 
     private val activeSessionsListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-            selectController(controllers.orEmpty())
+            if (monitorStarted) selectController(controllers.orEmpty())
         }
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = scheduleSnapshot()
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = scheduleSnapshot()
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            if (monitorStarted) scheduleSnapshot()
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            if (monitorStarted) scheduleSnapshot()
+        }
     }
 
     @Suppress("DEPRECATION")
     private val avrcpEventReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if (!monitorStarted) return
             val event = intent ?: return
             val extrasBundle = event.extras
             val reportedPlaybackState = if (event.action == ACTION_AVRCP_TRACK_EVENT) {
@@ -207,23 +225,7 @@ class LyricsOverlayService : Service() {
         super.onCreate()
         isRunning = true
         announceOverlayState()
-        nightTheme = isNightTheme(resources.configuration)
-        backgroundMode = BACKGROUND_TRANSPARENT
-        fontScalePercent = normalizedFontScale(
-            prefs.getInt(PREF_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
-        )
-        // launcherState is the only source of the desktop/topbar surface.
-        compact = true
-        topbarLines = normalizedTopbarLines(
-            prefs.getInt(PREF_TOPBAR_LINES, TOPBAR_LINES_DEFAULT)
-        )
-        wallpaperLyricsEnabled = prefs.getBoolean(
-            PREF_WALLPAPER_LYRICS_ENABLED,
-            WALLPAPER_LYRICS_DEFAULT
-        )
-        prefs.edit()
-            .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
-            .apply()
+        loadRuntimePreferences()
         SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
         createNotificationChannel()
     }
@@ -241,6 +243,15 @@ class LyricsOverlayService : Service() {
             prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
             stopSelf()
             return START_NOT_STICKY
+        }
+
+        if (intent?.action == ACTION_RESTART) {
+            if (!Settings.canDrawOverlays(this) || !hasNotificationListenerAccess()) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            restartRuntime()
+            return START_STICKY
         }
 
         if (intent?.action == ACTION_SET_BACKGROUND) {
@@ -283,8 +294,10 @@ class LyricsOverlayService : Service() {
 
         if (intent?.action == ACTION_SETTINGS_OPENED) {
             localSettingsOpen = true
-            applyCurrentSurface()
-            return START_STICKY
+            if (monitorStarted) {
+                applyCurrentSurface()
+                return START_STICKY
+            }
         }
 
         if (intent?.action == ACTION_SETTINGS_CLOSED) {
@@ -292,51 +305,123 @@ class LyricsOverlayService : Service() {
             // Re-read the car's final state instead of restoring the mode that
             // was active before settings opened. A launcher action may have
             // closed settings while switching from wallpaper to map.
-            displayStateMonitor.refresh()
-            applyCurrentSurface()
-            return START_STICKY
+            if (monitorStarted) {
+                displayStateMonitor.refresh()
+                applyCurrentSurface()
+                return START_STICKY
+            }
         }
 
-        if (!Settings.canDrawOverlays(this)) {
+        if (!Settings.canDrawOverlays(this) || !hasNotificationListenerAccess()) {
             stopSelf()
             return START_NOT_STICKY
         }
 
         prefs.edit().putBoolean(PREF_AUTO_START, true).apply()
-        startAsForeground()
-        displayStateMonitor.start()
-        if (overlayRoot == null) createOverlay()
-        startMediaMonitor()
+        startRuntime()
         return START_STICKY
     }
 
     override fun onDestroy() {
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
+        releaseRuntimeResources(prepareForRestart = false)
         mainHandler.removeCallbacksAndMessages(null)
-        lyricsScope.cancel()
         lyricsRepository.close()
         lyricsCache.close()
+        isRunning = false
+        announceOverlayState()
+        super.onDestroy()
+    }
+
+    private fun loadRuntimePreferences() {
+        nightTheme = isNightTheme(resources.configuration)
+        backgroundMode = BACKGROUND_TRANSPARENT
+        fontScalePercent = normalizedFontScale(
+            prefs.getInt(PREF_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
+        )
+        compact = true
+        surfaceMode = LyricsSurfaceMode.TOPBAR
+        topbarLines = normalizedTopbarLines(
+            prefs.getInt(PREF_TOPBAR_LINES, TOPBAR_LINES_DEFAULT)
+        )
+        wallpaperLyricsEnabled = prefs.getBoolean(
+            PREF_WALLPAPER_LYRICS_ENABLED,
+            WALLPAPER_LYRICS_DEFAULT
+        )
+        prefs.edit()
+            .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
+            .apply()
+    }
+
+    private fun startRuntime() {
+        startAsForeground()
+        displayStateMonitor.start()
+        if (overlayRoot == null) createOverlay()
+        startMediaMonitor()
+    }
+
+    private fun restartRuntime() {
+        val preserveAutoStart = prefs.getBoolean(PREF_AUTO_START, false)
+        releaseRuntimeResources(prepareForRestart = true)
+        loadRuntimePreferences()
+        startRuntime()
+        if (prefs.getBoolean(PREF_AUTO_START, false) != preserveAutoStart) {
+            prefs.edit().putBoolean(PREF_AUTO_START, preserveAutoStart).apply()
+            Log.w(LOG_TAG, "Restored auto-start intent after runtime restart")
+        }
+        Log.i(
+            LOG_TAG,
+            "Lyrics overlay runtime restarted generation=${runtimeGeneration.get()} " +
+                "autoStart=$preserveAutoStart"
+        )
+    }
+
+    private fun releaseRuntimeResources(prepareForRestart: Boolean) {
+        runtimeGeneration.incrementAndGet()
+        synchronized(lyricsUsageLock) {
+            latestLyricsRequestId = 0
+            lastLyricsUsageKey = ""
+        }
+        lyricsJob.cancel()
+        if (prepareForRestart) {
+            lyricsJob = SupervisorJob()
+            lyricsScope = CoroutineScope(lyricsJob + Dispatchers.IO)
+        }
+
+        mainHandler.removeCallbacks(dispatchRunnable)
+        mainHandler.removeCallbacks(sessionRefreshRunnable)
+        mainHandler.removeCallbacks(sessionRetryRunnable)
+        snapshotScheduled = false
         displayStateMonitor.stop()
         stopMediaMonitor()
+        destroyOverlay()
+
+        displayState = null
+        pendingSnapshot = null
+        cachedArtworkKey = ""
+        cachedArtworkDataUrl = ""
+    }
+
+    private fun destroyOverlay() {
+        webReady = false
         val player = webView
+        val root = overlayRoot
+        webView = null
+        webContainer = null
+        overlayRoot = null
+        windowParams = null
+
         (player?.parent as? ViewGroup)?.removeView(player)
-        overlayRoot?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Exception) {
-            }
+        root?.let {
+            runCatching { windowManager.removeViewImmediate(it) }
+                .onFailure { error -> Log.w(LOG_TAG, "Unable to remove lyric surface", error) }
         }
         player?.apply {
             stopLoading()
             loadUrl("about:blank")
+            removeJavascriptInterface("LobstaNativeLyrics")
             destroy()
         }
-        webView = null
-        webContainer = null
-        overlayRoot = null
-        isRunning = false
-        announceOverlayState()
-        super.onDestroy()
     }
 
     private fun announceOverlayState() {
@@ -347,10 +432,11 @@ class LyricsOverlayService : Service() {
         )
     }
 
-    private inner class LyricsJavascriptBridge {
+    private inner class LyricsJavascriptBridge(private val generation: Long) {
         @JavascriptInterface
         fun requestSettings() {
             mainHandler.post {
+                if (generation != runtimeGeneration.get()) return@post
                 if (surfaceMode == LyricsSurfaceMode.TOPBAR && !localSettingsOpen) {
                     openSettings()
                 }
@@ -366,26 +452,40 @@ class LyricsOverlayService : Service() {
             requestId: Int,
             needsRemoteCover: Boolean
         ) {
-            if (track.isBlank() || requestId <= 0) return
+            if (generation != runtimeGeneration.get() || track.isBlank() || requestId <= 0) return
             val durationMs = durationMsText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
             if (!LyricsCandidateSelector.hasKnownDuration(durationMs)) {
-                latestLyricsRequestId = requestId
-                deliverLyricsResult(requestId, DirectLyricsRepository.Result())
+                val claimed = synchronized(lyricsUsageLock) {
+                    if (generation != runtimeGeneration.get()) {
+                        false
+                    } else {
+                        latestLyricsRequestId = requestId
+                        true
+                    }
+                }
+                if (!claimed) return
+                deliverLyricsResult(generation, requestId, DirectLyricsRepository.Result())
                 return
             }
             val usageKey = LyricsCache.usageKey(track, artist, album, durationMs)
             val recordUse = synchronized(lyricsUsageLock) {
-                val changed = usageKey != lastLyricsUsageKey
-                lastLyricsUsageKey = usageKey
-                changed
-            }
-            latestLyricsRequestId = requestId
-            lyricsScope.launch {
+                if (generation != runtimeGeneration.get()) {
+                    null
+                } else {
+                    val changed = usageKey != lastLyricsUsageKey
+                    lastLyricsUsageKey = usageKey
+                    latestLyricsRequestId = requestId
+                    changed
+                }
+            } ?: return
+            val requestScope = lyricsScope
+            if (generation != runtimeGeneration.get()) return
+            requestScope.launch {
                 val nowMs = System.currentTimeMillis()
                 val cached = lyricsCache.get(track, artist, album, durationMs, recordUse, nowMs)
-                if (requestId != latestLyricsRequestId) return@launch
+                if (!isCurrentLyricsRequest(generation, requestId)) return@launch
                 if (cached != null) {
-                    deliverLyricsResult(requestId, cached.result)
+                    deliverLyricsResult(generation, requestId, cached.result)
                     if (!cached.needsRefresh(nowMs)) return@launch
                 }
 
@@ -394,7 +494,7 @@ class LyricsOverlayService : Service() {
                     async { lyricsRepository.resolveCover(track, artist) }
                 } else null
                 val result = lyricsRepository.resolveLyrics(track, artist, album, durationMs)
-                if (requestId != latestLyricsRequestId) {
+                if (!isCurrentLyricsRequest(generation, requestId)) {
                     coverLookup?.cancel()
                     return@launch
                 }
@@ -406,15 +506,15 @@ class LyricsOverlayService : Service() {
                 )
                 if (classifyLyrics(result.lyrics) == LyricsKind.SYNCHRONIZED) {
                     lyricsCache.put(track, artist, album, durationMs, result)
-                    deliverLyricsResult(requestId, result)
+                    deliverLyricsResult(generation, requestId, result)
                 } else if (cached == null) {
-                    deliverLyricsResult(requestId, result)
+                    deliverLyricsResult(generation, requestId, result)
                 }
 
                 if (needsRemoteCover && result.cover.isBlank()) {
                     val cover = runCatching { coverLookup?.await().orEmpty() }.getOrDefault("")
-                    if (cover.isNotBlank() && requestId == latestLyricsRequestId) {
-                        deliverRemoteCover(requestId, cover)
+                    if (cover.isNotBlank() && isCurrentLyricsRequest(generation, requestId)) {
+                        deliverRemoteCover(generation, requestId, cover)
                     }
                 } else {
                     coverLookup?.cancel()
@@ -423,10 +523,17 @@ class LyricsOverlayService : Service() {
         }
     }
 
-    private fun deliverLyricsResult(requestId: Int, result: DirectLyricsRepository.Result) {
+    private fun isCurrentLyricsRequest(generation: Long, requestId: Int): Boolean =
+        generation == runtimeGeneration.get() && requestId == latestLyricsRequestId
+
+    private fun deliverLyricsResult(
+        generation: Long,
+        requestId: Int,
+        result: DirectLyricsRepository.Result
+    ) {
         val payload = result.toJson().toString()
         mainHandler.post {
-            if (requestId != latestLyricsRequestId || !webReady) return@post
+            if (!isCurrentLyricsRequest(generation, requestId) || !webReady) return@post
             webView?.evaluateJavascript(
                 "window.LobstaOverlay && window.LobstaOverlay.receiveLyrics($requestId,$payload);",
                 null
@@ -434,10 +541,10 @@ class LyricsOverlayService : Service() {
         }
     }
 
-    private fun deliverRemoteCover(requestId: Int, cover: String) {
+    private fun deliverRemoteCover(generation: Long, requestId: Int, cover: String) {
         val encodedCover = JSONObject.quote(cover)
         mainHandler.post {
-            if (requestId != latestLyricsRequestId || !webReady) return@post
+            if (!isCurrentLyricsRequest(generation, requestId) || !webReady) return@post
             webView?.evaluateJavascript(
                 "window.LobstaOverlay && window.LobstaOverlay.receiveRemoteCover($requestId,$encodedCover);",
                 null
@@ -492,6 +599,7 @@ class LyricsOverlayService : Service() {
 
     @Suppress("SetJavaScriptEnabled")
     private fun createOverlay() {
+        val generation = runtimeGeneration.get()
         compact = surfaceMode == LyricsSurfaceMode.TOPBAR
         val geometry = overlayGeometry(surfaceMode, displayState)
         if (geometry.width <= 0 || geometry.height <= 0) {
@@ -543,7 +651,7 @@ class LyricsOverlayService : Service() {
             settings.allowFileAccess = true
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
-            addJavascriptInterface(LyricsJavascriptBridge(), "LobstaNativeLyrics")
+            addJavascriptInterface(LyricsJavascriptBridge(generation), "LobstaNativeLyrics")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             }
@@ -554,6 +662,7 @@ class LyricsOverlayService : Service() {
                 ): Boolean = true
 
                 override fun onPageFinished(view: WebView?, url: String?) {
+                    if (generation != runtimeGeneration.get() || view !== webView) return
                     webReady = true
                     applyThemeToWeb()
                     applyFontScale(fontScalePercent, adjustCompactHeight = false)
@@ -857,23 +966,24 @@ class LyricsOverlayService : Service() {
                 .put("hasSession", false)
                 .put("permissionRequired", true)
             pendingSnapshot?.let { deliverToWeb(it) }
-            mainHandler.postDelayed({
-                if (!monitorStarted) startMediaMonitor()
-            }, 1_500L)
+            mainHandler.removeCallbacks(sessionRetryRunnable)
+            mainHandler.postDelayed(sessionRetryRunnable, 1_500L)
         }
     }
 
     private fun stopMediaMonitor() {
         mainHandler.removeCallbacks(sessionRefreshRunnable)
+        mainHandler.removeCallbacks(sessionRetryRunnable)
+        val activeSessionsListenerRegistered = monitorStarted
+        monitorStarted = false
         stopAudioRouteMonitor()
         stopAvrcpEventMonitor()
-        if (monitorStarted) {
+        if (activeSessionsListenerRegistered) {
             try {
                 sessionManager.removeOnActiveSessionsChangedListener(activeSessionsListener)
             } catch (_: Exception) {
             }
         }
-        monitorStarted = false
         currentController?.unregisterCallback(controllerCallback)
         currentController = null
         resetBluetoothTimeline()
@@ -1370,8 +1480,13 @@ class LyricsOverlayService : Service() {
     private fun deliverToWeb(snapshot: JSONObject) {
         pendingSnapshot = snapshot
         if (!webReady) return
-        webView?.post {
-            webView?.evaluateJavascript(
+        val generation = runtimeGeneration.get()
+        val targetWebView = webView ?: return
+        targetWebView.post {
+            if (generation != runtimeGeneration.get() || targetWebView !== webView || !webReady) {
+                return@post
+            }
+            targetWebView.evaluateJavascript(
                 "window.LobstaOverlay && window.LobstaOverlay.updatePlayback($snapshot);",
                 null
             )
@@ -1381,9 +1496,15 @@ class LyricsOverlayService : Service() {
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density + 0.5f).toInt()
 
+    private fun hasNotificationListenerAccess(): Boolean =
+        androidx.core.app.NotificationManagerCompat
+            .getEnabledListenerPackages(this)
+            .contains(packageName)
+
     companion object {
         const val ACTION_START = "com.tcrrry.desktoplyrics.action.START_LYRICS_OVERLAY"
         const val ACTION_STOP = "com.tcrrry.desktoplyrics.action.STOP_LYRICS_OVERLAY"
+        const val ACTION_RESTART = "com.tcrrry.desktoplyrics.action.RESTART_LYRICS_OVERLAY"
         const val ACTION_STATE_CHANGED = "com.tcrrry.desktoplyrics.action.LYRICS_OVERLAY_STATE_CHANGED"
         const val ACTION_SET_BACKGROUND = "com.tcrrry.desktoplyrics.action.SET_LYRICS_BACKGROUND"
         const val ACTION_SET_FONT_SCALE = "com.tcrrry.desktoplyrics.action.SET_LYRICS_FONT_SCALE"

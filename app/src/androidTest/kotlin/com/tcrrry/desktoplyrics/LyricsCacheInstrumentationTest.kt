@@ -59,6 +59,38 @@ class LyricsCacheInstrumentationTest {
     }
 
     @Test
+    fun rejectsStoredLyricsWhenCandidateMetadataDoesNotMatchPlayback() {
+        LyricsCache(context, DATABASE_NAME).use { cache ->
+            cache.put(
+                track = "MOYA",
+                artist = "AOA",
+                album = "MOYA - EP",
+                playbackDurationMs = 220_427L,
+                result = DirectLyricsRepository.Result(
+                    lyrics = "[00:01.00]wrong lyric",
+                    durationMs = 219_533L,
+                    source = "网易云音乐",
+                    sourceId = "unrelated-korean-title",
+                    candidateTrack = "사뿐사뿐",
+                    candidateArtist = "AOA",
+                    candidateAlbum = "사뿐사뿐",
+                    lyricsKind = LyricsKind.SYNCHRONIZED
+                )
+            )
+
+            assertNull(
+                cache.get(
+                    track = "MOYA",
+                    artist = "AOA",
+                    album = "MOYA - EP",
+                    playbackDurationMs = 220_427L,
+                    recordUse = false
+                )
+            )
+        }
+    }
+
+    @Test
     fun clearsLegacyCacheEntriesWhenTheVersionedIdentityChanges() {
         val database = context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null)
         database.execSQL(

@@ -119,7 +119,7 @@ const serviceAfter = adbRun(
   "无法读取安装后服务状态",
   true
 ).output.includes("LyricsOverlayService");
-if (serviceBefore && !serviceAfter) fail("覆盖安装前运行中的歌词服务未恢复");
+if (!serviceAfter) fail("设置页未自动恢复歌词服务");
 
 console.log("车机安装与基础 smoke 通过。");
 console.log(`- 设备：${serial}`);
@@ -128,4 +128,4 @@ console.log(`- 进程：PID ${pid}`);
 console.log("- 设置页：已启动并位于前台");
 console.log("- 表面占用租约：已发现");
 console.log("- 致命日志：未发现");
-console.log(`- 歌词服务恢复：${serviceAfter ? "运行中" : "安装前未运行"}`);
+console.log("- 歌词服务恢复：运行中");

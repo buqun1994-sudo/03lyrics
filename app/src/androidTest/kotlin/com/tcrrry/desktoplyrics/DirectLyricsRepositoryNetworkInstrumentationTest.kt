@@ -81,9 +81,95 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
         }
     }
 
+    @Test
+    fun resolvesMariaThroughLocalizedCatalogEvidence() {
+        val arguments: Bundle = InstrumentationRegistry.getArguments()
+        assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
+
+        val repository = DirectLyricsRepository()
+        try {
+            val startedAt = SystemClock.elapsedRealtime()
+            val result = repository.resolveLyrics(
+                track = "마리아",
+                artist = "HWASA",
+                album = "María - EP",
+                durationMs = 199_000L
+            )
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+            InstrumentationRegistry.getInstrumentation().sendStatus(
+                0,
+                Bundle().apply {
+                    putString(
+                        "stream",
+                        "Maria network smoke: ${elapsedMs}ms/${result.source}/${result.sourceId}\n"
+                    )
+                }
+            )
+
+            assertTrue(result.source in setOf("QQ音乐", "网易云音乐", "LRCLIB"))
+            assertTrue(result.sourceId.isNotBlank())
+            assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(result.lyrics))
+            assertTrue(LyricsCandidateSelector.hasMatchingDuration(199_000L, result.durationMs))
+            assertTrue(
+                "Localized catalog lookup took ${elapsedMs}ms",
+                elapsedMs <= LOCALIZED_CATALOG_PATH_LIMIT_MS
+            )
+        } finally {
+            repository.close()
+        }
+    }
+
+    @Test
+    fun resolvesMoyaWithoutSelectingAnotherAoaRecording() {
+        val arguments: Bundle = InstrumentationRegistry.getArguments()
+        assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
+
+        val query = LyricsLookup(
+            track = "MOYA",
+            artist = "AOA",
+            album = "MOYA - EP",
+            durationMs = 220_427L
+        )
+        val repository = DirectLyricsRepository()
+        try {
+            val startedAt = SystemClock.elapsedRealtime()
+            val result = repository.resolveLyrics(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                durationMs = query.durationMs
+            )
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+            InstrumentationRegistry.getInstrumentation().sendStatus(
+                0,
+                Bundle().apply {
+                    putString(
+                        "stream",
+                        "Moya network smoke: ${elapsedMs}ms/${result.source}/${result.sourceId}/" +
+                            "${result.candidateTrack}\n"
+                    )
+                }
+            )
+
+            assertTrue(result.source in setOf("QQ音乐", "网易云音乐", "LRCLIB"))
+            assertTrue(result.sourceId.isNotBlank())
+            assertTrue(result.sourceId != WRONG_NETEASE_SOURCE_ID)
+            assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(result.lyrics))
+            assertTrue(LyricsCandidateSelector.matchesVersion(query, result))
+            assertTrue(
+                "MOYA catalog lookup took ${elapsedMs}ms",
+                elapsedMs <= LOCALIZED_CATALOG_PATH_LIMIT_MS
+            )
+        } finally {
+            repository.close()
+        }
+    }
+
     private companion object {
         const val NETWORK_SMOKE_ARGUMENT = "runLyricsNetworkSmoke"
+        const val WRONG_NETEASE_SOURCE_ID = "29719782"
         const val COLD_EXACT_PATH_LIMIT_MS = 2_200L
         const val EXACT_PATH_LIMIT_MS = 2_200L
+        const val LOCALIZED_CATALOG_PATH_LIMIT_MS = 4_200L
     }
 }

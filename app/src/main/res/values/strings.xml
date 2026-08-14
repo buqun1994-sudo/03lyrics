@@ -3,6 +3,7 @@
     <string name="app_name">桌面歌词</string>
     <string name="settings_title">歌词设置</string>
     <string name="settings_navigation_display">显示</string>
+    <string name="settings_navigation_system">系统</string>
     <string name="settings_topbar_display">顶栏显示</string>
     <string name="settings_topbar_one_line">一行</string>
     <string name="settings_topbar_two_lines">两行</string>
@@ -13,4 +14,11 @@
     <string name="settings_other">其他</string>
     <string name="settings_wallpaper_lyrics">壁纸歌词</string>
     <string name="settings_wallpaper_lyrics_summary">在壁纸界面显示滚动歌词</string>
+    <string name="settings_restart_lyrics">重启悬浮歌词</string>
+    <string name="settings_restart_lyrics_summary">歌词显示异常时手动恢复</string>
+    <string name="settings_restart_requires_authorization">系统授权未完成，暂时无法重启悬浮歌词</string>
+    <string name="accessibility_restart_lyrics">重启悬浮歌词，歌词显示异常时手动恢复</string>
+    <string name="accessibility_navigation_selected">%1$s，已选中</string>
+    <string name="accessibility_switch_on">已开启</string>
+    <string name="accessibility_switch_off">已关闭</string>
 </resources>
