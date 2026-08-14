@@ -9,6 +9,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = join(root, ".codex", "local-context.properties");
 const packageName = "com.tcrrry.desktoplyrics";
 const activityName = `${packageName}/.MainActivity`;
+const occupancyLeaseAction = "com.tcrrry.icar.surface.action.ACQUIRE_OCCUPANCY_LEASE";
+const occupancyLeaseServiceName = "SurfaceOccupancyLeaseService";
 const defaultApk = join(root, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
 const requestedApk = process.argv[2];
 const apkPath = requestedApk
@@ -85,6 +87,17 @@ const versionName = packageDump.match(/versionName=([^\s]+)/)?.[1];
 const versionCode = packageDump.match(/versionCode=(\d+)/)?.[1];
 if (!versionName || !versionCode) fail("无法确认已安装版本", packageDump);
 
+const occupancyLeaseProviders = adbRun(
+  ["shell", "cmd", "package", "query-services", "--brief", "-a", occupancyLeaseAction],
+  "无法查询表面占用租约服务"
+).output;
+const hasOccupancyLeaseProvider = occupancyLeaseProviders
+  .split(/\r?\n/)
+  .some((line) => line.includes(packageName) && line.includes(occupancyLeaseServiceName));
+if (!hasOccupancyLeaseProvider) {
+  fail("已安装歌词 APK 未声明可发现的表面占用租约服务", occupancyLeaseProviders);
+}
+
 const activities = adbRun(
   ["shell", "dumpsys", "activity", "activities"],
   "无法读取前台页面"
@@ -113,5 +126,6 @@ console.log(`- 设备：${serial}`);
 console.log(`- 已安装：${packageName} ${versionName} (${versionCode})`);
 console.log(`- 进程：PID ${pid}`);
 console.log("- 设置页：已启动并位于前台");
+console.log("- 表面占用租约：已发现");
 console.log("- 致命日志：未发现");
 console.log(`- 歌词服务恢复：${serviceAfter ? "运行中" : "安装前未运行"}`);

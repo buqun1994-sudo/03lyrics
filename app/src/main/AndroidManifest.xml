@@ -52,6 +52,17 @@
                 android:value="Displays user-requested synchronized lyrics for the active media session" />
         </service>
 
+        <service
+            android:name=".SurfaceOccupancyLeaseService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.tcrrry.icar.surface.action.ACQUIRE_OCCUPANCY_LEASE" />
+            </intent-filter>
+            <meta-data
+                android:name="com.tcrrry.icar.surface.OCCUPANCY_PROTOCOL_VERSION"
+                android:value="1" />
+        </service>
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"

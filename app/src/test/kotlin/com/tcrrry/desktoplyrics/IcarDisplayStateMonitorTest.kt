@@ -56,7 +56,27 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = state,
                 wallpaperLyricsEnabled = true,
-                localSettingsOpen = true
+                localSettingsOpen = true,
+                desktopSurfaceOccupied = false
+            )
+        )
+    }
+
+    @Test
+    fun `ADAS card outside the lyric region keeps desktop lyrics`() {
+        val state = IcarDisplayState(
+            launcherState = IcarDisplayStateMonitor.LAUNCHER_STATE_WALLPAPER,
+            windowMode = IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD
+        )
+
+        assertEquals(IcarDesktopSurfaceOccupancy.CLEAR, state.desktopSurfaceOccupancy)
+        assertEquals(
+            LyricsSurfaceMode.DESKTOP,
+            IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+                displayState = state,
+                wallpaperLyricsEnabled = true,
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
             )
         )
     }
@@ -68,13 +88,14 @@ class IcarDisplayStateMonitorTest {
             windowMode = IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW
         )
 
-        assertEquals(IcarStandardWindowOccupancy.OPEN, state.standardWindowOccupancy)
+        assertEquals(IcarDesktopSurfaceOccupancy.OCCUPIED, state.desktopSurfaceOccupancy)
         assertEquals(
             LyricsSurfaceMode.TOPBAR,
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = state,
                 wallpaperLyricsEnabled = true,
-                localSettingsOpen = false
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
             )
         )
         assertTrue(
@@ -86,19 +107,66 @@ class IcarDisplayStateMonitorTest {
     }
 
     @Test
+    fun `ADAS card plus standard window uses topbar lyrics`() {
+        val state = IcarDisplayState(
+            launcherState = IcarDisplayStateMonitor.LAUNCHER_STATE_WALLPAPER,
+            windowMode = IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD_AND_STANDARD_WINDOW
+        )
+
+        assertEquals(IcarDesktopSurfaceOccupancy.OCCUPIED, state.desktopSurfaceOccupancy)
+        assertEquals(
+            LyricsSurfaceMode.TOPBAR,
+            IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+                displayState = state,
+                wallpaperLyricsEnabled = true,
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
+            )
+        )
+    }
+
+    @Test
+    fun `external occupancy lease overrides a clear system window state`() {
+        val state = IcarDisplayState(
+            launcherState = IcarDisplayStateMonitor.LAUNCHER_STATE_WALLPAPER,
+            windowMode = IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD
+        )
+
+        assertEquals(
+            LyricsSurfaceMode.TOPBAR,
+            IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+                displayState = state,
+                wallpaperLyricsEnabled = true,
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = true
+            )
+        )
+        assertEquals(
+            LyricsSurfaceMode.DESKTOP,
+            IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+                displayState = state,
+                wallpaperLyricsEnabled = true,
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
+            )
+        )
+    }
+
+    @Test
     fun `unknown window mode fails closed to topbar lyrics`() {
         val state = IcarDisplayState(
             launcherState = IcarDisplayStateMonitor.LAUNCHER_STATE_WALLPAPER,
             windowMode = IcarDisplayStateMonitor.STATE_UNKNOWN
         )
 
-        assertEquals(IcarStandardWindowOccupancy.UNKNOWN, state.standardWindowOccupancy)
+        assertEquals(IcarDesktopSurfaceOccupancy.UNKNOWN, state.desktopSurfaceOccupancy)
         assertEquals(
             LyricsSurfaceMode.TOPBAR,
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = state,
                 wallpaperLyricsEnabled = true,
-                localSettingsOpen = false
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
             )
         )
     }
@@ -124,7 +192,8 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = wallpaper,
                 wallpaperLyricsEnabled = true,
-                localSettingsOpen = false
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
             )
         )
         assertEquals(
@@ -132,7 +201,8 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = wallpaper,
                 wallpaperLyricsEnabled = false,
-                localSettingsOpen = false
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
             )
         )
         assertEquals(
@@ -140,7 +210,8 @@ class IcarDisplayStateMonitorTest {
             IcarLyricsSurfacePolicy.effectiveSurfaceMode(
                 displayState = map,
                 wallpaperLyricsEnabled = true,
-                localSettingsOpen = false
+                localSettingsOpen = false,
+                desktopSurfaceOccupied = false
             )
         )
     }

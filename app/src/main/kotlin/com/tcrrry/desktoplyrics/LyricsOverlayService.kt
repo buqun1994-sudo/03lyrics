@@ -98,6 +98,7 @@ class LyricsOverlayService : Service() {
     private var nightTheme = true
     private var surfaceMode = LyricsSurfaceMode.TOPBAR
     private var displayState: IcarDisplayState? = null
+    private var desktopSurfaceOccupied = false
     private var monitorStarted = false
     private var audioRouteMonitorStarted = false
     private var avrcpEventMonitorStarted = false
@@ -134,6 +135,14 @@ class LyricsOverlayService : Service() {
             if (!monitorStarted) return
             refreshActiveSessions()
             mainHandler.postDelayed(this, 2_000L)
+        }
+    }
+
+    private val surfaceOccupancyListener: (Boolean) -> Unit = { occupied ->
+        if (desktopSurfaceOccupied != occupied) {
+            desktopSurfaceOccupied = occupied
+            Log.i(LOG_TAG, "External desktop surface occupancy=$occupied")
+            if (displayState != null || overlayRoot != null) applyCurrentSurface()
         }
     }
 
@@ -215,6 +224,7 @@ class LyricsOverlayService : Service() {
         prefs.edit()
             .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
             .apply()
+        SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
         createNotificationChannel()
     }
 
@@ -301,6 +311,7 @@ class LyricsOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
         mainHandler.removeCallbacksAndMessages(null)
         lyricsScope.cancel()
         lyricsRepository.close()
@@ -585,12 +596,13 @@ class LyricsOverlayService : Service() {
         applyCurrentSurface(previous)
     }
 
-    /** Reconciles launcher, standard-window, local-page, and preference state. */
+    /** Reconciles launcher, system-window, leased-surface, local-page, and preference state. */
     private fun applyCurrentSurface(previousState: IcarDisplayState? = null) {
         val nextSurfaceMode = IcarLyricsSurfacePolicy.effectiveSurfaceMode(
             displayState = displayState,
             wallpaperLyricsEnabled = wallpaperLyricsEnabled,
-            localSettingsOpen = localSettingsOpen
+            localSettingsOpen = localSettingsOpen,
+            desktopSurfaceOccupied = desktopSurfaceOccupied
         )
         val geometry = overlayGeometry(nextSurfaceMode, displayState)
         if (overlayRoot == null && geometry.width > 0 && geometry.height > 0) {

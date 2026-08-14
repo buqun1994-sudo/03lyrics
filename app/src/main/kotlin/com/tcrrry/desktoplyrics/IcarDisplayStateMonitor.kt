@@ -23,9 +23,9 @@ internal enum class IcarIconVisibility {
     UNKNOWN
 }
 
-internal enum class IcarStandardWindowOccupancy {
-    CLOSED,
-    OPEN,
+internal enum class IcarDesktopSurfaceOccupancy {
+    CLEAR,
+    OCCUPIED,
     UNKNOWN
 }
 
@@ -78,13 +78,17 @@ internal object IcarTopbarLayout {
 internal data class IcarDisplayState(
     val launcherState: Int,
     val iconVisibility: Map<IcarTopbarIconSlot, IcarIconVisibility> = emptyMap(),
-    val windowMode: Int = IcarDisplayStateMonitor.WINDOW_MODE_CLOSED
+    val windowMode: Int = IcarDisplayStateMonitor.WINDOW_MODE_NONE
 ) {
-    val standardWindowOccupancy: IcarStandardWindowOccupancy
+    val desktopSurfaceOccupancy: IcarDesktopSurfaceOccupancy
         get() = when (windowMode) {
-            IcarDisplayStateMonitor.WINDOW_MODE_CLOSED -> IcarStandardWindowOccupancy.CLOSED
-            IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW -> IcarStandardWindowOccupancy.OPEN
-            else -> IcarStandardWindowOccupancy.UNKNOWN
+            IcarDisplayStateMonitor.WINDOW_MODE_NONE,
+            IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD -> IcarDesktopSurfaceOccupancy.CLEAR
+            IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW,
+            IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD_AND_STANDARD_WINDOW -> {
+                IcarDesktopSurfaceOccupancy.OCCUPIED
+            }
+            else -> IcarDesktopSurfaceOccupancy.UNKNOWN
         }
 
     val surfaceMode: LyricsSurfaceMode
@@ -115,11 +119,13 @@ internal object IcarLyricsSurfacePolicy {
     fun effectiveSurfaceMode(
         displayState: IcarDisplayState?,
         wallpaperLyricsEnabled: Boolean,
-        localSettingsOpen: Boolean
+        localSettingsOpen: Boolean,
+        desktopSurfaceOccupied: Boolean
     ): LyricsSurfaceMode = when {
         localSettingsOpen -> LyricsSurfaceMode.TOPBAR
+        desktopSurfaceOccupied -> LyricsSurfaceMode.TOPBAR
         displayState == null -> LyricsSurfaceMode.TOPBAR
-        displayState.standardWindowOccupancy != IcarStandardWindowOccupancy.CLOSED -> {
+        displayState.desktopSurfaceOccupancy != IcarDesktopSurfaceOccupancy.CLEAR -> {
             LyricsSurfaceMode.TOPBAR
         }
         !wallpaperLyricsEnabled -> LyricsSurfaceMode.TOPBAR
@@ -193,7 +199,7 @@ internal class IcarDisplayStateMonitor(
         Log.i(
             LOG_TAG,
             "iCAR display launcher=${state.launcherState} window=${state.windowMode} " +
-                "occupancy=${state.standardWindowOccupancy} surface=${state.surfaceMode} " +
+                "occupancy=${state.desktopSurfaceOccupancy} surface=${state.surfaceMode} " +
                 "topbarOccupied=${state.occupiedTopbarWidthPx()} slots=${state.iconVisibility}"
         )
         onStateChanged(state)
@@ -314,8 +320,10 @@ internal class IcarDisplayStateMonitor(
         const val LAUNCHER_STATE_WALLPAPER = 1
         const val LAUNCHER_STATE_MAP = 2
         const val LAUNCHER_STATE_CAR_SETTINGS = 3
-        const val WINDOW_MODE_CLOSED = 0
+        const val WINDOW_MODE_NONE = 0
+        const val WINDOW_MODE_ADAS_CARD = 1
         const val WINDOW_MODE_STANDARD_WINDOW = 2
+        const val WINDOW_MODE_ADAS_CARD_AND_STANDARD_WINDOW = 3
 
         private const val WIRELESS_CHARGING_INACTIVE = 0
         private const val WIRELESS_CHARGING_ACTIVE = 1
