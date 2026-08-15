@@ -116,6 +116,110 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
+    fun `accepts bilingual artist display name and single release suffix for City Zoo`() {
+        val query = LyricsLookup(
+            track = "摩天动物园",
+            artist = "邓紫棋",
+            album = "摩天动物园 - Single",
+            durationMs = 270_676L
+        )
+        val candidates = listOf(
+            candidate(
+                source = "QQ音乐",
+                sourceId = "000Fz7zP3FDuSz",
+                track = "摩天动物园",
+                artist = "G.E.M. 邓紫棋",
+                album = "摩天动物园",
+                durationMs = 270_000L
+            ),
+            candidate(
+                source = "网易云音乐",
+                sourceId = "1409382131",
+                track = "摩天动物园",
+                artist = "G.E.M.邓紫棋",
+                album = "摩天动物园",
+                durationMs = 270_676L
+            )
+        )
+
+        candidates.forEach { sourceCandidate ->
+            assertEquals(
+                listOf(sourceCandidate.sourceId),
+                LyricsCandidateSelector.selectCandidates(query, listOf(sourceCandidate))
+                    .map { it.sourceId }
+            )
+        }
+    }
+
+    @Test
+    fun `does not treat a same script artist substring as a complete display name`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Artist",
+            album = "First Release",
+            durationMs = 200_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "substring-a",
+                        track = "A Song",
+                        artist = "AnotherArtist",
+                        album = "Second Collection",
+                        durationMs = 200_000L
+                    ),
+                    candidate(
+                        source = "网易云音乐",
+                        sourceId = "substring-b",
+                        track = "A Song",
+                        artist = "AnotherArtist",
+                        album = "Second Collection",
+                        durationMs = 200_100L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `does not strip an undelimited album word as a release suffix`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Stage Name",
+            album = "Life Single",
+            durationMs = 200_000L
+        )
+
+        assertTrue(
+            LyricsCandidateSelector.selectCandidates(
+                query,
+                listOf(
+                    candidate(
+                        source = "QQ音乐",
+                        sourceId = "album-word-a",
+                        track = "A Song",
+                        artist = "Legal Name",
+                        album = "Life",
+                        durationMs = 200_000L
+                    ),
+                    candidate(
+                        source = "网易云音乐",
+                        sourceId = "album-word-b",
+                        track = "A Song",
+                        artist = "Legal Name",
+                        album = "Life",
+                        durationMs = 200_100L
+                    )
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
     fun `selects Mandarin Super Girl candidates without accepting Korean or wrong duration versions`() {
         val query = LyricsLookup(
             track = "Super Girl",

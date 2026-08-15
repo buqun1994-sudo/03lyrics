@@ -792,6 +792,9 @@ internal object LyricsCandidateSelector {
         val secondAlbum = normalizedAlbum(second)
         if (firstAlbum.isBlank() || secondAlbum.isBlank()) return EvidenceLevel.UNKNOWN
         if (firstAlbum == secondAlbum) return EvidenceLevel.EXACT
+        val firstCore = normalizedAlbumCore(first)
+        val secondCore = normalizedAlbumCore(second)
+        if (firstCore.isNotBlank() && firstCore == secondCore) return EvidenceLevel.NEAR
         if (nearMetadataText(first, second)) return EvidenceLevel.NEAR
         return if (haveDisjointScripts(firstAlbum, secondAlbum)) {
             EvidenceLevel.UNKNOWN
@@ -929,6 +932,9 @@ internal object LyricsCandidateSelector {
                 return EvidenceLevel.NEAR
             }
         }
+        if (hasCrossScriptArtistDisplayName(first.declared, second.declared)) {
+            return EvidenceLevel.NEAR
+        }
         if (first.effective.any { firstName ->
                 second.effective.any { secondName ->
                     hasMinimumTextSimilarity(
@@ -968,6 +974,44 @@ internal object LyricsCandidateSelector {
     private fun normalizedAlbum(value: String): String = normalizeText(value)
         .takeUnless { it in PLACEHOLDER_ALBUMS }
         .orEmpty()
+
+    private fun normalizedAlbumCore(value: String): String {
+        val album = Normalizer.normalize(value, Normalizer.Form.NFKC).trim()
+        val withoutReleaseSuffix = ALBUM_RELEASE_SUFFIX_PATTERN.replace(album, "").trim()
+        return normalizedAlbum(withoutReleaseSuffix)
+    }
+
+    private fun hasCrossScriptArtistDisplayName(
+        firstNames: Set<String>,
+        secondNames: Set<String>
+    ): Boolean = firstNames.any { firstName ->
+        secondNames.any { secondName ->
+            val firstSegments = artistScriptSegments(firstName)
+            val secondSegments = artistScriptSegments(secondName)
+            (firstSegments.size > 1 && secondName in firstSegments) ||
+                (secondSegments.size > 1 && firstName in secondSegments)
+        }
+    }
+
+    private fun artistScriptSegments(value: String): Set<String> {
+        val segments = linkedSetOf<String>()
+        val current = StringBuilder()
+        var currentScript: Character.UnicodeScript? = null
+        normalizeText(value).forEach { character ->
+            val script = Character.UnicodeScript.of(character.code).takeUnless {
+                it == Character.UnicodeScript.COMMON ||
+                    it == Character.UnicodeScript.INHERITED
+            }
+            if (script != null && currentScript != null && script != currentScript) {
+                current.toString().takeIf(String::isNotBlank)?.let(segments::add)
+                current.setLength(0)
+            }
+            current.append(character)
+            if (script != null) currentScript = script
+        }
+        current.toString().takeIf(String::isNotBlank)?.let(segments::add)
+        return segments
+    }
 
     private fun nearMetadataText(first: String, second: String): Boolean {
         val firstNormalized = normalizeText(first)
@@ -1221,6 +1265,10 @@ internal object LyricsCandidateSelector {
     )
     private val ARTIST_SEPARATOR_PATTERN = Regex(
         "\\s*(?:[,，、/&／;；+＋]|\\bfeat(?:uring)?\\.?\\b|\\bft\\.?\\b|\\bwith\\b|\\band\\b)\\s*",
+        RegexOption.IGNORE_CASE
+    )
+    private val ALBUM_RELEASE_SUFFIX_PATTERN = Regex(
+        """\s*(?:[-‐‑‒–—―:：]\s*(?:single|ep)|[（(\[【]\s*(?:single|ep)\s*[）)\]】])\s*$""",
         RegexOption.IGNORE_CASE
     )
     private val VERSION_QUALIFIER_PATTERNS = listOf(

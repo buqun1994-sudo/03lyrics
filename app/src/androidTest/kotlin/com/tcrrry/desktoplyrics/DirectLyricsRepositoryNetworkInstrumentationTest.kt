@@ -120,6 +120,52 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
     }
 
     @Test
+    fun resolvesCityZooWithBilingualArtistAndSingleReleaseSuffix() {
+        val arguments: Bundle = InstrumentationRegistry.getArguments()
+        assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
+
+        val query = LyricsLookup(
+            track = "摩天动物园",
+            artist = "邓紫棋",
+            album = "摩天动物园 - Single",
+            durationMs = 270_676L
+        )
+        val repository = DirectLyricsRepository()
+        try {
+            val startedAt = SystemClock.elapsedRealtime()
+            val result = repository.resolveLyrics(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                durationMs = query.durationMs
+            )
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+            InstrumentationRegistry.getInstrumentation().sendStatus(
+                0,
+                Bundle().apply {
+                    putString(
+                        "stream",
+                        "City Zoo network smoke: ${elapsedMs}ms/${result.source}/${result.sourceId}\n"
+                    )
+                }
+            )
+
+            assertTrue(result.source in setOf("QQ音乐", "网易云音乐"))
+            assertTrue(result.sourceId.isNotBlank())
+            assertEquals("摩天动物园", result.candidateTrack)
+            assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(result.lyrics))
+            assertTrue(LyricsCandidateSelector.hasMatchingDuration(query.durationMs, result.durationMs))
+            assertTrue(LyricsCandidateSelector.matchesVersion(query, result))
+            assertTrue(
+                "City Zoo catalog lookup took ${elapsedMs}ms",
+                elapsedMs <= LOCALIZED_CATALOG_PATH_LIMIT_MS
+            )
+        } finally {
+            repository.close()
+        }
+    }
+
+    @Test
     fun resolvesMoyaWithoutSelectingAnotherAoaRecording() {
         val arguments: Bundle = InstrumentationRegistry.getArguments()
         assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
