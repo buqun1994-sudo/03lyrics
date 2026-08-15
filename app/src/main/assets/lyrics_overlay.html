@@ -1024,6 +1024,7 @@
 
       const key = normalizedKey(data.track || '', data.artist || '', data.album || '');
       const changed = key !== playback.key;
+      const wasLyricsVisible = document.body.classList.contains('lyrics-visible');
       playback.hasSession = true;
       playback.track = data.track || '';
       playback.artist = data.artist || '';
@@ -1039,10 +1040,19 @@
       document.body.classList.toggle('playing', playback.state === 'playing');
       document.body.classList.toggle('paused', playback.state !== 'playing');
 
+      const retainPausedLyrics = playback.state === 'paused' &&
+        !changed && !pendingTrackTransition && wasLyricsVisible &&
+        playback.lyrics.length > 0 && renderedLyricsKey === key;
       if (playback.state !== 'playing' && !changed && !pendingTrackTransition) {
         clearTimeout(lyricAdvanceTimer);
-        playback.active=-1;
-        clearCompactLyric();
+        lyricAdvanceTimer=0;
+        if (retainPausedLyrics) {
+          if (playback.timelineReady) updateActiveLine(currentPosition(), true, false);
+          document.body.classList.add('lyrics-visible');
+        } else {
+          playback.active=-1;
+          clearCompactLyric();
+        }
       }
 
       if (changed) {
@@ -1053,6 +1063,7 @@
         pendingTrackTransition = true;
         clearTimeout(lyricAdvanceTimer);
         lyricAdvanceTimer = 0;
+        clearLyricsForTrackChange();
         resolveTrack(playback.track, playback.artist, key, playback.requestId);
       } else if (playback.durationMs >= 1000 &&
           (lyricsLookupDurationMs < 1000 ||
