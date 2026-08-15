@@ -71,4 +71,19 @@ class SettingsBehaviorTest {
     fun `runtime restart is distinct from user stop`() {
         assertNotEquals(LyricsOverlayService.ACTION_STOP, LyricsOverlayService.ACTION_RESTART)
     }
+
+    @Test
+    fun `lyrics translation is enabled by default`() {
+        assertTrue(LyricsOverlayService.LYRICS_TRANSLATION_DEFAULT)
+    }
+
+    @Test
+    fun `translated topbar preserves one and two original line semantics`() {
+        assertEquals(72, LyricsTopbarHeightPolicy.requiredHeightDp(1, 100))
+        assertEquals(89, LyricsTopbarHeightPolicy.requiredHeightDp(2, 100))
+        assertTrue(
+            LyricsTopbarHeightPolicy.requiredHeightDp(2, 108) >
+                LyricsTopbarHeightPolicy.requiredHeightDp(2, 100)
+        )
+    }
 }

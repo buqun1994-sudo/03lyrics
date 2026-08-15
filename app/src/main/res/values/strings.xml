@@ -14,6 +14,8 @@
     <string name="settings_other">其他</string>
     <string name="settings_wallpaper_lyrics">壁纸歌词</string>
     <string name="settings_wallpaper_lyrics_summary">在壁纸界面显示滚动歌词</string>
+    <string name="settings_lyrics_translation">歌词翻译</string>
+    <string name="settings_lyrics_translation_summary">有逐句翻译时随歌词显示</string>
     <string name="settings_restart_lyrics">重启悬浮歌词</string>
     <string name="settings_restart_lyrics_summary">歌词显示异常时手动恢复</string>
     <string name="settings_restart_requires_authorization">系统授权未完成，暂时无法重启悬浮歌词</string>

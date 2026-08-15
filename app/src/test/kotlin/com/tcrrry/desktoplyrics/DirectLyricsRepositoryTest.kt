@@ -1146,6 +1146,16 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
+    fun `keeps only synchronized source translations`() {
+        assertEquals("", synchronizedLyricsOrEmpty(null))
+        assertEquals("", synchronizedLyricsOrEmpty("plain translation"))
+        assertEquals(
+            "[00:15.44]Translated lyric",
+            synchronizedLyricsOrEmpty("  [00:15.44]Translated lyric  ")
+        )
+    }
+
+    @Test
     fun `stops loading candidates after the first synchronized result`() {
         val candidates = listOf(
             candidate("source", "first", "A Song", "Artist", durationMs = 200_000L),

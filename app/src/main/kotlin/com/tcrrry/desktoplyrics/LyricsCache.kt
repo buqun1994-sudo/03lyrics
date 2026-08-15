@@ -20,10 +20,11 @@ internal class LyricsCache(
 ) : Closeable {
     data class Entry(
         val result: DirectLyricsRepository.Result,
-        val updatedAtMs: Long
+        val updatedAtMs: Long,
+        val translationResolved: Boolean = true
     ) {
         fun needsRefresh(nowMs: Long): Boolean =
-            nowMs - updatedAtMs >= LyricsCachePolicy.REFRESH_AFTER_MS
+            !translationResolved || nowMs - updatedAtMs >= LyricsCachePolicy.REFRESH_AFTER_MS
     }
 
     private val helper = CacheDatabase(context.applicationContext, databaseName)
@@ -240,6 +241,7 @@ internal class LyricsCache(
         return Entry(
             result = DirectLyricsRepository.Result(
                 lyrics = lyrics,
+                translatedLyrics = synchronizedLyricsOrEmpty(value.optString("translatedLyrics")),
                 durationMs = value.optLong("duration", 0L),
                 cover = value.optString("cover"),
                 source = value.optString("source"),
@@ -249,7 +251,8 @@ internal class LyricsCache(
                 candidateAlbum = value.optString("candidateAlbum"),
                 lyricsKind = LyricsKind.SYNCHRONIZED
             ),
-            updatedAtMs = updatedAtMs
+            updatedAtMs = updatedAtMs,
+            translationResolved = value.has("translatedLyrics")
         )
     }
 

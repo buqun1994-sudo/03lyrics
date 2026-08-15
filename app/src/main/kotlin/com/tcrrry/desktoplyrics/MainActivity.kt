@@ -35,6 +35,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var systemContent: View
     private lateinit var wallpaperLyricsSetting: LinearLayout
     private lateinit var wallpaperLyricsSwitch: IcarSwitch
+    private lateinit var lyricsTranslationSetting: LinearLayout
+    private lateinit var lyricsTranslationSwitch: IcarSwitch
     private lateinit var restartLyricsSetting: LinearLayout
     private var themePalette = IcarThemeColorPalette.resolve(null, false)
     private var renderedNightMode = false
@@ -64,6 +66,8 @@ class MainActivity : AppCompatActivity() {
         systemContent = findViewById(R.id.settings_system_content)
         wallpaperLyricsSetting = findViewById(R.id.wallpaper_lyrics_setting)
         wallpaperLyricsSwitch = findViewById(R.id.wallpaper_lyrics_switch)
+        lyricsTranslationSetting = findViewById(R.id.lyrics_translation_setting)
+        lyricsTranslationSwitch = findViewById(R.id.lyrics_translation_switch)
         restartLyricsSetting = findViewById(R.id.restart_lyrics_setting)
 
         selectedSection = SettingsSection.from(savedInstanceState?.getString(STATE_SELECTED_SECTION))
@@ -78,6 +82,12 @@ class MainActivity : AppCompatActivity() {
         }
         wallpaperLyricsSwitch.setOnCheckedChangeListener { _, enabled ->
             if (!renderingOptions) setWallpaperLyricsEnabled(enabled)
+        }
+        lyricsTranslationSetting.setOnClickListener {
+            lyricsTranslationSwitch.isChecked = !lyricsTranslationSwitch.isChecked
+        }
+        lyricsTranslationSwitch.setOnCheckedChangeListener { _, enabled ->
+            if (!renderingOptions) setLyricsTranslationEnabled(enabled)
         }
         displayNavigationItem.setOnClickListener { showSection(SettingsSection.DISPLAY) }
         systemNavigationItem.setOnClickListener { showSection(SettingsSection.SYSTEM) }
@@ -164,6 +174,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setLyricsTranslationEnabled(enabled: Boolean) {
+        overlayPrefs.edit()
+            .putBoolean(LyricsOverlayService.PREF_LYRICS_TRANSLATION_ENABLED, enabled)
+            .apply()
+
+        if (LyricsOverlayService.isRunning) {
+            startService(Intent(this, LyricsOverlayService::class.java).apply {
+                action = LyricsOverlayService.ACTION_SET_LYRICS_TRANSLATION
+                putExtra(LyricsOverlayService.EXTRA_LYRICS_TRANSLATION_ENABLED, enabled)
+            })
+        }
+    }
+
     private fun updateOptions() {
         val lines = if (
             overlayPrefs.getInt(
@@ -189,6 +212,12 @@ class MainActivity : AppCompatActivity() {
                 overlayPrefs.getBoolean(
                     LyricsOverlayService.PREF_WALLPAPER_LYRICS_ENABLED,
                     LyricsOverlayService.WALLPAPER_LYRICS_DEFAULT
+                )
+            )
+            renderLyricsTranslationSwitch(
+                overlayPrefs.getBoolean(
+                    LyricsOverlayService.PREF_LYRICS_TRANSLATION_ENABLED,
+                    LyricsOverlayService.LYRICS_TRANSLATION_DEFAULT
                 )
             )
             renderNavigation()
@@ -262,6 +291,11 @@ class MainActivity : AppCompatActivity() {
     private fun renderWallpaperLyricsSwitch(enabled: Boolean) {
         wallpaperLyricsSwitch.accentColor = themePalette.accentColor
         wallpaperLyricsSwitch.isChecked = enabled
+    }
+
+    private fun renderLyricsTranslationSwitch(enabled: Boolean) {
+        lyricsTranslationSwitch.accentColor = themePalette.accentColor
+        lyricsTranslationSwitch.isChecked = enabled
     }
 
     private fun showSection(section: SettingsSection) {

@@ -58,6 +58,7 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -97,6 +98,8 @@ class LyricsOverlayService : Service() {
     private var localSettingsOpen = false
     private var topbarLines = TOPBAR_LINES_DEFAULT
     private var wallpaperLyricsEnabled = WALLPAPER_LYRICS_DEFAULT
+    private var lyricsTranslationEnabled = LYRICS_TRANSLATION_DEFAULT
+    private var translationAvailable = false
     private var backgroundMode = BACKGROUND_DEFAULT
     private var fontScalePercent = FONT_SCALE_DEFAULT_PERCENT
     private var nightTheme = true
@@ -319,6 +322,7 @@ class LyricsOverlayService : Service() {
             )
             prefs.edit().putInt(PREF_FONT_SCALE_PERCENT, fontScalePercent).apply()
             applyFontScale(previousPercent, adjustCompactHeight = true)
+            refreshTopbarPresentationGeometry()
             if (overlayRoot != null) return START_STICKY
         }
 
@@ -328,6 +332,20 @@ class LyricsOverlayService : Service() {
             )
             prefs.edit().putInt(PREF_TOPBAR_LINES, topbarLines).apply()
             applyTopbarLines()
+            refreshTopbarPresentationGeometry()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_LYRICS_TRANSLATION) {
+            lyricsTranslationEnabled = intent.getBooleanExtra(
+                EXTRA_LYRICS_TRANSLATION_ENABLED,
+                LYRICS_TRANSLATION_DEFAULT
+            )
+            prefs.edit()
+                .putBoolean(PREF_LYRICS_TRANSLATION_ENABLED, lyricsTranslationEnabled)
+                .apply()
+            applyLyricsTranslationEnabled()
+            refreshTopbarPresentationGeometry()
             if (overlayRoot != null) return START_STICKY
         }
 
@@ -394,6 +412,10 @@ class LyricsOverlayService : Service() {
             PREF_WALLPAPER_LYRICS_ENABLED,
             WALLPAPER_LYRICS_DEFAULT
         )
+        lyricsTranslationEnabled = prefs.getBoolean(
+            PREF_LYRICS_TRANSLATION_ENABLED,
+            LYRICS_TRANSLATION_DEFAULT
+        )
         prefs.edit()
             .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
             .apply()
@@ -443,6 +465,7 @@ class LyricsOverlayService : Service() {
 
         displayState = null
         pendingSnapshot = null
+        translationAvailable = false
         cachedArtworkKey = ""
         cachedArtworkDataUrl = ""
     }
@@ -523,6 +546,11 @@ class LyricsOverlayService : Service() {
                     changed
                 }
             } ?: return
+            mainHandler.post {
+                if (isCurrentLyricsRequest(generation, requestId)) {
+                    updateTranslationAvailability(false)
+                }
+            }
             val requestScope = lyricsScope
             if (generation != runtimeGeneration.get()) return
             requestScope.launch {
@@ -547,7 +575,9 @@ class LyricsOverlayService : Service() {
                     LOG_TAG,
                     "Direct lyrics source=${result.source.ifBlank { "none" }} " +
                         "kind=${result.lyricsKind} " +
-                        "found=${result.lyrics.isNotBlank()} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                        "found=${result.lyrics.isNotBlank()} " +
+                        "translation=${result.translatedLyrics.isNotBlank()} " +
+                        "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                 )
                 if (classifyLyrics(result.lyrics) == LyricsKind.SYNCHRONIZED) {
                     lyricsCache.put(track, artist, album, durationMs, result)
@@ -577,13 +607,21 @@ class LyricsOverlayService : Service() {
         result: DirectLyricsRepository.Result
     ) {
         val payload = result.toJson().toString()
+        val hasTranslation = classifyLyrics(result.translatedLyrics) == LyricsKind.SYNCHRONIZED
         mainHandler.post {
             if (!isCurrentLyricsRequest(generation, requestId) || !webReady) return@post
+            updateTranslationAvailability(hasTranslation)
             webView?.evaluateJavascript(
                 "window.LobstaOverlay && window.LobstaOverlay.receiveLyrics($requestId,$payload);",
                 null
             )
         }
+    }
+
+    private fun updateTranslationAvailability(available: Boolean) {
+        if (translationAvailable == available) return
+        translationAvailable = available
+        refreshTopbarPresentationGeometry()
     }
 
     private fun deliverRemoteCover(generation: Long, requestId: Int, cover: String) {
@@ -782,7 +820,7 @@ class LyricsOverlayService : Service() {
         webContainer = webContainerView
         root.addView(webContainerView, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            if (compact) statusBarHeight() else ViewGroup.LayoutParams.MATCH_PARENT,
+            if (compact) topbarWindowHeight() else ViewGroup.LayoutParams.MATCH_PARENT,
             Gravity.TOP
         ))
 
@@ -810,6 +848,7 @@ class LyricsOverlayService : Service() {
                     applyFontScale(fontScalePercent, adjustCompactHeight = false)
                     applySurfaceModeToWeb()
                     applyTopbarLines()
+                    applyLyricsTranslationEnabled()
                     applyBackgroundMode()
                     pendingSnapshot?.let { deliverToWeb(it) } ?: scheduleSnapshot()
                 }
@@ -950,7 +989,7 @@ class LyricsOverlayService : Service() {
             x = left,
             y = 0,
             width = max(0, right - left),
-            height = statusBarHeight()
+            height = topbarWindowHeight()
         )
     }
 
@@ -978,6 +1017,25 @@ class LyricsOverlayService : Service() {
         return (realMetrics.heightPixels * 72 / 1080f)
             .toInt()
             .coerceAtLeast(dp(48))
+    }
+
+    private fun topbarWindowHeight(): Int {
+        val baseHeight = statusBarHeight()
+        if (!lyricsTranslationEnabled || !translationAvailable) return baseHeight
+        val realMetrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(realMetrics)
+        val maximumHeight = max(
+            baseHeight,
+            (realMetrics.heightPixels * DESKTOP_TOP / DESIGN_HEIGHT.toFloat()).roundToInt()
+        )
+        return min(
+            maximumHeight,
+            max(
+                baseHeight,
+                dp(LyricsTopbarHeightPolicy.requiredHeightDp(topbarLines, fontScalePercent))
+            )
+        )
     }
 
     private fun applyBackgroundMode() {
@@ -1033,7 +1091,7 @@ class LyricsOverlayService : Service() {
                 )
             containerParams.width = ViewGroup.LayoutParams.MATCH_PARENT
             containerParams.height = if (isTopbar) {
-                statusBarHeight()
+                topbarWindowHeight()
             } else {
                 ViewGroup.LayoutParams.MATCH_PARENT
             }
@@ -1041,6 +1099,13 @@ class LyricsOverlayService : Service() {
             container.layoutParams = containerParams
             container.requestLayout()
         }
+    }
+
+    private fun refreshTopbarPresentationGeometry() {
+        if (surfaceMode != LyricsSurfaceMode.TOPBAR) return
+        val params = windowParams ?: return
+        applyOverlayGeometry(params, overlayGeometry(LyricsSurfaceMode.TOPBAR, displayState))
+        updateWebContainerLayout(isTopbar = true)
     }
 
     private fun updateWindowTouchability(isTopbar: Boolean) {
@@ -1086,6 +1151,15 @@ class LyricsOverlayService : Service() {
         if (!webReady) return
         webView?.evaluateJavascript(
             "window.LobstaOverlay && window.LobstaOverlay.setCompactLines($topbarLines);",
+            null
+        )
+    }
+
+    private fun applyLyricsTranslationEnabled() {
+        if (!webReady) return
+        webView?.evaluateJavascript(
+            "window.LobstaOverlay && window.LobstaOverlay.setLyricsTranslationEnabled(" +
+                "$lyricsTranslationEnabled);",
             null
         )
     }
@@ -1651,6 +1725,8 @@ class LyricsOverlayService : Service() {
         const val ACTION_SET_BACKGROUND = "com.tcrrry.desktoplyrics.action.SET_LYRICS_BACKGROUND"
         const val ACTION_SET_FONT_SCALE = "com.tcrrry.desktoplyrics.action.SET_LYRICS_FONT_SCALE"
         const val ACTION_SET_TOPBAR_LINES = "com.tcrrry.desktoplyrics.action.SET_TOPBAR_LINES"
+        const val ACTION_SET_LYRICS_TRANSLATION =
+            "com.tcrrry.desktoplyrics.action.SET_LYRICS_TRANSLATION"
         const val ACTION_SET_WALLPAPER_LYRICS =
             "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_LYRICS"
         const val ACTION_SETTINGS_OPENED = "com.tcrrry.desktoplyrics.action.SETTINGS_OPENED"
@@ -1659,6 +1735,7 @@ class LyricsOverlayService : Service() {
         const val EXTRA_BACKGROUND_MODE = "background_mode"
         const val EXTRA_FONT_SCALE_PERCENT = "font_scale_percent"
         const val EXTRA_TOPBAR_LINES = "topbar_lines"
+        const val EXTRA_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled"
         const val EXTRA_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled"
         const val EXTRA_RUNNING = "running"
         const val PREFS_NAME = "lyrics_overlay_prefs"
@@ -1666,6 +1743,7 @@ class LyricsOverlayService : Service() {
         const val PREF_FONT_SCALE_PERCENT = "font_scale_percent"
         const val PREF_AUTO_START = "auto_start"
         const val PREF_TOPBAR_LINES = "topbar_lines_v1"
+        const val PREF_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled_v1"
         const val PREF_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled_v1"
         const val BACKGROUND_TRANSPARENT = "transparent"
         const val BACKGROUND_LOW = "low"
@@ -1675,6 +1753,7 @@ class LyricsOverlayService : Service() {
         const val FONT_SCALE_MAX_PERCENT = 150
         const val FONT_SCALE_DEFAULT_PERCENT = 100
         const val WALLPAPER_LYRICS_DEFAULT = true
+        const val LYRICS_TRANSLATION_DEFAULT = true
         const val START_SOURCE_BOOT_COMPLETED = "boot_completed"
         const val START_SOURCE_PACKAGE_REPLACED = "package_replaced"
 
@@ -1710,6 +1789,28 @@ class LyricsOverlayService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+    }
+}
+
+internal object LyricsTopbarHeightPolicy {
+    private const val BASE_HEIGHT_DP = 72
+    private const val VERTICAL_ALLOWANCE_DP = 10f
+    private const val CURRENT_LINE_SIZE_DP = 32f
+    private const val CURRENT_LINE_HEIGHT = 1.05f
+    private const val SECONDARY_LINE_SIZE_DP = 20f
+    private const val SECONDARY_LINE_HEIGHT = 1.12f
+
+    fun requiredHeightDp(topbarLines: Int, fontScalePercent: Int): Int {
+        val scale = fontScalePercent.coerceIn(
+            LyricsOverlayService.FONT_SCALE_MIN_PERCENT,
+            LyricsOverlayService.FONT_SCALE_MAX_PERCENT
+        ) / 100f
+        val secondaryRows = if (topbarLines == 1) 1 else 2
+        val contentHeight = VERTICAL_ALLOWANCE_DP + scale * (
+            CURRENT_LINE_SIZE_DP * CURRENT_LINE_HEIGHT +
+                secondaryRows * SECONDARY_LINE_SIZE_DP * SECONDARY_LINE_HEIGHT
+            )
+        return max(BASE_HEIGHT_DP, ceil(contentHeight).toInt())
     }
 }
 

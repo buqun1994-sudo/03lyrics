@@ -46,4 +46,21 @@ class LyricsCachePolicyTest {
         assertFalse(wrongVersionKey in lookupKeys)
         assertFalse(LyricsCandidateSelector.hasMatchingDuration(258_763L, 255_546L))
     }
+
+    @Test
+    fun `refreshes a legacy cache entry once to discover source translation support`() {
+        val legacyEntry = LyricsCache.Entry(
+            result = DirectLyricsRepository.Result(
+                lyrics = "[00:01.00]Original lyric",
+                durationMs = 200_000L,
+                lyricsKind = LyricsKind.SYNCHRONIZED
+            ),
+            updatedAtMs = 10_000L,
+            translationResolved = false
+        )
+        val currentEntry = legacyEntry.copy(translationResolved = true)
+
+        assertTrue(legacyEntry.needsRefresh(10_001L))
+        assertFalse(currentEntry.needsRefresh(10_001L))
+    }
 }

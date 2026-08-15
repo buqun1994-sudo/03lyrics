@@ -25,6 +25,7 @@ import kotlin.math.abs
 class DirectLyricsRepository {
     data class Result(
         val lyrics: String = "",
+        val translatedLyrics: String = "",
         val durationMs: Long = 0L,
         val cover: String = "",
         val source: String = "",
@@ -36,6 +37,7 @@ class DirectLyricsRepository {
     ) {
         fun toJson(): JSONObject = JSONObject()
             .put("lyrics", lyrics)
+            .put("translatedLyrics", translatedLyrics)
             .put("duration", durationMs)
             .put("cover", cover)
             .put("source", source)
@@ -300,8 +302,15 @@ class DirectLyricsRepository {
             "?songmid=${encode(candidate.sourceId)}&format=json&nobase64=1"
         val lyricRoot = parseJsonFlexible(getBytes(lyricUrl, qqHeaders(), deadlineNanos)) ?: return null
         val lyrics = cleanLyrics(unescapeHtml(lyricRoot.contentString("lyric")))
+        val translatedLyrics = synchronizedLyricsOrEmpty(
+            unescapeHtml(lyricRoot.contentString("trans"))
+        )
         return candidate.takeIf { classifyLyrics(lyrics) == LyricsKind.SYNCHRONIZED }
-            ?.copy(lyrics = lyrics, lyricsKind = LyricsKind.SYNCHRONIZED)
+            ?.copy(
+                lyrics = lyrics,
+                translatedLyrics = translatedLyrics,
+                lyricsKind = LyricsKind.SYNCHRONIZED
+            )
     }
 
     private fun loadNetEaseLyrics(candidate: Result, deadlineNanos: Long): Result? {
@@ -310,8 +319,15 @@ class DirectLyricsRepository {
             "&lv=-1&kv=-1&tv=-1"
         val lyricRoot = JSONObject(getText(lyricUrl, netEaseHeaders(), deadlineNanos))
         val lyrics = cleanLyrics(lyricRoot.optJSONObject("lrc").contentString("lyric"))
+        val translatedLyrics = synchronizedLyricsOrEmpty(
+            lyricRoot.optJSONObject("tlyric").contentString("lyric")
+        )
         return candidate.takeIf { classifyLyrics(lyrics) == LyricsKind.SYNCHRONIZED }
-            ?.copy(lyrics = lyrics, lyricsKind = LyricsKind.SYNCHRONIZED)
+            ?.copy(
+                lyrics = lyrics,
+                translatedLyrics = translatedLyrics,
+                lyricsKind = LyricsKind.SYNCHRONIZED
+            )
     }
 
     private fun qqCover(song: JSONObject): String {
@@ -1319,6 +1335,9 @@ internal fun classifyLyrics(value: String?): LyricsKind {
     if (lyrics.isBlank()) return LyricsKind.NONE
     return if (TIMESTAMP_PATTERN.containsMatchIn(lyrics)) LyricsKind.SYNCHRONIZED else LyricsKind.PLAIN
 }
+
+internal fun synchronizedLyricsOrEmpty(value: String?): String =
+    cleanLyrics(value).takeIf { classifyLyrics(it) == LyricsKind.SYNCHRONIZED }.orEmpty()
 
 private fun JSONObject?.contentString(key: String): String {
     val value = this?.opt(key)

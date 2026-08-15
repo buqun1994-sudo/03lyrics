@@ -91,6 +91,41 @@ class LyricsCacheInstrumentationTest {
     }
 
     @Test
+    fun preservesOptionalTranslationInTheExistingCachePayload() {
+        LyricsCache(context, DATABASE_NAME).use { cache ->
+            cache.put(
+                track = "Translated Song",
+                artist = "Artist",
+                album = "Album",
+                playbackDurationMs = 200_000L,
+                result = DirectLyricsRepository.Result(
+                    lyrics = "[00:01.00]Original lyric",
+                    translatedLyrics = "[00:01.00]Translated lyric",
+                    durationMs = 200_000L,
+                    source = "QQ音乐",
+                    sourceId = "translated-song",
+                    candidateTrack = "Translated Song",
+                    candidateArtist = "Artist",
+                    candidateAlbum = "Album",
+                    lyricsKind = LyricsKind.SYNCHRONIZED
+                )
+            )
+
+            val entry = cache.get(
+                track = "Translated Song",
+                artist = "Artist",
+                album = "Album",
+                playbackDurationMs = 200_000L,
+                recordUse = false
+            )
+            val stored = requireNotNull(entry)
+
+            assertEquals("[00:01.00]Translated lyric", stored.result.translatedLyrics)
+            assertEquals(false, stored.needsRefresh(stored.updatedAtMs + 1L))
+        }
+    }
+
+    @Test
     fun clearsLegacyCacheEntriesWhenTheVersionedIdentityChanges() {
         val database = context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null)
         database.execSQL(
