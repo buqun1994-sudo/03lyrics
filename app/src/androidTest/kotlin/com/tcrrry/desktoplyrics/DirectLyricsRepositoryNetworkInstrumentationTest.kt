@@ -13,38 +13,37 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class DirectLyricsRepositoryNetworkInstrumentationTest {
     @Test
-    fun resolvesCuoCuoCuoThroughTheExactLrcLibPath() {
+    fun resolvesCuoCuoCuoFromTheFirstCompletedTrustedSource() {
         val arguments: Bundle = InstrumentationRegistry.getArguments()
         assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
 
-        val selectorStartedAt = SystemClock.elapsedRealtime()
-        val exactTerms = LyricsCandidateSelector.lrcLibExactTerms(
-            LyricsLookup(
-                track = "错错错 (feat. 陈娟儿)",
-                artist = "六哲",
-                album = "被伤过的心还可以爱谁",
-                durationMs = 289_250L
-            )
+        val query = LyricsLookup(
+            track = "错错错 (feat. 陈娟儿)",
+            artist = "六哲",
+            album = "被伤过的心还可以爱谁",
+            durationMs = 289_250L
         )
+        val selectorStartedAt = SystemClock.elapsedRealtime()
+        val exactTerms = LyricsCandidateSelector.lrcLibExactTerms(query)
         val selectorElapsedMs = SystemClock.elapsedRealtime() - selectorStartedAt
         assertEquals("六哲, 陈娟儿", exactTerms.artist)
 
         val repository = DirectLyricsRepository()
         try {
             val firstStartedAt = SystemClock.elapsedRealtime()
-            val firstResult = repository.resolveLyrics(
-                track = "错错错 (feat. 陈娟儿)",
-                artist = "六哲",
-                album = "被伤过的心还可以爱谁",
-                durationMs = 289_250L
+            val firstResult = repository.resolveFoundLyrics(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                durationMs = query.durationMs
             )
             val firstElapsedMs = SystemClock.elapsedRealtime() - firstStartedAt
             val secondStartedAt = SystemClock.elapsedRealtime()
-            val secondResult = repository.resolveLyrics(
-                track = "错错错 (feat. 陈娟儿)",
-                artist = "六哲",
-                album = "被伤过的心还可以爱谁",
-                durationMs = 289_250L
+            val secondResult = repository.resolveFoundLyrics(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                durationMs = query.durationMs
             )
             val secondElapsedMs = SystemClock.elapsedRealtime() - secondStartedAt
             InstrumentationRegistry.getInstrumentation().sendStatus(
@@ -59,14 +58,16 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
                 }
             )
 
-            assertEquals("LRCLIB", firstResult.source)
-            assertEquals("LRCLIB", secondResult.source)
+            assertTrue(firstResult.source in setOf("LRCLIB", "QQ音乐", "网易云音乐"))
+            assertTrue(secondResult.source in setOf("LRCLIB", "QQ音乐", "网易云音乐"))
             assertTrue(firstResult.sourceId.isNotBlank())
             assertTrue(secondResult.sourceId.isNotBlank())
             assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(firstResult.lyrics))
             assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(secondResult.lyrics))
-            assertTrue(LyricsCandidateSelector.hasMatchingDuration(289_250L, firstResult.durationMs))
-            assertTrue(LyricsCandidateSelector.hasMatchingDuration(289_250L, secondResult.durationMs))
+            assertTrue(LyricsCandidateSelector.hasMatchingDuration(query.durationMs, firstResult.durationMs))
+            assertTrue(LyricsCandidateSelector.hasMatchingDuration(query.durationMs, secondResult.durationMs))
+            assertTrue(LyricsCandidateSelector.matchesVersion(query, firstResult))
+            assertTrue(LyricsCandidateSelector.matchesVersion(query, secondResult))
             assertTrue(
                 "Cold exact lookup took ${selectorElapsedMs + firstElapsedMs}ms",
                 selectorElapsedMs + firstElapsedMs <= COLD_EXACT_PATH_LIMIT_MS
@@ -89,7 +90,7 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
         val repository = DirectLyricsRepository()
         try {
             val startedAt = SystemClock.elapsedRealtime()
-            val result = repository.resolveLyrics(
+            val result = repository.resolveFoundLyrics(
                 track = "마리아",
                 artist = "HWASA",
                 album = "María - EP",
@@ -133,7 +134,7 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
         val repository = DirectLyricsRepository()
         try {
             val startedAt = SystemClock.elapsedRealtime()
-            val result = repository.resolveLyrics(
+            val result = repository.resolveFoundLyrics(
                 track = query.track,
                 artist = query.artist,
                 album = query.album,
@@ -179,7 +180,7 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
         val repository = DirectLyricsRepository()
         try {
             val startedAt = SystemClock.elapsedRealtime()
-            val result = repository.resolveLyrics(
+            val result = repository.resolveFoundLyrics(
                 track = query.track,
                 artist = query.artist,
                 album = query.album,
@@ -208,6 +209,68 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
             )
         } finally {
             repository.close()
+        }
+    }
+
+    @Test
+    fun resolvesShaiWhenOnlyTheSourceDeclaresTheLiveVersion() {
+        val arguments: Bundle = InstrumentationRegistry.getArguments()
+        assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
+
+        val query = LyricsLookup(
+            track = "晒",
+            artist = "Tizzy T & GALI",
+            album = "中国说唱巅峰对决 第三期",
+            durationMs = 220_264L
+        )
+        val repository = DirectLyricsRepository()
+        try {
+            val startedAt = SystemClock.elapsedRealtime()
+            val result = repository.resolveFoundLyrics(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                durationMs = query.durationMs
+            )
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+            InstrumentationRegistry.getInstrumentation().sendStatus(
+                0,
+                Bundle().apply {
+                    putString(
+                        "stream",
+                        "Shai network smoke: ${elapsedMs}ms/${result.source}/${result.sourceId}/" +
+                            "${result.candidateTrack}\n"
+                    )
+                }
+            )
+
+            assertTrue(result.source in setOf("QQ音乐", "网易云音乐"))
+            assertTrue(result.sourceId in setOf("002mymZ00uwkRC", "1962368708"))
+            assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(result.lyrics))
+            assertTrue(LyricsCandidateSelector.hasMatchingDuration(query.durationMs, result.durationMs))
+            assertEquals(
+                EvidenceLevel.NEAR,
+                titleEvidence(titleIdentity(query.track), titleIdentity(result.candidateTrack))
+            )
+            assertTrue(LyricsCandidateSelector.matchesVersion(query, result))
+            assertTrue(
+                "Shai catalog lookup took ${elapsedMs}ms",
+                elapsedMs <= LOCALIZED_CATALOG_PATH_LIMIT_MS
+            )
+        } finally {
+            repository.close()
+        }
+    }
+
+    private fun DirectLyricsRepository.resolveFoundLyrics(
+        track: String,
+        artist: String,
+        album: String,
+        durationMs: Long
+    ): LyricsResult {
+        val outcome = resolveLyrics(track, artist, album, durationMs)
+        return requireNotNull((outcome as? LyricsResolutionOutcome.Found)?.resolved?.result) {
+            "Expected synchronized lyrics, got $outcome"
         }
     }
 

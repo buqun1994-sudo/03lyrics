@@ -36,11 +36,13 @@
 
 1. `MainActivity` 只承接用户设置和向悬浮服务发送动作。
 2. `LyricsOverlayService` 是运行态总协调者，负责 MediaSession、前台服务、窗口生命周期、车机表面切换和 WebView 桥接。
-3. `DirectLyricsRepository` 负责外部歌词源访问；`LyricsCandidateSelector` 负责纯匹配与选择规则。
-4. `LyricsCache` 负责本地歌词缓存与淘汰，不把缓存策略复制到服务层。
-5. `IcarDisplayStateMonitor` 只读观察已验证的公开系统状态，不写车辆状态，不连接 CAN、无障碍或猜测的私有接口。
-6. `BootReceiver` 只在用户已开启自动恢复时重启歌词服务。
-7. 跨两个以上调用点的规则必须回到上述 owner，不在 UI、广播接收器或临时分支中复制第二套状态机。
+3. `LyricsResolutionCoordinator` 只保留最新歌词请求，负责取消旧请求并仅对瞬时失败退避重试一次。
+4. `DirectLyricsRepository` 负责多来源完成顺序调度；`PublicLyricsSources` 负责外部协议解析和可断开的 HTTP 访问。
+5. `RecordingIdentity` 负责录音身份归一；`LyricsCandidateSelector` 负责显式准入、排序和入选证明，不让排序分值充当安全门槛。
+6. `LyricsCache` 负责本地歌词缓存与淘汰，并携带当前匹配策略可重放的入选证明；不把缓存策略复制到服务层。
+7. `IcarDisplayStateMonitor` 只读观察已验证的公开系统状态，不写车辆状态，不连接 CAN、无障碍或猜测的私有接口。
+8. `BootReceiver` 只在用户已开启自动恢复时重启歌词服务。
+9. 跨两个以上调用点的规则必须回到上述 owner，不在 UI、广播接收器或临时分支中复制第二套状态机。
 
 ## 5. 目标设备与性能边界
 

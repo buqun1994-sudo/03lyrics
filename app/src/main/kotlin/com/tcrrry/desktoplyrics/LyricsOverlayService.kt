@@ -50,9 +50,10 @@ import android.widget.FrameLayout
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -84,6 +85,10 @@ class LyricsOverlayService : Service() {
         IcarDisplayStateMonitor(this, mainHandler, ::onIcarDisplayStateChanged)
     }
     private val lyricsRepository = DirectLyricsRepository()
+    private val lyricsResolutionCoordinator = LyricsResolutionCoordinator(
+        lyricsResolver = lyricsRepository,
+        coverResolver = lyricsRepository
+    )
     private val lyricsCache by lazy { LyricsCache(this) }
     private var lyricsJob = SupervisorJob()
     private var lyricsScope = CoroutineScope(lyricsJob + Dispatchers.IO)
@@ -126,6 +131,7 @@ class LyricsOverlayService : Service() {
     private var bluetoothTimelineReady = false
     private var bluetoothReportedPlaybackState: Int? = null
     private var lastLyricsUsageKey = ""
+    private var activeLyricsRequestJob: Job? = null
     private val runtimeGeneration = AtomicLong(0L)
     @Volatile private var latestLyricsRequestId = 0
 
@@ -390,6 +396,7 @@ class LyricsOverlayService : Service() {
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
         releaseRuntimeResources(prepareForRestart = false)
         mainHandler.removeCallbacksAndMessages(null)
+        lyricsResolutionCoordinator.close()
         lyricsRepository.close()
         lyricsCache.close()
         isRunning = false
@@ -445,10 +452,13 @@ class LyricsOverlayService : Service() {
 
     private fun releaseRuntimeResources(prepareForRestart: Boolean) {
         runtimeGeneration.incrementAndGet()
-        synchronized(lyricsUsageLock) {
+        val activeRequest = synchronized(lyricsUsageLock) {
             latestLyricsRequestId = 0
             lastLyricsUsageKey = ""
+            activeLyricsRequestJob.also { activeLyricsRequestJob = null }
         }
+        activeRequest?.cancel()
+        lyricsResolutionCoordinator.cancelCurrent()
         lyricsJob.cancel()
         if (prepareForRestart) {
             lyricsJob = SupervisorJob()
@@ -522,30 +532,28 @@ class LyricsOverlayService : Service() {
         ) {
             if (generation != runtimeGeneration.get() || track.isBlank() || requestId <= 0) return
             val durationMs = durationMsText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-            if (!LyricsCandidateSelector.hasKnownDuration(durationMs)) {
-                val claimed = synchronized(lyricsUsageLock) {
-                    if (generation != runtimeGeneration.get()) {
-                        false
-                    } else {
-                        latestLyricsRequestId = requestId
-                        true
-                    }
-                }
-                if (!claimed) return
-                deliverLyricsResult(generation, requestId, DirectLyricsRepository.Result())
-                return
+            val hasKnownDuration = LyricsCandidateSelector.hasKnownDuration(durationMs)
+            val usageKey = if (hasKnownDuration) {
+                LyricsCache.usageKey(track, artist, album, durationMs)
+            } else {
+                ""
             }
-            val usageKey = LyricsCache.usageKey(track, artist, album, durationMs)
-            val recordUse = synchronized(lyricsUsageLock) {
+            val claim = synchronized(lyricsUsageLock) {
                 if (generation != runtimeGeneration.get()) {
                     null
                 } else {
-                    val changed = usageKey != lastLyricsUsageKey
-                    lastLyricsUsageKey = usageKey
+                    val recordUse = hasKnownDuration && usageKey != lastLyricsUsageKey
+                    if (hasKnownDuration) lastLyricsUsageKey = usageKey
                     latestLyricsRequestId = requestId
-                    changed
+                    recordUse to activeLyricsRequestJob.also { activeLyricsRequestJob = null }
                 }
             } ?: return
+            claim.second?.cancel()
+            lyricsResolutionCoordinator.cancelCurrent()
+            if (!hasKnownDuration) {
+                deliverLyricsResult(generation, requestId, LyricsResult())
+                return
+            }
             mainHandler.post {
                 if (isCurrentLyricsRequest(generation, requestId)) {
                     updateTranslationAvailability(false)
@@ -553,9 +561,10 @@ class LyricsOverlayService : Service() {
             }
             val requestScope = lyricsScope
             if (generation != runtimeGeneration.get()) return
-            requestScope.launch {
+            val query = LyricsLookup(track, artist, album, durationMs)
+            val requestJob = requestScope.launch(start = CoroutineStart.LAZY) {
                 val nowMs = System.currentTimeMillis()
-                val cached = lyricsCache.get(track, artist, album, durationMs, recordUse, nowMs)
+                val cached = lyricsCache.get(track, artist, album, durationMs, claim.first, nowMs)
                 if (!isCurrentLyricsRequest(generation, requestId)) return@launch
                 if (cached != null) {
                     deliverLyricsResult(generation, requestId, cached.result)
@@ -563,38 +572,59 @@ class LyricsOverlayService : Service() {
                 }
 
                 val startedAt = SystemClock.elapsedRealtime()
-                val coverLookup = if (needsRemoteCover) {
-                    async { lyricsRepository.resolveCover(track, artist) }
-                } else null
-                val result = lyricsRepository.resolveLyrics(track, artist, album, durationMs)
+                val outcome = lyricsResolutionCoordinator.resolveLatest(query)
                 if (!isCurrentLyricsRequest(generation, requestId)) {
-                    coverLookup?.cancel()
                     return@launch
+                }
+                val resolved = (outcome as? LyricsResolutionOutcome.Found)?.resolved
+                val result = resolved?.result ?: LyricsResult()
+                val outcomeName = when (outcome) {
+                    is LyricsResolutionOutcome.Found -> "found"
+                    LyricsResolutionOutcome.NoMatch -> "no-match"
+                    LyricsResolutionOutcome.InvalidMetadata -> "invalid-metadata"
+                    is LyricsResolutionOutcome.RetryableFailure ->
+                        "retryable-failure:${outcome.reason}"
+                    LyricsResolutionOutcome.Cancelled -> "cancelled"
                 }
                 Log.i(
                     LOG_TAG,
-                    "Direct lyrics source=${result.source.ifBlank { "none" }} " +
+                    "Direct lyrics outcome=$outcomeName " +
+                        "source=${result.source.ifBlank { "none" }} " +
                         "kind=${result.lyricsKind} " +
                         "found=${result.lyrics.isNotBlank()} " +
                         "translation=${result.translatedLyrics.isNotBlank()} " +
                         "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                 )
-                if (classifyLyrics(result.lyrics) == LyricsKind.SYNCHRONIZED) {
-                    lyricsCache.put(track, artist, album, durationMs, result)
+                if (resolved != null) {
+                    lyricsCache.put(track, artist, album, durationMs, resolved)
                     deliverLyricsResult(generation, requestId, result)
-                } else if (cached == null) {
+                } else if (cached == null && outcome != LyricsResolutionOutcome.Cancelled) {
                     deliverLyricsResult(generation, requestId, result)
                 }
 
                 if (needsRemoteCover && result.cover.isBlank()) {
-                    val cover = runCatching { coverLookup?.await().orEmpty() }.getOrDefault("")
+                    val cover = lyricsResolutionCoordinator.resolveCover(
+                        LyricsLookup(track = track, artist = artist)
+                    )
                     if (cover.isNotBlank() && isCurrentLyricsRequest(generation, requestId)) {
                         deliverRemoteCover(generation, requestId, cover)
                     }
-                } else {
-                    coverLookup?.cancel()
                 }
             }
+            requestJob.invokeOnCompletion {
+                synchronized(lyricsUsageLock) {
+                    if (activeLyricsRequestJob === requestJob) activeLyricsRequestJob = null
+                }
+            }
+            val shouldStart = synchronized(lyricsUsageLock) {
+                if (isCurrentLyricsRequest(generation, requestId)) {
+                    activeLyricsRequestJob = requestJob
+                    true
+                } else {
+                    false
+                }
+            }
+            if (shouldStart) requestJob.start() else requestJob.cancel()
         }
     }
 
@@ -604,7 +634,7 @@ class LyricsOverlayService : Service() {
     private fun deliverLyricsResult(
         generation: Long,
         requestId: Int,
-        result: DirectLyricsRepository.Result
+        result: LyricsResult
     ) {
         val payload = result.toJson().toString()
         val hasTranslation = classifyLyrics(result.translatedLyrics) == LyricsKind.SYNCHRONIZED

@@ -34,7 +34,7 @@ class LyricsCacheInstrumentationTest {
                 artist = "Localized Artist",
                 album = "Twinkle Mini Album",
                 playbackDurationMs = 206_796L,
-                result = synchronizedResult(durationMs = 208_720L)
+                resolved = resolved(synchronizedResult(durationMs = 208_720L))
             )
 
             assertNotNull(
@@ -66,7 +66,7 @@ class LyricsCacheInstrumentationTest {
                 artist = "AOA",
                 album = "MOYA - EP",
                 playbackDurationMs = 220_427L,
-                result = DirectLyricsRepository.Result(
+                resolved = resolved(LyricsResult(
                     lyrics = "[00:01.00]wrong lyric",
                     durationMs = 219_533L,
                     source = "网易云音乐",
@@ -75,7 +75,7 @@ class LyricsCacheInstrumentationTest {
                     candidateArtist = "AOA",
                     candidateAlbum = "사뿐사뿐",
                     lyricsKind = LyricsKind.SYNCHRONIZED
-                )
+                ))
             )
 
             assertNull(
@@ -98,7 +98,7 @@ class LyricsCacheInstrumentationTest {
                 artist = "Artist",
                 album = "Album",
                 playbackDurationMs = 200_000L,
-                result = DirectLyricsRepository.Result(
+                resolved = resolved(LyricsResult(
                     lyrics = "[00:01.00]Original lyric",
                     translatedLyrics = "[00:01.00]Translated lyric",
                     durationMs = 200_000L,
@@ -108,7 +108,7 @@ class LyricsCacheInstrumentationTest {
                     candidateArtist = "Artist",
                     candidateAlbum = "Album",
                     lyricsKind = LyricsKind.SYNCHRONIZED
-                )
+                ))
             )
 
             val entry = cache.get(
@@ -122,6 +122,62 @@ class LyricsCacheInstrumentationTest {
 
             assertEquals("[00:01.00]Translated lyric", stored.result.translatedLyrics)
             assertEquals(false, stored.needsRefresh(stored.updatedAtMs + 1L))
+        }
+    }
+
+    @Test
+    fun preservesIndependentSourceProofAcrossCacheReads() {
+        val query = LyricsLookup(
+            track = "마리아",
+            artist = "HWASA",
+            durationMs = 199_000L
+        )
+        val candidates = listOf(
+            LyricsResult(
+                durationMs = 199_000L,
+                source = "QQ音乐",
+                sourceId = "localized-a",
+                candidateTrack = "마리아",
+                candidateArtist = "华莎",
+                candidateAlbum = "María"
+            ),
+            LyricsResult(
+                durationMs = 199_100L,
+                source = "网易云音乐",
+                sourceId = "localized-b",
+                candidateTrack = "마리아 (Maria)",
+                candidateArtist = "华莎",
+                candidateAlbum = "María"
+            )
+        )
+        val selection = LyricsCandidateSelector.selectCandidatesWithProof(query, candidates).first()
+        val resolved = ResolvedLyrics(
+            result = selection.candidate.copy(
+                lyrics = "[00:01.00]Maria",
+                lyricsKind = LyricsKind.SYNCHRONIZED
+            ),
+            proof = selection.proof
+        )
+
+        LyricsCache(context, DATABASE_NAME).use { cache ->
+            cache.put(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                playbackDurationMs = query.durationMs,
+                resolved = resolved
+            )
+
+            val cached = cache.get(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                playbackDurationMs = query.durationMs,
+                recordUse = false
+            )
+
+            assertEquals(selection.candidate.sourceId, requireNotNull(cached).result.sourceId)
+            assertEquals(2, cached.proof.supportingCandidates.size)
         }
     }
 
@@ -181,11 +237,11 @@ class LyricsCacheInstrumentationTest {
             cursor.moveToFirst()
             assertEquals(0L, cursor.getLong(0))
         }
-        assertEquals(2, migrated.version)
+        assertEquals(3, migrated.version)
         migrated.close()
     }
 
-    private fun synchronizedResult(durationMs: Long) = DirectLyricsRepository.Result(
+    private fun synchronizedResult(durationMs: Long) = LyricsResult(
         lyrics = "[00:01.00]lyric",
         durationMs = durationMs,
         source = "QQ音乐",
@@ -194,6 +250,14 @@ class LyricsCacheInstrumentationTest {
         candidateArtist = "Localized Artist",
         candidateAlbum = "Twinkle Mini Album",
         lyricsKind = LyricsKind.SYNCHRONIZED
+    )
+
+    private fun resolved(result: LyricsResult): ResolvedLyrics = ResolvedLyrics(
+        result = result,
+        proof = LyricsSelectionProof(
+            matcherPolicyVersion = LYRICS_MATCHER_POLICY_VERSION,
+            supportingCandidates = listOf(result.candidateSnapshot())
+        )
     )
 
     private companion object {

@@ -49,11 +49,16 @@ class LyricsCachePolicyTest {
 
     @Test
     fun `refreshes a legacy cache entry once to discover source translation support`() {
+        val result = LyricsResult(
+            lyrics = "[00:01.00]Original lyric",
+            durationMs = 200_000L,
+            lyricsKind = LyricsKind.SYNCHRONIZED
+        )
         val legacyEntry = LyricsCache.Entry(
-            result = DirectLyricsRepository.Result(
-                lyrics = "[00:01.00]Original lyric",
-                durationMs = 200_000L,
-                lyricsKind = LyricsKind.SYNCHRONIZED
+            result = result,
+            proof = LyricsSelectionProof(
+                matcherPolicyVersion = LYRICS_MATCHER_POLICY_VERSION,
+                supportingCandidates = listOf(result.candidateSnapshot())
             ),
             updatedAtMs = 10_000L,
             translationResolved = false

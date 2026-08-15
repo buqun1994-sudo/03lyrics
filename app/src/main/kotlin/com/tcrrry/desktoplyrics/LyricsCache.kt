@@ -19,10 +19,13 @@ internal class LyricsCache(
     databaseName: String = DATABASE_NAME
 ) : Closeable {
     data class Entry(
-        val result: DirectLyricsRepository.Result,
+        val result: LyricsResult,
+        val proof: LyricsSelectionProof,
         val updatedAtMs: Long,
         val translationResolved: Boolean = true
     ) {
+        val resolved: ResolvedLyrics get() = ResolvedLyrics(result, proof)
+
         fun needsRefresh(nowMs: Long): Boolean =
             !translationResolved || nowMs - updatedAtMs >= LyricsCachePolicy.REFRESH_AFTER_MS
     }
@@ -57,7 +60,7 @@ internal class LyricsCache(
                     if (!cursor.moveToFirst()) return@use null
                     decodeEntry(cursor.getString(0), cursor.getLong(1))
                         ?.takeIf {
-                            LyricsCandidateSelector.matchesVersion(query, it.result)
+                            LyricsCandidateSelector.isProofValid(query, it.result, it.proof)
                         }
                         ?.let { CachedEntry(cacheKey, it, cursor.getInt(2)) }
                 }
@@ -94,17 +97,20 @@ internal class LyricsCache(
         artist: String,
         album: String,
         playbackDurationMs: Long,
-        result: DirectLyricsRepository.Result,
+        resolved: ResolvedLyrics,
         updatedAtMs: Long = System.currentTimeMillis()
     ) {
+        val result = resolved.result
+        val query = LyricsLookup(track, artist, album, playbackDurationMs)
         if (closed || classifyLyrics(result.lyrics) != LyricsKind.SYNCHRONIZED ||
-            !LyricsCandidateSelector.hasMatchingDuration(playbackDurationMs, result.durationMs)
+            !LyricsCandidateSelector.hasMatchingDuration(playbackDurationMs, result.durationMs) ||
+            !LyricsCandidateSelector.isProofValid(query, result, resolved.proof)
         ) {
             return
         }
         runCatching {
             val cacheKey = key(track, artist, album, result.durationMs)
-            val payload = encodeResult(result)
+            val payload = encodeResolved(resolved)
             val byteSize = cacheEntrySize(cacheKey, payload)
             if (byteSize > LyricsCachePolicy.MAX_BYTES) return@runCatching
 
@@ -232,14 +238,18 @@ internal class LyricsCache(
         )
     }
 
-    private fun encodeResult(result: DirectLyricsRepository.Result): String = result.toJson().toString()
+    private fun encodeResolved(resolved: ResolvedLyrics): String = resolved.result.toJson()
+        .put("selectionProof", resolved.proof.toJson())
+        .toString()
 
     private fun decodeEntry(payload: String, updatedAtMs: Long): Entry? {
         val value = JSONObject(payload)
         val lyrics = cleanLyrics(value.optString("lyrics"))
         if (classifyLyrics(lyrics) != LyricsKind.SYNCHRONIZED) return null
+        val proof = LyricsSelectionProof.fromJson(value.optJSONObject("selectionProof"))
+            ?: return null
         return Entry(
-            result = DirectLyricsRepository.Result(
+            result = LyricsResult(
                 lyrics = lyrics,
                 translatedLyrics = synchronizedLyricsOrEmpty(value.optString("translatedLyrics")),
                 durationMs = value.optLong("duration", 0L),
@@ -251,6 +261,7 @@ internal class LyricsCache(
                 candidateAlbum = value.optString("candidateAlbum"),
                 lyricsKind = LyricsKind.SYNCHRONIZED
             ),
+            proof = proof,
             updatedAtMs = updatedAtMs,
             translationResolved = value.has("translatedLyrics")
         )
@@ -319,7 +330,7 @@ internal class LyricsCache(
     companion object {
         private const val LOG_TAG = "DesktopLyrics"
         private const val DATABASE_NAME = "lyrics-cache.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
         private const val TABLE_CACHE = "lyrics_cache"
         private const val TABLE_META = "cache_meta"
         private const val COLUMN_KEY = "cache_key"
