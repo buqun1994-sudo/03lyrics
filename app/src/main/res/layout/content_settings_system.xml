@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/settings_system_content"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="@dimen/settings_content_padding_start"
+    android:paddingTop="@dimen/commercial_content_padding_top"
+    android:paddingEnd="@dimen/settings_content_padding_end"
+    android:paddingBottom="@dimen/settings_content_padding_vertical"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:id="@+id/restart_lyrics_setting"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_switch_card_height"
+        android:background="@drawable/bg_settings_card"
+        android:clickable="true"
+        android:contentDescription="@string/accessibility_restart_lyrics"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/settings_switch_card_padding_start"
+        android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+        <ImageView
+            android:layout_width="@dimen/settings_switch_width"
+            android:layout_height="@dimen/settings_switch_height"
+            android:importantForAccessibility="no"
+            android:padding="3dp"
+            android:src="@drawable/ic_settings_restart" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/settings_switch_label_spacing"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/SettingsText.Body2.Emphasis"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_restart_lyrics" />
+
+            <TextView
+                style="@style/SettingsText.Caption2"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/settings_switch_caption_spacing"
+                android:maxLines="1"
+                android:text="@string/settings_restart_lyrics_summary" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

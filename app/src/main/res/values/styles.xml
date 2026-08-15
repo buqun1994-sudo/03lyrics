@@ -12,6 +12,10 @@
         <item name="android:fontFamily">sans-serif-medium</item>
     </style>
 
+    <style name="SettingsText.Title" parent="SettingsText.Body1.Emphasis">
+        <item name="android:textSize">@dimen/settings_text_title</item>
+    </style>
+
     <style name="SettingsText.Option" parent="SettingsText.Body1">
         <item name="android:textColor">@color/settings_text_option</item>
     </style>
@@ -27,5 +31,21 @@
     <style name="SettingsText.Caption2" parent="SettingsText.Body1">
         <item name="android:textColor">@color/settings_text_secondary</item>
         <item name="android:textSize">@dimen/settings_text_caption2</item>
+    </style>
+
+    <style name="SettingsText.Caption2.Emphasis" parent="SettingsText.Caption2">
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="SettingsText.CommercialPrice" parent="SettingsText.Body1.Emphasis">
+        <item name="android:textSize">@dimen/commercial_offer_price_text</item>
+    </style>
+
+    <style name="SettingsText.CommercialOfferTitle" parent="SettingsText.Body1.Emphasis">
+        <item name="android:textSize">@dimen/commercial_offer_title_text</item>
+    </style>
+
+    <style name="SettingsText.CommercialOrderPrice" parent="SettingsText.Body1.Emphasis">
+        <item name="android:textSize">@dimen/commercial_order_final_price_text</item>
     </style>
 </resources>

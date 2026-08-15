@@ -13,8 +13,9 @@ internal object IcarThemeColorPalette {
     private const val CYAN = 2
     private const val METAL = 4
     private const val ORANGE = 8
-    private const val PINK = 16
+    private const val PINK_LEGACY = 16
     private const val PURPLE = 32
+    private const val PINK = 33
     private const val YELLOW = 64
 
     fun resolve(themeKey: Int?, nightMode: Boolean): IcarThemePalette {
@@ -22,7 +23,7 @@ internal object IcarThemeColorPalette {
             CYAN -> if (nightMode) CYAN_NIGHT else CYAN_DAY
             METAL -> if (nightMode) METAL_NIGHT else METAL_DAY
             ORANGE -> if (nightMode) ORANGE_NIGHT else ORANGE_DAY
-            PINK -> if (nightMode) PINK_NIGHT else PINK_DAY
+            PINK_LEGACY, PINK -> if (nightMode) PINK_NIGHT else PINK_DAY
             PURPLE -> PURPLE_PRIMARY
             YELLOW -> if (nightMode) YELLOW_NIGHT else YELLOW_DAY
             else -> DEFAULT_PRIMARY

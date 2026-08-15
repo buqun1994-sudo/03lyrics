@@ -49,6 +49,9 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.tcrrry.desktoplyrics.commercial.CommercialAccessDecision
+import com.tcrrry.desktoplyrics.commercial.CommercialAccessDenial
+import com.tcrrry.desktoplyrics.commercial.CommercialRuntimeFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -84,14 +87,11 @@ class LyricsOverlayService : Service() {
     private val displayStateMonitor by lazy {
         IcarDisplayStateMonitor(this, mainHandler, ::onIcarDisplayStateChanged)
     }
-    private val lyricsRepository = DirectLyricsRepository()
-    private val lyricsResolutionCoordinator = LyricsResolutionCoordinator(
-        lyricsResolver = lyricsRepository,
-        coverResolver = lyricsRepository
-    )
-    private val lyricsCache by lazy { LyricsCache(this) }
-    private var lyricsJob = SupervisorJob()
-    private var lyricsScope = CoroutineScope(lyricsJob + Dispatchers.IO)
+    private var lyricsRepository: DirectLyricsRepository? = null
+    private var lyricsResolutionCoordinator: LyricsResolutionCoordinator? = null
+    private var lyricsCache: LyricsCache? = null
+    private var lyricsJob: Job? = null
+    private var lyricsScope: CoroutineScope? = null
     private val lyricsUsageLock = Any()
 
     private var overlayRoot: FrameLayout? = null
@@ -256,26 +256,35 @@ class LyricsOverlayService : Service() {
         val source = startupSource(intent)
         val overlayAccess = Settings.canDrawOverlays(this)
         val notificationAccess = hasNotificationListenerAccess()
-        val decision = LyricsStartupPolicy.decide(
+        val systemDecision = LyricsStartupPolicy.decide(
             action = intent?.action,
             overlayAccess = overlayAccess,
             notificationAccess = notificationAccess
         )
 
-        if (decision == LyricsStartupOutcome.USER_STOPPED) {
-            if (decision.clearsAutoStart) {
+        if (systemDecision == LyricsStartupOutcome.USER_STOPPED) {
+            if (systemDecision.clearsAutoStart) {
                 prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
             }
             clearRecoveryNotification()
-            releaseRuntimeResources(prepareForRestart = true)
+            releaseRuntimeResources()
             stopForegroundNotification()
             stopSelfResult(startId)
-            logStartupOutcome(source, overlayAccess, notificationAccess, decision)
+            logStartupOutcome(source, overlayAccess, notificationAccess, systemDecision)
             return START_NOT_STICKY
         }
 
-        if (decision == LyricsStartupOutcome.RECOVERY) {
+        if (systemDecision == LyricsStartupOutcome.RECOVERY) {
             enterRecoveryState(startId, overlayAccess, notificationAccess)
+            logStartupOutcome(source, overlayAccess, notificationAccess, systemDecision)
+            return START_NOT_STICKY
+        }
+
+        val commercialAccess = CommercialRuntimeFactory.accessGate(this)
+            .evaluate(System.currentTimeMillis())
+        val decision = LyricsCommercialGatePolicy.decide(systemDecision, commercialAccess)
+        if (decision == LyricsStartupOutcome.COMMERCIAL_RECOVERY) {
+            enterCommercialRecoveryState(startId, commercialAccess)
             logStartupOutcome(source, overlayAccess, notificationAccess, decision)
             return START_NOT_STICKY
         }
@@ -394,11 +403,8 @@ class LyricsOverlayService : Service() {
 
     override fun onDestroy() {
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
-        releaseRuntimeResources(prepareForRestart = false)
+        releaseRuntimeResources()
         mainHandler.removeCallbacksAndMessages(null)
-        lyricsResolutionCoordinator.close()
-        lyricsRepository.close()
-        lyricsCache.close()
         isRunning = false
         announceOverlayState()
         super.onDestroy()
@@ -429,14 +435,29 @@ class LyricsOverlayService : Service() {
     }
 
     private fun startRuntime() {
+        ensureLyricsRuntimeResources()
         displayStateMonitor.start()
         if (overlayRoot == null) createOverlay()
         startMediaMonitor()
     }
 
+    private fun ensureLyricsRuntimeResources() {
+        if (lyricsRepository != null) return
+        val repository = DirectLyricsRepository()
+        lyricsRepository = repository
+        lyricsResolutionCoordinator = LyricsResolutionCoordinator(
+            lyricsResolver = repository,
+            coverResolver = repository
+        )
+        lyricsCache = LyricsCache(this)
+        val job = SupervisorJob()
+        lyricsJob = job
+        lyricsScope = CoroutineScope(job + Dispatchers.IO)
+    }
+
     private fun restartRuntime() {
         val preserveAutoStart = prefs.getBoolean(PREF_AUTO_START, false)
-        releaseRuntimeResources(prepareForRestart = true)
+        releaseRuntimeResources()
         loadRuntimePreferences()
         startRuntime()
         if (prefs.getBoolean(PREF_AUTO_START, false) != preserveAutoStart) {
@@ -450,7 +471,7 @@ class LyricsOverlayService : Service() {
         )
     }
 
-    private fun releaseRuntimeResources(prepareForRestart: Boolean) {
+    private fun releaseRuntimeResources() {
         runtimeGeneration.incrementAndGet()
         val activeRequest = synchronized(lyricsUsageLock) {
             latestLyricsRequestId = 0
@@ -458,12 +479,16 @@ class LyricsOverlayService : Service() {
             activeLyricsRequestJob.also { activeLyricsRequestJob = null }
         }
         activeRequest?.cancel()
-        lyricsResolutionCoordinator.cancelCurrent()
-        lyricsJob.cancel()
-        if (prepareForRestart) {
-            lyricsJob = SupervisorJob()
-            lyricsScope = CoroutineScope(lyricsJob + Dispatchers.IO)
-        }
+        lyricsResolutionCoordinator?.cancelCurrent()
+        lyricsJob?.cancel()
+        lyricsJob = null
+        lyricsScope = null
+        lyricsResolutionCoordinator?.close()
+        lyricsResolutionCoordinator = null
+        lyricsRepository?.close()
+        lyricsRepository = null
+        lyricsCache?.close()
+        lyricsCache = null
 
         mainHandler.removeCallbacks(dispatchRunnable)
         mainHandler.removeCallbacks(sessionRefreshRunnable)
@@ -549,7 +574,10 @@ class LyricsOverlayService : Service() {
                 }
             } ?: return
             claim.second?.cancel()
-            lyricsResolutionCoordinator.cancelCurrent()
+            val coordinator = lyricsResolutionCoordinator ?: return
+            val cache = lyricsCache ?: return
+            val requestScope = lyricsScope ?: return
+            coordinator.cancelCurrent()
             if (!hasKnownDuration) {
                 deliverLyricsResult(generation, requestId, LyricsResult())
                 return
@@ -559,12 +587,11 @@ class LyricsOverlayService : Service() {
                     updateTranslationAvailability(false)
                 }
             }
-            val requestScope = lyricsScope
             if (generation != runtimeGeneration.get()) return
             val query = LyricsLookup(track, artist, album, durationMs)
             val requestJob = requestScope.launch(start = CoroutineStart.LAZY) {
                 val nowMs = System.currentTimeMillis()
-                val cached = lyricsCache.get(track, artist, album, durationMs, claim.first, nowMs)
+                val cached = cache.get(track, artist, album, durationMs, claim.first, nowMs)
                 if (!isCurrentLyricsRequest(generation, requestId)) return@launch
                 if (cached != null) {
                     deliverLyricsResult(generation, requestId, cached.result)
@@ -572,7 +599,7 @@ class LyricsOverlayService : Service() {
                 }
 
                 val startedAt = SystemClock.elapsedRealtime()
-                val outcome = lyricsResolutionCoordinator.resolveLatest(query)
+                val outcome = coordinator.resolveLatest(query)
                 if (!isCurrentLyricsRequest(generation, requestId)) {
                     return@launch
                 }
@@ -596,14 +623,14 @@ class LyricsOverlayService : Service() {
                         "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                 )
                 if (resolved != null) {
-                    lyricsCache.put(track, artist, album, durationMs, resolved)
+                    cache.put(track, artist, album, durationMs, resolved)
                     deliverLyricsResult(generation, requestId, result)
                 } else if (cached == null && outcome != LyricsResolutionOutcome.Cancelled) {
                     deliverLyricsResult(generation, requestId, result)
                 }
 
                 if (needsRemoteCover && result.cover.isBlank()) {
-                    val cover = lyricsResolutionCoordinator.resolveCover(
+                    val cover = coordinator.resolveCover(
                         LyricsLookup(track = track, artist = artist)
                     )
                     if (cover.isNotBlank() && isCurrentLyricsRequest(generation, requestId)) {
@@ -711,13 +738,65 @@ class LyricsOverlayService : Service() {
         overlayAccess: Boolean,
         notificationAccess: Boolean
     ) {
-        releaseRuntimeResources(prepareForRestart = true)
+        releaseRuntimeResources()
         stopForegroundNotification()
         notificationManager.notify(
             RECOVERY_NOTIFICATION_ID,
             buildRecoveryNotification(overlayAccess, notificationAccess)
         )
         stopSelfResult(startId)
+    }
+
+    private fun enterCommercialRecoveryState(
+        startId: Int,
+        access: CommercialAccessDecision
+    ) {
+        releaseRuntimeResources()
+        stopForegroundNotification()
+        notificationManager.notify(
+            COMMERCIAL_RECOVERY_NOTIFICATION_ID,
+            buildCommercialRecoveryNotification(access)
+        )
+        stopSelfResult(startId)
+    }
+
+    private fun buildCommercialRecoveryNotification(
+        access: CommercialAccessDecision
+    ): android.app.Notification {
+        val reason = (access as? CommercialAccessDecision.Denied)?.reason
+        val message = getString(
+            when (reason) {
+                CommercialAccessDenial.LICENSE_EXPIRED -> R.string.notification_commercial_expired
+                CommercialAccessDenial.CONFIGURATION_MISSING -> {
+                    R.string.notification_commercial_configuration_missing
+                }
+                else -> R.string.notification_commercial_unavailable
+            }
+        )
+        val settingsIntent = PendingIntent.getActivity(
+            this,
+            COMMERCIAL_RECOVERY_SETTINGS_REQUEST_CODE,
+            Intent(this, MainActivity::class.java).apply {
+                putExtra(MainActivity.EXTRA_OPEN_SETTINGS_SECTION, MainActivity.SECTION_COMMERCIAL)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_lyrics)
+            .setContentTitle(getString(R.string.notification_commercial_title))
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setContentIntent(settingsIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .build()
     }
 
     private fun buildRecoveryNotification(
@@ -760,6 +839,7 @@ class LyricsOverlayService : Service() {
 
     private fun clearRecoveryNotification() {
         notificationManager.cancel(RECOVERY_NOTIFICATION_ID)
+        notificationManager.cancel(COMMERCIAL_RECOVERY_NOTIFICATION_ID)
     }
 
     private fun startupSource(intent: Intent?): String {
@@ -774,6 +854,7 @@ class LyricsOverlayService : Service() {
             ACTION_START -> "explicit_start"
             ACTION_STOP -> "user_stop"
             ACTION_RESTART -> "manual_restart"
+            ACTION_COMMERCIAL_ACCESS_CHANGED -> "commercial_access_changed"
             ACTION_SETTINGS_OPENED -> "settings_opened"
             ACTION_SETTINGS_CLOSED -> "settings_closed"
             else -> "runtime_command"
@@ -1751,6 +1832,8 @@ class LyricsOverlayService : Service() {
         const val ACTION_START = "com.tcrrry.desktoplyrics.action.START_LYRICS_OVERLAY"
         const val ACTION_STOP = "com.tcrrry.desktoplyrics.action.STOP_LYRICS_OVERLAY"
         const val ACTION_RESTART = "com.tcrrry.desktoplyrics.action.RESTART_LYRICS_OVERLAY"
+        const val ACTION_COMMERCIAL_ACCESS_CHANGED =
+            "com.tcrrry.desktoplyrics.action.COMMERCIAL_ACCESS_CHANGED"
         const val ACTION_STATE_CHANGED = "com.tcrrry.desktoplyrics.action.LYRICS_OVERLAY_STATE_CHANGED"
         const val ACTION_SET_BACKGROUND = "com.tcrrry.desktoplyrics.action.SET_LYRICS_BACKGROUND"
         const val ACTION_SET_FONT_SCALE = "com.tcrrry.desktoplyrics.action.SET_LYRICS_FONT_SCALE"
@@ -1796,6 +1879,8 @@ class LyricsOverlayService : Service() {
         private const val NOTIFICATION_ID = 4202
         private const val RECOVERY_NOTIFICATION_ID = 4203
         private const val RECOVERY_SETTINGS_REQUEST_CODE = 2
+        private const val COMMERCIAL_RECOVERY_NOTIFICATION_ID = 4204
+        private const val COMMERCIAL_RECOVERY_SETTINGS_REQUEST_CODE = 3
         private const val BLUETOOTH_POSITION_RESET_TOLERANCE_MS = 2_500L
         private const val TOPBAR_LINES_DEFAULT = 2
         private const val DESIGN_WIDTH = 1920
@@ -1850,6 +1935,7 @@ internal enum class LyricsStartupOutcome(
 ) {
     RUNNING("running", false),
     RECOVERY("recovery", false),
+    COMMERCIAL_RECOVERY("commercial_recovery", false),
     USER_STOPPED("stopped", true)
 }
 
@@ -1866,4 +1952,15 @@ internal object LyricsStartupPolicy {
 
     fun hasRequiredAccess(overlayAccess: Boolean, notificationAccess: Boolean): Boolean =
         overlayAccess && notificationAccess
+}
+
+internal object LyricsCommercialGatePolicy {
+    fun decide(
+        systemOutcome: LyricsStartupOutcome,
+        access: CommercialAccessDecision
+    ): LyricsStartupOutcome = when {
+        systemOutcome != LyricsStartupOutcome.RUNNING -> systemOutcome
+        access is CommercialAccessDecision.Allowed -> LyricsStartupOutcome.RUNNING
+        else -> LyricsStartupOutcome.COMMERCIAL_RECOVERY
+    }
 }

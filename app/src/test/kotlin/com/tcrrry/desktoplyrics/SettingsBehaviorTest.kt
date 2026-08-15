@@ -1,10 +1,14 @@
 package com.tcrrry.desktoplyrics
 
+import com.tcrrry.desktoplyrics.commercial.CommercialAccessDecision
+import com.tcrrry.desktoplyrics.commercial.CommercialAccessDenial
+import com.tcrrry.desktoplyrics.commercial.CommercialTier
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class SettingsBehaviorTest {
 
@@ -45,6 +49,33 @@ class SettingsBehaviorTest {
     }
 
     @Test
+    fun `commercial access is the second startup gate`() {
+        assertEquals(
+            LyricsStartupOutcome.RUNNING,
+            LyricsCommercialGatePolicy.decide(
+                LyricsStartupOutcome.RUNNING,
+                CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 20_000L)
+            )
+        )
+        val denied = LyricsCommercialGatePolicy.decide(
+            LyricsStartupOutcome.RUNNING,
+            CommercialAccessDecision.Denied(CommercialAccessDenial.LICENSE_EXPIRED)
+        )
+        assertEquals(LyricsStartupOutcome.COMMERCIAL_RECOVERY, denied)
+        assertFalse(denied.clearsAutoStart)
+    }
+
+    @Test
+    fun `system recovery wins before commercial evaluation`() {
+        val result = LyricsCommercialGatePolicy.decide(
+            LyricsStartupOutcome.RECOVERY,
+            CommercialAccessDecision.Allowed(CommercialTier.PRO, null)
+        )
+
+        assertEquals(LyricsStartupOutcome.RECOVERY, result)
+    }
+
+    @Test
     fun `user stop clears auto start even when authorizations are missing`() {
         val decision = LyricsStartupPolicy.decide(
             action = LyricsOverlayService.ACTION_STOP,
@@ -75,6 +106,27 @@ class SettingsBehaviorTest {
     @Test
     fun `lyrics translation is enabled by default`() {
         assertTrue(LyricsOverlayService.LYRICS_TRANSLATION_DEFAULT)
+    }
+
+    @Test
+    fun `commercial recovery releases all lyrics runtime owners before a later rebuild`() {
+        var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
+        while (!File(appDirectory, "src/main").isDirectory) {
+            appDirectory = requireNotNull(appDirectory.parentFile)
+        }
+        val service = File(
+            appDirectory,
+            "src/main/kotlin/com/tcrrry/desktoplyrics/LyricsOverlayService.kt"
+        ).readText()
+
+        assertTrue(service.contains("lyricsResolutionCoordinator?.close()"))
+        assertTrue(service.contains("lyricsResolutionCoordinator = null"))
+        assertTrue(service.contains("lyricsRepository?.close()"))
+        assertTrue(service.contains("lyricsRepository = null"))
+        assertTrue(service.contains("lyricsCache?.close()"))
+        assertTrue(service.contains("lyricsCache = null"))
+        assertTrue(service.contains("lyricsScope = null"))
+        assertFalse(service.contains("private lateinit var lyricsRepository"))
     }
 
     @Test

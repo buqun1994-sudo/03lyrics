@@ -12,6 +12,16 @@
     <color name="settings_accent">#1A8CFF</color>
     <color name="settings_switch_thumb_color">#FFFFFFFF</color>
     <color name="settings_switch_track_off">#66727272</color>
+    <color name="commercial_action">@color/settings_accent</color>
+    <color name="commercial_action_text">#FFFFFFFF</color>
+    <color name="commercial_trial_badge">#FF234B63</color>
+    <color name="commercial_trial_text">#FFD9EDFF</color>
+    <color name="commercial_expired_badge">#FF3E4148</color>
+    <color name="commercial_expired_text">#FFE7E8EB</color>
+    <color name="commercial_pro_badge">#FFF2C94C</color>
+    <color name="commercial_pro_text">#FF29230F</color>
+    <color name="commercial_error">#FFFF858A</color>
+    <color name="commercial_qr_background">#FFFFFFFF</color>
 
     <bool name="settings_light_system_bars">false</bool>
 </resources>

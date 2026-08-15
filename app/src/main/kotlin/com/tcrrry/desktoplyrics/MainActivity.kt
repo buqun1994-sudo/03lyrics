@@ -11,12 +11,22 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.View
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.tcrrry.desktoplyrics.commercial.CommercialController
+import com.tcrrry.desktoplyrics.commercial.CommercialRuntimeFactory
+import com.tcrrry.desktoplyrics.commercial.CommercialSettingsRenderer
+import com.tcrrry.desktoplyrics.commercial.CommercialUiState
+import com.tcrrry.desktoplyrics.commercial.CommercialVariantUi
+import com.tcrrry.desktoplyrics.commercial.CommercialViewActions
+import com.tcrrry.desktoplyrics.commercial.CheckoutState
+import com.tcrrry.desktoplyrics.commercial.RecoveryState
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,15 +39,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var smallSizeOption: TextView
     private lateinit var standardSizeOption: TextView
     private lateinit var largeSizeOption: TextView
-    private lateinit var displayNavigationItem: TextView
-    private lateinit var systemNavigationItem: TextView
+    private lateinit var displayNavigationItem: NavigationItem
+    private lateinit var systemNavigationItem: NavigationItem
+    private lateinit var commercialNavigationItem: NavigationItem
     private lateinit var displayContent: View
     private lateinit var systemContent: View
+    private lateinit var commercialContent: View
+    private lateinit var contentScroll: ScrollView
     private lateinit var wallpaperLyricsSetting: LinearLayout
     private lateinit var wallpaperLyricsSwitch: IcarSwitch
     private lateinit var lyricsTranslationSetting: LinearLayout
     private lateinit var lyricsTranslationSwitch: IcarSwitch
     private lateinit var restartLyricsSetting: LinearLayout
+    private lateinit var commercialRenderer: CommercialSettingsRenderer
+    private lateinit var commercialController: CommercialController
     private var themePalette = IcarThemeColorPalette.resolve(null, false)
     private var renderedNightMode = false
     private var themeObserverRegistered = false
@@ -60,17 +75,35 @@ class MainActivity : AppCompatActivity() {
         smallSizeOption = findViewById(R.id.font_size_small)
         standardSizeOption = findViewById(R.id.font_size_standard)
         largeSizeOption = findViewById(R.id.font_size_large)
-        displayNavigationItem = findViewById(R.id.settings_navigation_display)
-        systemNavigationItem = findViewById(R.id.settings_navigation_system)
+        displayNavigationItem = navigationItem(
+            R.id.settings_navigation_display,
+            R.id.settings_navigation_display_icon,
+            R.id.settings_navigation_display_label
+        )
+        systemNavigationItem = navigationItem(
+            R.id.settings_navigation_system,
+            R.id.settings_navigation_system_icon,
+            R.id.settings_navigation_system_label
+        )
+        commercialNavigationItem = navigationItem(
+            R.id.settings_navigation_entitlement,
+            R.id.settings_navigation_entitlement_icon,
+            R.id.settings_navigation_entitlement_label
+        )
         displayContent = findViewById(R.id.settings_display_content)
         systemContent = findViewById(R.id.settings_system_content)
+        commercialContent = findViewById(R.id.settings_commercial_content)
+        contentScroll = findViewById(R.id.settings_content_scroll)
         wallpaperLyricsSetting = findViewById(R.id.wallpaper_lyrics_setting)
         wallpaperLyricsSwitch = findViewById(R.id.wallpaper_lyrics_switch)
         lyricsTranslationSetting = findViewById(R.id.lyrics_translation_setting)
         lyricsTranslationSwitch = findViewById(R.id.lyrics_translation_switch)
         restartLyricsSetting = findViewById(R.id.restart_lyrics_setting)
 
-        selectedSection = SettingsSection.from(savedInstanceState?.getString(STATE_SELECTED_SECTION))
+        selectedSection = SettingsSection.from(
+            savedInstanceState?.getString(STATE_SELECTED_SECTION)
+                ?: intent.getStringExtra(EXTRA_OPEN_SETTINGS_SECTION)
+        )
 
         currentLineOption.setOnClickListener { setTopbarLines(1) }
         currentAndNextOption.setOnClickListener { setTopbarLines(2) }
@@ -89,12 +122,57 @@ class MainActivity : AppCompatActivity() {
         lyricsTranslationSwitch.setOnCheckedChangeListener { _, enabled ->
             if (!renderingOptions) setLyricsTranslationEnabled(enabled)
         }
-        displayNavigationItem.setOnClickListener { showSection(SettingsSection.DISPLAY) }
-        systemNavigationItem.setOnClickListener { showSection(SettingsSection.SYSTEM) }
+        displayNavigationItem.container.setOnClickListener { showSection(SettingsSection.DISPLAY) }
+        systemNavigationItem.container.setOnClickListener { showSection(SettingsSection.SYSTEM) }
+        commercialNavigationItem.container.setOnClickListener {
+            commercialController.showEntitlementPage()
+            showSection(SettingsSection.COMMERCIAL)
+        }
         restartLyricsSetting.setOnClickListener { restartLyricsOverlay() }
+
+        commercialRenderer = CommercialSettingsRenderer(
+            root = findViewById(android.R.id.content),
+            actions = CommercialViewActions(
+                onOpenEntitlement = {
+                    commercialController.showEntitlementPage()
+                    showSection(SettingsSection.COMMERCIAL)
+                },
+                onCheckout = {
+                    showSection(SettingsSection.COMMERCIAL)
+                    commercialController.showCheckout()
+                },
+                onRetryEntitlement = { commercialController.reloadEntitlement() },
+                onDiscountCodeChanged = { commercialController.changeDiscountCode(it) },
+                onApplyDiscount = { commercialController.applyDiscountCode() },
+                onPaymentMethodChanged = { commercialController.selectPaymentMethod(it) },
+                onPay = { commercialController.createPayment() },
+                onRestore = { commercialController.restorePurchase() }
+            )
+        )
+        commercialRenderer.updateAccent(
+            accentColor = themePalette.accentColor,
+            accentTextColor = themePalette.accentTextColor
+        )
+        commercialController = CommercialController(
+            gateway = CommercialRuntimeFactory.gateway(this),
+            onStateChanged = ::renderCommercialState,
+            onAccessMayHaveChanged = ::refreshCommercialAccess
+        )
+        CommercialVariantUi.handleDebugIntent(this, intent, commercialController)
+        commercialRenderer.render(commercialController.state)
+        commercialController.start()
 
         refreshThemePalette()
         showSection(selectedSection)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getStringExtra(EXTRA_OPEN_SETTINGS_SECTION) == SECTION_COMMERCIAL) {
+            showSection(SettingsSection.COMMERCIAL)
+        }
+        CommercialVariantUi.handleDebugIntent(this, intent, commercialController)
     }
 
     override fun onResume() {
@@ -126,6 +204,11 @@ class MainActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString(STATE_SELECTED_SECTION, selectedSection.name)
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onDestroy() {
+        if (::commercialController.isInitialized) commercialController.close()
+        super.onDestroy()
     }
 
     private fun setTopbarLines(lines: Int) {
@@ -254,37 +337,37 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun setNavigationSelected(item: TextView) {
-        item.setBackgroundResource(R.drawable.bg_settings_navigation_selected)
-        item.backgroundTintList = ColorStateList.valueOf(themePalette.accentColor)
-        item.setTextColor(themePalette.accentTextColor)
-        item.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    private fun setNavigationSelected(item: NavigationItem) {
+        item.container.setBackgroundResource(R.drawable.bg_settings_navigation_selected)
+        item.container.backgroundTintList = ColorStateList.valueOf(themePalette.accentColor)
+        item.icon.imageTintList = ColorStateList.valueOf(themePalette.accentTextColor)
+        item.label.setTextColor(themePalette.accentTextColor)
+        item.label.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     }
 
-    private fun setNavigationUnselected(item: TextView) {
-        item.background = null
-        item.backgroundTintList = null
-        item.setTextColor(ContextCompat.getColor(this, R.color.settings_text_primary))
-        item.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        item.isSelected = false
-        item.contentDescription = item.text
+    private fun setNavigationUnselected(item: NavigationItem) {
+        val textColor = ContextCompat.getColor(this, R.color.settings_text_primary)
+        item.container.background = null
+        item.container.backgroundTintList = null
+        item.icon.imageTintList = ColorStateList.valueOf(textColor)
+        item.label.setTextColor(textColor)
+        item.label.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        item.container.isSelected = false
+        item.container.contentDescription = item.label.text
     }
 
     private fun renderNavigation() {
-        val selectedItem = when (selectedSection) {
-            SettingsSection.DISPLAY -> displayNavigationItem
-            SettingsSection.SYSTEM -> systemNavigationItem
-        }
-        val unselectedItem = when (selectedSection) {
-            SettingsSection.DISPLAY -> systemNavigationItem
-            SettingsSection.SYSTEM -> displayNavigationItem
-        }
-        setNavigationUnselected(unselectedItem)
+        val selectedItem = navigationItem(selectedSection)
+        listOf(
+            displayNavigationItem,
+            systemNavigationItem,
+            commercialNavigationItem
+        ).filterNot { it === selectedItem }.forEach(::setNavigationUnselected)
         setNavigationSelected(selectedItem)
-        selectedItem.isSelected = true
-        selectedItem.contentDescription = getString(
+        selectedItem.container.isSelected = true
+        selectedItem.container.contentDescription = getString(
             R.string.accessibility_navigation_selected,
-            selectedItem.text
+            selectedItem.label.text
         )
     }
 
@@ -300,10 +383,29 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSection(section: SettingsSection) {
         selectedSection = section
+        commercialRenderer.setSummaryVisibleForSection(section != SettingsSection.COMMERCIAL)
         displayContent.visibility = if (section == SettingsSection.DISPLAY) View.VISIBLE else View.GONE
         systemContent.visibility = if (section == SettingsSection.SYSTEM) View.VISIBLE else View.GONE
+        commercialContent.visibility = if (section == SettingsSection.COMMERCIAL) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
         renderNavigation()
+        contentScroll.post { contentScroll.scrollTo(0, 0) }
     }
+
+    private fun navigationItem(section: SettingsSection): NavigationItem = when (section) {
+        SettingsSection.DISPLAY -> displayNavigationItem
+        SettingsSection.SYSTEM -> systemNavigationItem
+        SettingsSection.COMMERCIAL -> commercialNavigationItem
+    }
+
+    private fun navigationItem(containerId: Int, iconId: Int, labelId: Int) = NavigationItem(
+        container = findViewById(containerId),
+        icon = findViewById(iconId),
+        label = findViewById(labelId)
+    )
 
     private fun hasNotificationListenerAccess(): Boolean =
         NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
@@ -338,6 +440,12 @@ class MainActivity : AppCompatActivity() {
             }.getOrNull(),
             nightMode = isNightMode()
         )
+        if (::commercialRenderer.isInitialized) {
+            commercialRenderer.updateAccent(
+                accentColor = themePalette.accentColor,
+                accentTextColor = themePalette.accentTextColor
+            )
+        }
         if (::currentLineOption.isInitialized) updateOptions()
     }
 
@@ -379,6 +487,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun refreshCommercialAccess() {
+        if (!LyricsStartupPolicy.hasRequiredAccess(
+                overlayAccess = Settings.canDrawOverlays(this),
+                notificationAccess = hasNotificationListenerAccess()
+            )
+        ) return
+        val intent = Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_CHANGED
+        }
+        if (LyricsOverlayService.isRunning) {
+            startService(intent)
+        } else {
+            ContextCompat.startForegroundService(this, intent)
+        }
+    }
+
+    private fun renderCommercialState(state: CommercialUiState) {
+        commercialRenderer.render(state)
+        if (state.checkout is CheckoutState.Paid || state.recovery is RecoveryState.Success) {
+            showSection(SettingsSection.COMMERCIAL)
+        }
+    }
+
     private fun notifyOverlay(action: String) {
         if (!LyricsOverlayService.isRunning) return
         startService(Intent(this, LyricsOverlayService::class.java).apply {
@@ -386,8 +517,10 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    private companion object {
+    companion object {
         const val STATE_SELECTED_SECTION = "selected_settings_section"
+        const val EXTRA_OPEN_SETTINGS_SECTION = "open_settings_section"
+        const val SECTION_COMMERCIAL = "COMMERCIAL"
         const val TOPBAR_LINES_DEFAULT = 2
         const val FONT_SCALE_SMALL = 88
         const val FONT_SCALE_STANDARD = 100
@@ -396,11 +529,18 @@ class MainActivity : AppCompatActivity() {
 
     private enum class SettingsSection {
         DISPLAY,
-        SYSTEM;
+        SYSTEM,
+        COMMERCIAL;
 
         companion object {
             fun from(value: String?): SettingsSection = entries.firstOrNull { it.name == value }
                 ?: DISPLAY
         }
     }
+
+    private data class NavigationItem(
+        val container: View,
+        val icon: ImageView,
+        val label: TextView
+    )
 }

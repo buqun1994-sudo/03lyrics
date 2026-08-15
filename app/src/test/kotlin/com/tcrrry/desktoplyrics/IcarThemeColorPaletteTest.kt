@@ -14,6 +14,14 @@ class IcarThemeColorPaletteTest {
     }
 
     @Test
+    fun `runtime pink theme key resolves to the verified pink primary color`() {
+        val palette = IcarThemeColorPalette.resolve(themeKey = 33, nightMode = true)
+
+        assertEquals(0xFFDE5185.toInt(), palette.accentColor)
+        assertEquals(0xFFFFFFFF.toInt(), palette.accentTextColor)
+    }
+
+    @Test
     fun `yellow theme uses dark selected text for readability`() {
         val palette = IcarThemeColorPalette.resolve(themeKey = 64, nightMode = false)
 

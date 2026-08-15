@@ -7,6 +7,7 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:baselineAligned="false"
         android:orientation="horizontal">
 
         <LinearLayout
@@ -19,305 +20,154 @@
             android:paddingEnd="@dimen/settings_sidebar_padding_horizontal"
             android:paddingBottom="@dimen/settings_content_padding_vertical">
 
-            <TextView
-                style="@style/SettingsText.Body1.Emphasis"
+            <RelativeLayout
                 android:layout_width="match_parent"
-                android:layout_height="@dimen/settings_sidebar_title_height"
-                android:gravity="center_vertical"
-                android:text="@string/settings_title" />
+                android:layout_height="@dimen/settings_sidebar_title_height">
 
-            <TextView
+                <TextView
+                    android:id="@+id/settings_title_text"
+                    style="@style/SettingsText.Title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_centerInParent="true"
+                    android:gravity="center"
+                    android:text="@string/settings_title" />
+
+                <TextView
+                    android:id="@+id/settings_entitlement_badge"
+                    android:layout_width="@dimen/commercial_badge_width"
+                    android:layout_height="@dimen/commercial_badge_height"
+                    android:layout_alignBottom="@id/settings_title_text"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginBottom="8dp"
+                    android:layout_toEndOf="@id/settings_title_text"
+                    android:background="@drawable/bg_commercial_corner_badge"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:text="@string/commercial_badge_checking"
+                    android:textColor="@color/commercial_expired_text"
+                    android:textSize="@dimen/commercial_badge_text" />
+            </RelativeLayout>
+
+            <LinearLayout
                 android:id="@+id/settings_navigation_display"
-                style="@style/SettingsText.Body1.Emphasis"
                 android:layout_width="@dimen/settings_navigation_width"
                 android:layout_height="@dimen/settings_navigation_height"
                 android:layout_marginTop="@dimen/settings_navigation_margin_top"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center_vertical"
-                android:paddingStart="@dimen/settings_sidebar_padding_horizontal"
-                android:paddingEnd="@dimen/settings_sidebar_padding_horizontal"
-                android:text="@string/settings_navigation_display" />
+                android:orientation="horizontal"
+                android:paddingStart="@dimen/settings_navigation_padding_start"
+                android:paddingEnd="@dimen/settings_navigation_padding_end">
 
-            <TextView
+                <ImageView
+                    android:id="@+id/settings_navigation_display_icon"
+                    android:layout_width="@dimen/settings_navigation_icon_size"
+                    android:layout_height="@dimen/settings_navigation_icon_size"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_settings_navigation_display" />
+
+                <TextView
+                    android:id="@+id/settings_navigation_display_label"
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="@dimen/settings_navigation_label_spacing"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical|start"
+                    android:importantForAccessibility="no"
+                    android:text="@string/settings_navigation_display" />
+            </LinearLayout>
+
+            <LinearLayout
                 android:id="@+id/settings_navigation_system"
-                style="@style/SettingsText.Body1.Emphasis"
                 android:layout_width="@dimen/settings_navigation_width"
                 android:layout_height="@dimen/settings_navigation_height"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center_vertical"
-                android:paddingStart="@dimen/settings_sidebar_padding_horizontal"
-                android:paddingEnd="@dimen/settings_sidebar_padding_horizontal"
-                android:text="@string/settings_navigation_system" />
+                android:orientation="horizontal"
+                android:paddingStart="@dimen/settings_navigation_padding_start"
+                android:paddingEnd="@dimen/settings_navigation_padding_end">
+
+                <ImageView
+                    android:id="@+id/settings_navigation_system_icon"
+                    android:layout_width="@dimen/settings_navigation_icon_size"
+                    android:layout_height="@dimen/settings_navigation_icon_size"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_settings_navigation_system" />
+
+                <TextView
+                    android:id="@+id/settings_navigation_system_label"
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="@dimen/settings_navigation_label_spacing"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical|start"
+                    android:importantForAccessibility="no"
+                    android:text="@string/settings_navigation_system" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/settings_navigation_entitlement"
+                android:layout_width="@dimen/settings_navigation_width"
+                android:layout_height="@dimen/settings_navigation_height"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="@dimen/settings_navigation_padding_start"
+                android:paddingEnd="@dimen/settings_navigation_padding_end">
+
+                <ImageView
+                    android:id="@+id/settings_navigation_entitlement_icon"
+                    android:layout_width="@dimen/settings_navigation_icon_size"
+                    android:layout_height="@dimen/settings_navigation_icon_size"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_settings_navigation_entitlement" />
+
+                <TextView
+                    android:id="@+id/settings_navigation_entitlement_label"
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="@dimen/settings_navigation_label_spacing"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical|start"
+                    android:importantForAccessibility="no"
+                    android:text="@string/settings_navigation_entitlement" />
+            </LinearLayout>
         </LinearLayout>
 
-        <ScrollView
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:background="@drawable/bg_settings_content"
-            android:clipToPadding="false"
-            android:fillViewport="true"
-            android:overScrollMode="never">
+            android:orientation="vertical">
 
-            <FrameLayout
+            <include layout="@layout/view_commercial_summary" />
+
+            <ScrollView
+                android:id="@+id/settings_content_scroll"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content">
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:clipToPadding="false"
+                android:fillViewport="true"
+                android:overScrollMode="never">
 
-                <LinearLayout
-                    android:id="@+id/settings_display_content"
+                <FrameLayout
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:paddingStart="@dimen/settings_content_padding_start"
-                    android:paddingTop="@dimen/settings_content_padding_vertical"
-                    android:paddingEnd="@dimen/settings_content_padding_end"
-                    android:paddingBottom="@dimen/settings_content_padding_vertical">
+                    android:layout_height="wrap_content">
 
-                <TextView
-                    style="@style/SettingsText.Body1.Emphasis"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_topbar_display" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="@dimen/settings_segment_height"
-                    android:layout_marginTop="@dimen/settings_control_spacing"
-                    android:background="@drawable/bg_settings_segment_track"
-                    android:orientation="horizontal"
-                    android:padding="@dimen/settings_segment_padding">
-
-                    <TextView
-                        android:id="@+id/topbar_lines_current"
-                        style="@style/SettingsText.Option"
-                        android:layout_width="0dp"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:text="@string/settings_topbar_one_line" />
-
-                    <TextView
-                        android:id="@+id/topbar_lines_current_next"
-                        style="@style/SettingsText.Option"
-                        android:layout_width="0dp"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:text="@string/settings_topbar_two_lines" />
-                </LinearLayout>
-
-                <TextView
-                    style="@style/SettingsText.Body1.Emphasis"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/settings_group_spacing"
-                    android:text="@string/settings_lyrics_size" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="@dimen/settings_segment_height"
-                    android:layout_marginTop="@dimen/settings_control_spacing"
-                    android:background="@drawable/bg_settings_segment_track"
-                    android:orientation="horizontal"
-                    android:padding="@dimen/settings_segment_padding">
-
-                    <TextView
-                        android:id="@+id/font_size_small"
-                        style="@style/SettingsText.Option"
-                        android:layout_width="0dp"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:text="@string/settings_size_small" />
-
-                    <TextView
-                        android:id="@+id/font_size_standard"
-                        style="@style/SettingsText.Option"
-                        android:layout_width="0dp"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:text="@string/settings_size_standard" />
-
-                    <TextView
-                        android:id="@+id/font_size_large"
-                        style="@style/SettingsText.Option"
-                        android:layout_width="0dp"
-                        android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:text="@string/settings_size_large" />
-                </LinearLayout>
-
-                <TextView
-                    style="@style/SettingsText.Body1.Emphasis"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/settings_group_spacing"
-                    android:text="@string/settings_other" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/settings_control_spacing"
-                    android:orientation="horizontal">
-
-                    <LinearLayout
-                        android:id="@+id/wallpaper_lyrics_setting"
-                        android:layout_width="@dimen/settings_switch_card_width"
-                        android:layout_height="@dimen/settings_switch_card_height"
-                        android:background="@drawable/bg_settings_card"
-                        android:clickable="true"
-                        android:focusable="false"
-                        android:gravity="center_vertical"
-                        android:importantForAccessibility="no"
-                        android:orientation="horizontal"
-                        android:paddingStart="@dimen/settings_switch_card_padding_start"
-                        android:paddingEnd="@dimen/settings_switch_card_padding_start">
-
-                        <com.tcrrry.desktoplyrics.IcarSwitch
-                            android:id="@+id/wallpaper_lyrics_switch"
-                            android:layout_width="@dimen/settings_switch_width"
-                            android:layout_height="@dimen/settings_switch_height"
-                            android:clickable="true"
-                            android:contentDescription="@string/settings_wallpaper_lyrics" />
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="@dimen/settings_switch_label_spacing"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                style="@style/SettingsText.Body2.Emphasis"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/settings_wallpaper_lyrics" />
-
-                            <TextView
-                                style="@style/SettingsText.Caption2"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="@dimen/settings_switch_caption_spacing"
-                                android:maxLines="1"
-                                android:text="@string/settings_wallpaper_lyrics_summary" />
-                        </LinearLayout>
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:id="@+id/lyrics_translation_setting"
-                        android:layout_width="@dimen/settings_switch_card_width"
-                        android:layout_height="@dimen/settings_switch_card_height"
-                        android:layout_marginStart="@dimen/settings_switch_card_gap"
-                        android:background="@drawable/bg_settings_card"
-                        android:clickable="true"
-                        android:focusable="false"
-                        android:gravity="center_vertical"
-                        android:importantForAccessibility="no"
-                        android:orientation="horizontal"
-                        android:paddingStart="@dimen/settings_switch_card_padding_start"
-                        android:paddingEnd="@dimen/settings_switch_card_padding_start">
-
-                        <com.tcrrry.desktoplyrics.IcarSwitch
-                            android:id="@+id/lyrics_translation_switch"
-                            android:layout_width="@dimen/settings_switch_width"
-                            android:layout_height="@dimen/settings_switch_height"
-                            android:clickable="true"
-                            android:contentDescription="@string/settings_lyrics_translation" />
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="@dimen/settings_switch_label_spacing"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                style="@style/SettingsText.Body2.Emphasis"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/settings_lyrics_translation" />
-
-                            <TextView
-                                style="@style/SettingsText.Caption2"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="@dimen/settings_switch_caption_spacing"
-                                android:maxLines="1"
-                                android:text="@string/settings_lyrics_translation_summary" />
-                        </LinearLayout>
-                    </LinearLayout>
-                </LinearLayout>
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/settings_system_content"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:paddingStart="@dimen/settings_content_padding_start"
-                    android:paddingTop="@dimen/settings_content_padding_vertical"
-                    android:paddingEnd="@dimen/settings_content_padding_end"
-                    android:paddingBottom="@dimen/settings_content_padding_vertical"
-                    android:visibility="gone">
-
-                <LinearLayout
-                    android:id="@+id/restart_lyrics_setting"
-                    android:layout_width="match_parent"
-                    android:layout_height="@dimen/settings_switch_card_height"
-                    android:background="@drawable/bg_settings_card"
-                    android:clickable="true"
-                    android:contentDescription="@string/accessibility_restart_lyrics"
-                    android:focusable="true"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingStart="@dimen/settings_switch_card_padding_start"
-                    android:paddingEnd="@dimen/settings_switch_card_padding_start">
-
-                    <ImageView
-                        android:layout_width="@dimen/settings_switch_width"
-                        android:layout_height="@dimen/settings_switch_height"
-                        android:importantForAccessibility="no"
-                        android:padding="3dp"
-                        android:src="@drawable/ic_settings_restart" />
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="@dimen/settings_switch_label_spacing"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
-
-                        <TextView
-                            style="@style/SettingsText.Body2.Emphasis"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/settings_restart_lyrics" />
-
-                        <TextView
-                            style="@style/SettingsText.Caption2"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="@dimen/settings_switch_caption_spacing"
-                            android:maxLines="1"
-                            android:text="@string/settings_restart_lyrics_summary" />
-                    </LinearLayout>
-                </LinearLayout>
-                </LinearLayout>
-            </FrameLayout>
-        </ScrollView>
+                    <include layout="@layout/content_settings_display" />
+                    <include layout="@layout/content_settings_system" />
+                    <include layout="@layout/content_settings_commercial" />
+                </FrameLayout>
+            </ScrollView>
+        </LinearLayout>
     </LinearLayout>
 </FrameLayout>
