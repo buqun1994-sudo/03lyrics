@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">桌面歌词</string>
+    <string name="app_name">03歌词</string>
     <string name="settings_title">歌词设置</string>
     <string name="settings_navigation_display">显示</string>
     <string name="settings_navigation_system">系统</string>
@@ -17,6 +17,10 @@
     <string name="settings_restart_lyrics">重启悬浮歌词</string>
     <string name="settings_restart_lyrics_summary">歌词显示异常时手动恢复</string>
     <string name="settings_restart_requires_authorization">系统授权未完成，暂时无法重启悬浮歌词</string>
+    <string name="notification_recovery_title">03歌词需要恢复授权</string>
+    <string name="notification_recovery_missing_both">播放状态与悬浮显示授权已失效，点按打开设置</string>
+    <string name="notification_recovery_missing_overlay">悬浮显示授权已失效，点按打开设置</string>
+    <string name="notification_recovery_missing_notification_access">播放状态授权已失效，点按打开设置</string>
     <string name="accessibility_restart_lyrics">重启悬浮歌词，歌词显示异常时手动恢复</string>
     <string name="accessibility_navigation_selected">%1$s，已选中</string>
     <string name="accessibility_switch_on">已开启</string>

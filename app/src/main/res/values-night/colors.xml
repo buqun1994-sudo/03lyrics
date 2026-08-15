@@ -9,7 +9,6 @@
     <color name="settings_text_primary">#FFFFFFFF</color>
     <color name="settings_text_secondary">#8FFFFFFF</color>
     <color name="settings_text_option">#B2FFFFFF</color>
-    <color name="settings_text_on_accent">#FFFFFFFF</color>
     <color name="settings_accent">#1A8CFF</color>
     <color name="settings_switch_thumb_color">#FFFFFFFF</color>
     <color name="settings_switch_track_off">#66727272</color>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.DesktopLyrics" parent="@style/Theme03LyricsBase">
+        <item name="android:windowLightNavigationBar">@bool/settings_light_system_bars</item>
+    </style>
+</resources>

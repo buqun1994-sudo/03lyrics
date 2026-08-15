@@ -275,9 +275,9 @@ class MainActivity : AppCompatActivity() {
         NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
 
     private fun restartLyricsOverlay() {
-        if (!SettingsAuthorizationPolicy.canRunLyrics(
-                notificationAccess = hasNotificationListenerAccess(),
-                overlayAccess = Settings.canDrawOverlays(this)
+        if (!LyricsStartupPolicy.hasRequiredAccess(
+                overlayAccess = Settings.canDrawOverlays(this),
+                notificationAccess = hasNotificationListenerAccess()
             )
         ) {
             Toast.makeText(
@@ -330,9 +330,9 @@ class MainActivity : AppCompatActivity() {
             Configuration.UI_MODE_NIGHT_YES
 
     private fun ensureLyricsOverlayForSettings() {
-        if (!SettingsAuthorizationPolicy.canRunLyrics(
-                notificationAccess = hasNotificationListenerAccess(),
-                overlayAccess = Settings.canDrawOverlays(this)
+        if (!LyricsStartupPolicy.hasRequiredAccess(
+                overlayAccess = Settings.canDrawOverlays(this),
+                notificationAccess = hasNotificationListenerAccess()
             )
         ) return
         val intent = Intent(this, LyricsOverlayService::class.java).apply {
@@ -369,9 +369,4 @@ class MainActivity : AppCompatActivity() {
                 ?: DISPLAY
         }
     }
-}
-
-internal object SettingsAuthorizationPolicy {
-    fun canRunLyrics(notificationAccess: Boolean, overlayAccess: Boolean): Boolean =
-        notificationAccess && overlayAccess
 }

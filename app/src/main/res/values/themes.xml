@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.DesktopLyrics" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <style name="Theme03LyricsBase" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">@bool/settings_light_system_bars</item>
-        <item name="android:windowLightNavigationBar">@bool/settings_light_system_bars</item>
         <item name="android:statusBarColor">@color/settings_screen_background</item>
         <item name="android:navigationBarColor">@color/settings_screen_background</item>
         <item name="android:windowBackground">@android:color/transparent</item>
@@ -14,6 +13,8 @@
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+
+    <style name="Theme.DesktopLyrics" parent="@style/Theme03LyricsBase" />
 
     <style name="Animation.Icar.StandardWindow" parent="@android:style/Animation">
         <item name="android:windowEnterAnimation">@anim/icar_standard_window_enter</item>

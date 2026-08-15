@@ -72,6 +72,9 @@ class LyricsOverlayService : Service() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    private val notificationManager by lazy {
+        getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    }
     private val windowManager by lazy { getSystemService(Context.WINDOW_SERVICE) as WindowManager }
     private val sessionManager by lazy { getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager }
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -101,6 +104,7 @@ class LyricsOverlayService : Service() {
     private var displayState: IcarDisplayState? = null
     private var desktopSurfaceOccupied = false
     private var monitorStarted = false
+    private var foregroundStarted = false
     private var audioRouteMonitorStarted = false
     private var avrcpEventMonitorStarted = false
     private var currentController: MediaController? = null
@@ -223,11 +227,12 @@ class LyricsOverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        createNotificationChannel()
+        startAsForeground()
         isRunning = true
         announceOverlayState()
         loadRuntimePreferences()
         SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
-        createNotificationChannel()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -239,17 +244,63 @@ class LyricsOverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
-            stopSelf()
+        val source = startupSource(intent)
+        val overlayAccess = Settings.canDrawOverlays(this)
+        val notificationAccess = hasNotificationListenerAccess()
+        val decision = LyricsStartupPolicy.decide(
+            action = intent?.action,
+            overlayAccess = overlayAccess,
+            notificationAccess = notificationAccess
+        )
+
+        if (decision == LyricsStartupOutcome.USER_STOPPED) {
+            if (decision.clearsAutoStart) {
+                prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
+            }
+            clearRecoveryNotification()
+            releaseRuntimeResources(prepareForRestart = true)
+            stopForegroundNotification()
+            stopSelfResult(startId)
+            logStartupOutcome(source, overlayAccess, notificationAccess, decision)
             return START_NOT_STICKY
         }
 
-        if (intent?.action == ACTION_RESTART) {
-            if (!Settings.canDrawOverlays(this) || !hasNotificationListenerAccess()) {
-                stopSelf()
-                return START_NOT_STICKY
+        if (decision == LyricsStartupOutcome.RECOVERY) {
+            enterRecoveryState(startId, overlayAccess, notificationAccess)
+            logStartupOutcome(source, overlayAccess, notificationAccess, decision)
+            return START_NOT_STICKY
+        }
+
+        clearRecoveryNotification()
+        ensureForegroundNotification()
+        val result = try {
+            handleAuthorizedCommand(intent)
+        } catch (error: RuntimeException) {
+            val latestOverlayAccess = Settings.canDrawOverlays(this)
+            val latestNotificationAccess = hasNotificationListenerAccess()
+            if (LyricsStartupPolicy.hasRequiredAccess(
+                    overlayAccess = latestOverlayAccess,
+                    notificationAccess = latestNotificationAccess
+                )
+            ) {
+                throw error
             }
+            Log.w(LOG_TAG, "Authorization changed while starting; entering recovery state")
+            enterRecoveryState(startId, latestOverlayAccess, latestNotificationAccess)
+            logStartupOutcome(
+                source,
+                latestOverlayAccess,
+                latestNotificationAccess,
+                LyricsStartupOutcome.RECOVERY
+            )
+            return START_NOT_STICKY
+        }
+        logStartupOutcome(source, overlayAccess, notificationAccess, decision)
+        return result
+    }
+
+    private fun handleAuthorizedCommand(intent: Intent?): Int {
+        if (intent?.action == ACTION_RESTART) {
             restartRuntime()
             return START_STICKY
         }
@@ -312,11 +363,6 @@ class LyricsOverlayService : Service() {
             }
         }
 
-        if (!Settings.canDrawOverlays(this) || !hasNotificationListenerAccess()) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
         prefs.edit().putBoolean(PREF_AUTO_START, true).apply()
         startRuntime()
         return START_STICKY
@@ -354,7 +400,6 @@ class LyricsOverlayService : Service() {
     }
 
     private fun startRuntime() {
-        startAsForeground()
         displayStateMonitor.start()
         if (overlayRoot == null) createOverlay()
         startMediaMonitor()
@@ -562,7 +607,7 @@ class LyricsOverlayService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification_lyrics)
             .setContentTitle("${getString(R.string.app_name)} 正在监听")
             .setContentText("本地实时同步当前媒体会话")
             .setOngoing(true)
@@ -580,12 +625,109 @@ class LyricsOverlayService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        foregroundStarted = true
+    }
+
+    private fun ensureForegroundNotification() {
+        if (!foregroundStarted) startAsForeground()
+    }
+
+    private fun stopForegroundNotification() {
+        if (!foregroundStarted) return
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        foregroundStarted = false
+    }
+
+    private fun enterRecoveryState(
+        startId: Int,
+        overlayAccess: Boolean,
+        notificationAccess: Boolean
+    ) {
+        releaseRuntimeResources(prepareForRestart = true)
+        stopForegroundNotification()
+        notificationManager.notify(
+            RECOVERY_NOTIFICATION_ID,
+            buildRecoveryNotification(overlayAccess, notificationAccess)
+        )
+        stopSelfResult(startId)
+    }
+
+    private fun buildRecoveryNotification(
+        overlayAccess: Boolean,
+        notificationAccess: Boolean
+    ): android.app.Notification {
+        val message = getString(
+            when {
+                !overlayAccess && !notificationAccess -> {
+                    R.string.notification_recovery_missing_both
+                }
+                !overlayAccess -> R.string.notification_recovery_missing_overlay
+                else -> R.string.notification_recovery_missing_notification_access
+            }
+        )
+        val settingsIntent = PendingIntent.getActivity(
+            this,
+            RECOVERY_SETTINGS_REQUEST_CODE,
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_lyrics)
+            .setContentTitle(getString(R.string.notification_recovery_title))
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setContentIntent(settingsIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .build()
+    }
+
+    private fun clearRecoveryNotification() {
+        notificationManager.cancel(RECOVERY_NOTIFICATION_ID)
+    }
+
+    private fun startupSource(intent: Intent?): String {
+        val explicitSource = intent?.getStringExtra(EXTRA_START_SOURCE)
+        if (explicitSource == START_SOURCE_BOOT_COMPLETED ||
+            explicitSource == START_SOURCE_PACKAGE_REPLACED
+        ) {
+            return explicitSource
+        }
+        return when (intent?.action) {
+            null -> "system_restart"
+            ACTION_START -> "explicit_start"
+            ACTION_STOP -> "user_stop"
+            ACTION_RESTART -> "manual_restart"
+            ACTION_SETTINGS_OPENED -> "settings_opened"
+            ACTION_SETTINGS_CLOSED -> "settings_closed"
+            else -> "runtime_command"
+        }
+    }
+
+    private fun logStartupOutcome(
+        source: String,
+        overlayAccess: Boolean,
+        notificationAccess: Boolean,
+        outcome: LyricsStartupOutcome
+    ) {
+        Log.i(
+            LOG_TAG,
+            "Lyrics startup decision source=$source overlayAccess=$overlayAccess " +
+                "notificationAccess=$notificationAccess outcome=${outcome.logValue}"
+        )
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(
+        notificationManager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
                 "顶栏歌词",
@@ -1513,6 +1655,7 @@ class LyricsOverlayService : Service() {
             "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_LYRICS"
         const val ACTION_SETTINGS_OPENED = "com.tcrrry.desktoplyrics.action.SETTINGS_OPENED"
         const val ACTION_SETTINGS_CLOSED = "com.tcrrry.desktoplyrics.action.SETTINGS_CLOSED"
+        const val EXTRA_START_SOURCE = "start_source"
         const val EXTRA_BACKGROUND_MODE = "background_mode"
         const val EXTRA_FONT_SCALE_PERCENT = "font_scale_percent"
         const val EXTRA_TOPBAR_LINES = "topbar_lines"
@@ -1532,6 +1675,8 @@ class LyricsOverlayService : Service() {
         const val FONT_SCALE_MAX_PERCENT = 150
         const val FONT_SCALE_DEFAULT_PERCENT = 100
         const val WALLPAPER_LYRICS_DEFAULT = true
+        const val START_SOURCE_BOOT_COMPLETED = "boot_completed"
+        const val START_SOURCE_PACKAGE_REPLACED = "package_replaced"
 
         fun compactMinimumHeightDp(percent: Int): Int {
             val scale = percent.coerceIn(FONT_SCALE_MIN_PERCENT, FONT_SCALE_MAX_PERCENT) / 100f
@@ -1540,6 +1685,8 @@ class LyricsOverlayService : Service() {
         private const val LOG_TAG = "DesktopLyrics"
         private const val CHANNEL_ID = "lobsta_lyrics_overlay"
         private const val NOTIFICATION_ID = 4202
+        private const val RECOVERY_NOTIFICATION_ID = 4203
+        private const val RECOVERY_SETTINGS_REQUEST_CODE = 2
         private const val BLUETOOTH_POSITION_RESET_TOLERANCE_MS = 2_500L
         private const val TOPBAR_LINES_DEFAULT = 2
         private const val DESIGN_WIDTH = 1920
@@ -1564,4 +1711,28 @@ class LyricsOverlayService : Service() {
         var isRunning: Boolean = false
             private set
     }
+}
+
+internal enum class LyricsStartupOutcome(
+    val logValue: String,
+    val clearsAutoStart: Boolean
+) {
+    RUNNING("running", false),
+    RECOVERY("recovery", false),
+    USER_STOPPED("stopped", true)
+}
+
+internal object LyricsStartupPolicy {
+    fun decide(
+        action: String?,
+        overlayAccess: Boolean,
+        notificationAccess: Boolean
+    ): LyricsStartupOutcome = when {
+        action == LyricsOverlayService.ACTION_STOP -> LyricsStartupOutcome.USER_STOPPED
+        hasRequiredAccess(overlayAccess, notificationAccess) -> LyricsStartupOutcome.RUNNING
+        else -> LyricsStartupOutcome.RECOVERY
+    }
+
+    fun hasRequiredAccess(overlayAccess: Boolean, notificationAccess: Boolean): Boolean =
+        overlayAccess && notificationAccess
 }

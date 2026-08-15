@@ -9,11 +9,51 @@ import org.junit.Test
 class SettingsBehaviorTest {
 
     @Test
-    fun `lyrics auto recovery requires both system authorizations`() {
-        assertTrue(SettingsAuthorizationPolicy.canRunLyrics(true, true))
-        assertFalse(SettingsAuthorizationPolicy.canRunLyrics(true, false))
-        assertFalse(SettingsAuthorizationPolicy.canRunLyrics(false, true))
-        assertFalse(SettingsAuthorizationPolicy.canRunLyrics(false, false))
+    fun `authorized startup enters the single lyrics runtime`() {
+        val decision = LyricsStartupPolicy.decide(
+            action = LyricsOverlayService.ACTION_START,
+            overlayAccess = true,
+            notificationAccess = true
+        )
+
+        assertEquals(LyricsStartupOutcome.RUNNING, decision)
+        assertFalse(decision.clearsAutoStart)
+    }
+
+    @Test
+    fun `missing overlay access enters recovery without clearing auto start`() {
+        val decision = LyricsStartupPolicy.decide(
+            action = LyricsOverlayService.ACTION_START,
+            overlayAccess = false,
+            notificationAccess = true
+        )
+
+        assertEquals(LyricsStartupOutcome.RECOVERY, decision)
+        assertFalse(decision.clearsAutoStart)
+    }
+
+    @Test
+    fun `missing notification access enters recovery without clearing auto start`() {
+        val decision = LyricsStartupPolicy.decide(
+            action = LyricsOverlayService.ACTION_START,
+            overlayAccess = true,
+            notificationAccess = false
+        )
+
+        assertEquals(LyricsStartupOutcome.RECOVERY, decision)
+        assertFalse(decision.clearsAutoStart)
+    }
+
+    @Test
+    fun `user stop clears auto start even when authorizations are missing`() {
+        val decision = LyricsStartupPolicy.decide(
+            action = LyricsOverlayService.ACTION_STOP,
+            overlayAccess = false,
+            notificationAccess = false
+        )
+
+        assertEquals(LyricsStartupOutcome.USER_STOPPED, decision)
+        assertTrue(decision.clearsAutoStart)
     }
 
     @Test

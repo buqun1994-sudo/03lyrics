@@ -5,7 +5,7 @@
 ## 1. 项目身份
 
 1. 本仓库是 `03lyrics`，面向 iCAR 03 车机的轻量悬浮歌词应用。
-2. Android 应用当前显示名称为“桌面歌词”，包名为 `com.tcrrry.desktoplyrics`；未经迁移方案确认，不改包名、签名身份或现有升级链。
+2. Android 应用当前显示名称为“03歌词”，包名为 `com.tcrrry.desktoplyrics`；未经迁移方案确认，不改包名、签名身份或现有升级链。
 3. 本项目已是正式 Android 工程，不处于模板初始化状态；禁止运行 `project-bootstrap` 或写入 `INIT_REQUIRED`。
 4. `03桌面` 是独立产品，不是本项目模块。应用抽屉、APK 安装、应用卸载、快捷控制和右侧抽屉属于 `03桌面`，不得混入本仓库。
 5. 本仓库保留上游 `tcrrry/desktop-lyrics` 的历史作为来源追溯；默认远端 `origin` 必须指向 `buqun1994-sudo/03lyrics`。

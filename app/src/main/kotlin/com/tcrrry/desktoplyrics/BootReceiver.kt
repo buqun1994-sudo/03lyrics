@@ -22,6 +22,15 @@ class BootReceiver : BroadcastReceiver() {
             context,
             Intent(context, LyricsOverlayService::class.java).apply {
                 action = LyricsOverlayService.ACTION_START
+                putExtra(
+                    LyricsOverlayService.EXTRA_START_SOURCE,
+                    when (intent.action) {
+                        Intent.ACTION_BOOT_COMPLETED -> {
+                            LyricsOverlayService.START_SOURCE_BOOT_COMPLETED
+                        }
+                        else -> LyricsOverlayService.START_SOURCE_PACKAGE_REPLACED
+                    }
+                )
             }
         )
     }
