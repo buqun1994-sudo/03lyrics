@@ -387,6 +387,7 @@
     const playback = {
       hasSession:false, track:'', artist:'', album:'', state:'paused', positionMs:0,
       durationMs:0, speed:0, timelineReady:true, receivedAt:performance.now(), key:'', lyrics:[], active:-1,
+      activeStarted:false,
       cover:'', coverIsNative:false, requestId:0
     };
     let lyricAdvanceTimer=0,compactLineCount=2;
@@ -513,6 +514,7 @@
       playback.lyrics = lines || [];
       resolvedTranslationAvailable = playback.lyrics.some(line => !!line.translation);
       playback.active = -1;
+      playback.activeStarted = false;
       renderedLyricsKey = playback.key;
       pendingTrackTransition = false;
       if (!playback.lyrics.length) {
@@ -553,6 +555,7 @@
       playback.lyrics=[];
       resolvedTranslationAvailable=false;
       playback.active=-1;
+      playback.activeStarted=false;
       clearChildren(ui.lyrics);
       clearCompactLyric();
       updateCompactLayout();
@@ -601,8 +604,9 @@
       document.body.classList.remove('lyrics-visible');
     }
 
-    function setCompactTiming(viewport, delay, timeBudget) {
+    function setCompactTiming(viewport, delay, timeBudget, scrollReady) {
       viewport.dataset.requestedDelay = String(delay);
+      viewport.dataset.scrollReady = scrollReady ? 'true' : 'false';
       if (Number.isFinite(timeBudget) && timeBudget > 0) {
         viewport.dataset.timeBudget = String(timeBudget);
       } else {
@@ -610,10 +614,10 @@
       }
     }
 
-    function compactTextNode(className, text, delay, timeBudget) {
+    function compactTextNode(className, text, delay, timeBudget, scrollReady) {
       const viewport = document.createElement('span');
       viewport.className = className + ' compact-text-viewport';
-      setCompactTiming(viewport, delay, timeBudget);
+      setCompactTiming(viewport, delay, timeBudget, scrollReady);
       const content = document.createElement('span');
       content.className = 'compact-scroll-text';
       content.textContent = text;
@@ -652,7 +656,7 @@
           );
           content.style.fontSize=fitted.toFixed(2)+'px';
           const remainingOverflow=Math.ceil(content.scrollWidth-viewport.clientWidth);
-          if(remainingOverflow<=4||isSecondary)return;
+          if(remainingOverflow<=4||isSecondary||viewport.dataset.scrollReady!=='true')return;
           const requestedDelay=Math.max(0,Number(viewport.dataset.requestedDelay||0));
           const timeBudget=Number(viewport.dataset.timeBudget||0);
           const hasDeadline=Number.isFinite(timeBudget)&&timeBudget>0;
@@ -669,7 +673,7 @@
       });
     }
 
-    function setCompactLyric(text, animate, translationText, followingText, currentTimeBudget) {
+    function setCompactLyric(text, animate, translationText, followingText, currentTimeBudget, scrollReady) {
       const value = String(text || '暂无歌词');
       const translation = String(translationText || '').trim();
       const following = String(followingText || '').trim();
@@ -677,7 +681,7 @@
       if (key === compactLineKey && ui.compactLyric.children.length) {
         const current = ui.compactLyric.querySelector('.compact-line.current');
         const currentViewport = current && current.querySelector('.compact-line-text');
-        if (currentViewport) setCompactTiming(currentViewport, .75, currentTimeBudget);
+        if (currentViewport) setCompactTiming(currentViewport, .75, currentTimeBudget, scrollReady);
         updateCompactMarquees();
         return;
       }
@@ -691,12 +695,12 @@
       const next = document.createElement('div');
       next.className = 'compact-line' + (translation ? ' has-translation' : '') +
         (animate && previous ? '' : ' current no-transition');
-      next.appendChild(compactTextNode('compact-line-text', value, .75, currentTimeBudget));
+      next.appendChild(compactTextNode('compact-line-text', value, .75, currentTimeBudget, scrollReady));
       if (translation) {
-        next.appendChild(compactTextNode('compact-translation-line', translation, 0, 0));
+        next.appendChild(compactTextNode('compact-translation-line', translation, 0, 0, false));
       }
       if (following) {
-        next.appendChild(compactTextNode('compact-next-line', following, 0, 0));
+        next.appendChild(compactTextNode('compact-next-line', following, 0, 0, false));
       }
 
       if (!animate || !previous) {
@@ -869,8 +873,10 @@
           else high = mid - 1;
         }
       }
-      if (!force && index === playback.active) return;
+      const activeStarted = !!lines[index].plain || lines[index].t <= position;
+      if (!force && index === playback.active && activeStarted === playback.activeStarted) return;
       playback.active = index;
+      playback.activeStarted = activeStarted;
       const nodes = ui.lyrics.children;
       for (let i = 0; i < nodes.length; i++) {
         nodes[i].classList.toggle('active', i === index);
@@ -893,7 +899,8 @@
           animateCompact && !force && document.body.classList.contains('compact'),
           lyricsTranslationEnabled ? lines[index].translation : '',
           lines[index + 1] ? lines[index + 1].text : '',
-          currentTimeBudget
+          currentTimeBudget,
+          activeStarted
         );
       }
     }
@@ -906,10 +913,16 @@
          renderedLyricsKey !== playback.key || pendingTrackTransition || !playback.timelineReady)return;
       const position=currentPosition();
       updateActiveLine(position,false);
-      let nextIndex=Math.max(0,playback.active+1);
-      while(nextIndex<lines.length&&lines[nextIndex].t<=position+90)nextIndex++;
-      if(nextIndex>=lines.length)return;
-      const delay=Math.max(40,Math.min(60000,(lines[nextIndex].t-position-90)/playback.speed));
+      let nextEventPosition=0;
+      if(playback.active>=0&&!playback.activeStarted){
+        nextEventPosition=lines[playback.active].t;
+      }else{
+        let nextIndex=Math.max(0,playback.active+1);
+        while(nextIndex<lines.length&&lines[nextIndex].t<=position+90)nextIndex++;
+        if(nextIndex>=lines.length)return;
+        nextEventPosition=lines[nextIndex].t-90;
+      }
+      const delay=Math.max(40,Math.min(60000,(nextEventPosition-position)/playback.speed));
       lyricAdvanceTimer=setTimeout(scheduleLyricAdvance,delay);
     }
 
@@ -1137,6 +1150,7 @@
           document.body.classList.add('lyrics-visible');
         } else {
           playback.active=-1;
+          playback.activeStarted=false;
           clearCompactLyric();
         }
       }

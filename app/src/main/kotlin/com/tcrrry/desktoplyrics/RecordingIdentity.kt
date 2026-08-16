@@ -6,6 +6,7 @@ import kotlin.math.abs
 
 internal data class TitleIdentity(
     val base: String,
+    val baseSegments: List<String>,
     val alternateBases: Set<String>,
     val searchText: String,
     val versionQualifiers: Set<String>,
@@ -24,7 +25,8 @@ internal data class TitleAnnotationIdentity(
 
 internal data class ArtistIdentity(
     val declared: Set<String>,
-    val featured: Set<String>
+    val featured: Set<String>,
+    val displayNameSegments: List<List<String>>
 ) {
     val effective: Set<String> = declared + featured
 }
@@ -123,6 +125,8 @@ internal fun titleEvidence(first: TitleIdentity, second: TitleIdentity): Evidenc
             val secondBases = second.alternateBases + second.base
             when {
                 firstBases.any(secondBases::contains) -> EvidenceLevel.NEAR
+                hasContiguousSubjectRelation(first.baseSegments, second.baseSegments) ->
+                    EvidenceLevel.NEAR
                 firstBases.any { firstBase ->
                     secondBases.any { secondBase ->
                         hasMinimumTextSimilarity(
@@ -182,7 +186,8 @@ internal fun titleIdentity(value: String): TitleIdentity {
     }
         .replace(WHITESPACE_PATTERN, " ")
         .trim()
-    val base = normalizeText(normalized.replace(BRACKET_PATTERN, " "))
+    val baseText = normalized.replace(BRACKET_PATTERN, " ")
+    val base = normalizeText(baseText)
     val alternateBases = bracketIdentities.asSequence()
         .filter { it.featuredArtists.isEmpty() && it.versionQualifiers.isEmpty() }
         .map { normalizeText(it.content) }
@@ -191,6 +196,7 @@ internal fun titleIdentity(value: String): TitleIdentity {
         .toSet()
     return TitleIdentity(
         base = base,
+        baseSegments = structuredTextSegments(baseText),
         alternateBases = alternateBases,
         searchText = searchText,
         versionQualifiers = versionQualifiers,
@@ -241,7 +247,7 @@ internal fun artistEvidence(
             return EvidenceLevel.NEAR
         }
     }
-    if (hasCrossScriptArtistDisplayName(first.declared, second.declared)) {
+    if (hasContiguousArtistSubject(first, second)) {
         return EvidenceLevel.NEAR
     }
     if (first.effective.any { firstName ->
@@ -267,7 +273,8 @@ internal fun artistIdentity(track: String, artist: String): ArtistIdentity {
     val featured = titleIdentity(track).featuredArtists
     return ArtistIdentity(
         declared = artistNames(artist).toSet(),
-        featured = featured
+        featured = featured,
+        displayNameSegments = artistDisplayNameSegments(artist)
     )
 }
 
@@ -290,37 +297,105 @@ internal fun normalizedAlbumCore(value: String): String {
     return normalizedAlbum(withoutReleaseSuffix)
 }
 
-private fun hasCrossScriptArtistDisplayName(
-    firstNames: Set<String>,
-    secondNames: Set<String>
-): Boolean = firstNames.any { firstName ->
-    secondNames.any { secondName ->
-        val firstSegments = artistScriptSegments(firstName)
-        val secondSegments = artistScriptSegments(secondName)
-        (firstSegments.size > 1 && secondName in firstSegments) ||
-            (secondSegments.size > 1 && firstName in secondSegments)
+private fun hasContiguousArtistSubject(
+    first: ArtistIdentity,
+    second: ArtistIdentity
+): Boolean = first.displayNameSegments.any { firstSegments ->
+    second.displayNameSegments.any { secondSegments ->
+        hasContiguousSubjectRelation(firstSegments, secondSegments)
     }
 }
 
-private fun artistScriptSegments(value: String): Set<String> {
-    val segments = linkedSetOf<String>()
+private fun artistDisplayNameSegments(value: String): List<List<String>> = value
+    .split(ARTIST_SEPARATOR_PATTERN)
+    .map(::structuredTextSegments)
+    .filter(List<String>::isNotEmpty)
+
+private fun structuredTextSegments(value: String): List<String> {
+    val segments = mutableListOf<String>()
     val current = StringBuilder()
     var currentScript: Character.UnicodeScript? = null
-    normalizeText(value).forEach { character ->
+
+    fun flushSegment() {
+        normalizeText(current.toString())
+            .takeIf(String::isNotBlank)
+            ?.let(segments::add)
+        current.setLength(0)
+        currentScript = null
+    }
+
+    Normalizer.normalize(value, Normalizer.Form.NFKD)
+        .lowercase(Locale.ROOT)
+        .replace(COMBINING_MARK_PATTERN, "")
+        .forEach { character ->
+        if (!character.isLetterOrDigit()) {
+            flushSegment()
+            return@forEach
+        }
         val script = Character.UnicodeScript.of(character.code).takeUnless {
             it == Character.UnicodeScript.COMMON ||
                 it == Character.UnicodeScript.INHERITED
         }
         if (script != null && currentScript != null && script != currentScript) {
-            current.toString().takeIf(String::isNotBlank)?.let(segments::add)
-            current.setLength(0)
+            flushSegment()
         }
         current.append(character)
         if (script != null) currentScript = script
     }
-    current.toString().takeIf(String::isNotBlank)?.let(segments::add)
+    flushSegment()
     return segments
 }
+
+private fun hasContiguousSubjectRelation(
+    first: List<String>,
+    second: List<String>
+): Boolean {
+    if (first.isEmpty() || second.isEmpty()) return false
+    val shared = longestCommonContiguousSpan(first, second)
+    if (shared.length == 0) return false
+    val sharedText = first.subList(shared.firstStart, shared.firstStart + shared.length)
+        .joinToString("")
+    if (sharedText.length < MINIMUM_STRUCTURED_CORE_LENGTH) return false
+
+    if (shared.length == first.size || shared.length == second.size) return true
+    if (shared.length * 2 > first.size && shared.length * 2 > second.size) return true
+    if (shared.length * 2 < first.size || shared.length * 2 < second.size) return false
+
+    val firstRemainder = first.subList(0, shared.firstStart) +
+        first.subList(shared.firstStart + shared.length, first.size)
+    val secondRemainder = second.subList(0, shared.secondStart) +
+        second.subList(shared.secondStart + shared.length, second.size)
+    return firstRemainder.isNotEmpty() && secondRemainder.isNotEmpty() &&
+        haveDisjointScripts(firstRemainder.joinToString(""), secondRemainder.joinToString(""))
+}
+
+private fun longestCommonContiguousSpan(
+    first: List<String>,
+    second: List<String>
+): CommonSegmentSpan {
+    var best = CommonSegmentSpan(0, 0, 0)
+    first.indices.forEach { firstStart ->
+        second.indices.forEach { secondStart ->
+            var length = 0
+            while (firstStart + length < first.size &&
+                secondStart + length < second.size &&
+                first[firstStart + length] == second[secondStart + length]
+            ) {
+                length += 1
+            }
+            if (length > best.length) {
+                best = CommonSegmentSpan(firstStart, secondStart, length)
+            }
+        }
+    }
+    return best
+}
+
+private data class CommonSegmentSpan(
+    val firstStart: Int,
+    val secondStart: Int,
+    val length: Int
+)
 
 private fun nearMetadataText(first: String, second: String): Boolean {
     val firstNormalized = normalizeText(first)
@@ -518,6 +593,7 @@ private const val MINIMUM_FUZZY_TEXT_LENGTH = 8
 private const val MINIMUM_TITLE_SIMILARITY_PERCENT = 85
 private const val MINIMUM_ARTIST_SIMILARITY_PERCENT = 90
 private const val MINIMUM_ALBUM_SIMILARITY_PERCENT = 80
+private const val MINIMUM_STRUCTURED_CORE_LENGTH = 2
 private val LANGUAGE_DISPLAY_LOCALES = listOf(
     Locale.ENGLISH,
     Locale.SIMPLIFIED_CHINESE,

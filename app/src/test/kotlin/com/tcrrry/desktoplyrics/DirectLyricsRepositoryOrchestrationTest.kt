@@ -126,6 +126,40 @@ class DirectLyricsRepositoryOrchestrationTest {
     }
 
     @Test
+    fun `loads a catalog album fallback after primary paths are exhausted`() {
+        val fallbackCalls = AtomicInteger(0)
+        val exact = FakeExactSource(
+            exactHandler = { _, _, _ -> null },
+            fallbackHandler = { _, _, _ -> emptyList() }
+        )
+        val qq = FakeCatalogSource(
+            sourceName = SOURCE_QQ,
+            searchHandler = { _, _, _ -> emptyList() },
+            fallbackHandler = { _, _, _ ->
+                fallbackCalls.incrementAndGet()
+                listOf(candidate(SOURCE_QQ, "album-fallback"))
+            },
+            loadHandler = { sourceCandidate, _, _ -> sourceCandidate.synchronized() }
+        )
+        val netEase = FakeCatalogSource(
+            sourceName = SOURCE_NETEASE,
+            searchHandler = { _, _, _ -> emptyList() }
+        )
+        val repository = repository(exact, listOf(qq, netEase), catalogDeadlineMs = 1_000L)
+
+        try {
+            val found = requireFound(
+                repository.resolveLyrics(query, LyricsCancellationSignal())
+            )
+
+            assertEquals(SOURCE_QQ, found.result.source)
+            assertEquals(1, fallbackCalls.get())
+        } finally {
+            repository.close()
+        }
+    }
+
+    @Test
     fun `returns a retryable deadline when every source remains blocked`() {
         val exact = FakeExactSource(
             exactHandler = { _, _, cancellation -> blockUntilCancelled(cancellation) },
@@ -248,6 +282,11 @@ class DirectLyricsRepositoryOrchestrationTest {
             Long,
             LyricsCancellationSignal
         ) -> List<LyricsResult>,
+        private val fallbackHandler: (
+            LyricsLookup,
+            Long,
+            LyricsCancellationSignal
+        ) -> List<LyricsResult> = { _, _, _ -> emptyList() },
         private val loadHandler: (
             LyricsResult,
             Long,
@@ -259,6 +298,12 @@ class DirectLyricsRepositoryOrchestrationTest {
             deadlineNanos: Long,
             cancellation: LyricsCancellationSignal
         ): List<LyricsResult> = searchHandler(query, deadlineNanos, cancellation)
+
+        override fun fallback(
+            query: LyricsLookup,
+            deadlineNanos: Long,
+            cancellation: LyricsCancellationSignal
+        ): List<LyricsResult> = fallbackHandler(query, deadlineNanos, cancellation)
 
         override fun loadLyrics(
             candidate: LyricsResult,

@@ -92,8 +92,31 @@ internal class QqLyricsSource(
         cancellation: LyricsCancellationSignal
     ): List<LyricsResult> {
         val terms = LyricsCandidateSelector.searchTerms(query)
+        return searchCatalog(
+            "${terms.track} ${terms.artist}".trim(),
+            deadlineNanos,
+            cancellation
+        )
+    }
+
+    override fun fallback(
+        query: LyricsLookup,
+        deadlineNanos: Long,
+        cancellation: LyricsCancellationSignal
+    ): List<LyricsResult> {
+        val album = normalizedAlbumQueryText(query.album)
+        if (album.isBlank()) return emptyList()
+        val terms = LyricsCandidateSelector.searchTerms(query)
+        return searchCatalog("${terms.track} $album", deadlineNanos, cancellation)
+    }
+
+    private fun searchCatalog(
+        searchText: String,
+        deadlineNanos: Long,
+        cancellation: LyricsCancellationSignal
+    ): List<LyricsResult> {
         val searchUrl = "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp" +
-            "?format=json&p=1&n=8&w=${encode("${terms.track} ${terms.artist}".trim())}"
+            "?format=json&p=1&n=8&w=${encode(searchText)}"
         val root = JSONObject(transport.getText(searchUrl, headers(), deadlineNanos, cancellation))
         val songs = root.optJSONObject("data")
             ?.optJSONObject("song")
@@ -173,8 +196,31 @@ internal class NetEaseLyricsSource(
         cancellation: LyricsCancellationSignal
     ): List<LyricsResult> {
         val terms = LyricsCandidateSelector.searchTerms(query)
+        return searchCatalog(
+            "${terms.track} ${terms.artist}".trim(),
+            deadlineNanos,
+            cancellation
+        )
+    }
+
+    override fun fallback(
+        query: LyricsLookup,
+        deadlineNanos: Long,
+        cancellation: LyricsCancellationSignal
+    ): List<LyricsResult> {
+        val album = normalizedAlbumQueryText(query.album)
+        if (album.isBlank()) return emptyList()
+        val terms = LyricsCandidateSelector.searchTerms(query)
+        return searchCatalog("${terms.track} $album", deadlineNanos, cancellation)
+    }
+
+    private fun searchCatalog(
+        searchText: String,
+        deadlineNanos: Long,
+        cancellation: LyricsCancellationSignal
+    ): List<LyricsResult> {
         val searchUrl = "https://music.163.com/api/search/get/web" +
-            "?type=1&limit=8&s=${encode("${terms.track} ${terms.artist}".trim())}"
+            "?type=1&limit=8&s=${encode(searchText)}"
         val root = JSONObject(transport.getText(searchUrl, headers(), deadlineNanos, cancellation))
         val songs = root.optJSONObject("result")?.optJSONArray("songs") ?: return emptyList()
         return buildList {

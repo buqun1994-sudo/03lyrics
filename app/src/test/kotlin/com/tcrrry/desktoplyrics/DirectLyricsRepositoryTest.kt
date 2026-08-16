@@ -8,7 +8,7 @@ import org.junit.Test
 class DirectLyricsRepositoryTest {
 
     @Test
-    fun `accepts localized artist names when title album and duration confirm one recording`() {
+    fun `accepts localized subgroup display names when title album and duration confirm one recording`() {
         val query = LyricsLookup(
             track = "Twinkle",
             artist = "少女时代-太蒂徐",
@@ -23,21 +23,30 @@ class DirectLyricsRepositoryTest {
                     source = "QQ音乐",
                     sourceId = "qq-twinkle",
                     track = "Twinkle",
-                    artist = "TaeTiSeo",
-                    album = "Twinkle Mini Album",
+                    artist = "少女时代-TaeTiSeo",
+                    album = "'Twinkle' Mini Album",
                     durationMs = 208_000L
                 ),
                 candidate(
                     source = "网易云音乐",
                     sourceId = "netease-twinkle",
                     track = "Twinkle",
-                    artist = "TaeTiSeo",
-                    album = "Twinkle Mini Album",
+                    artist = "少女时代-TaeTiSeo",
+                    album = "'Twinkle' Mini Album",
                     durationMs = 208_720L
                 )
             )
         )
 
+        assertEquals(
+            EvidenceLevel.NEAR,
+            artistEvidence(
+                firstTrack = "Twinkle",
+                firstArtist = "少女时代-太蒂徐",
+                secondTrack = "Twinkle",
+                secondArtist = "少女时代-TaeTiSeo"
+            )
+        )
         assertEquals(listOf("QQ音乐", "网易云音乐"), selected.map { it.source })
     }
 
@@ -149,6 +158,127 @@ class DirectLyricsRepositoryTest {
                     .map { it.sourceId }
             )
         }
+    }
+
+    @Test
+    fun `accepts a complete underscore delimited artist display name component`() {
+        val query = LyricsLookup(
+            track = "童话镇",
+            artist = "李雨霏",
+            album = "童话镇 - Single",
+            durationMs = 212_571L
+        )
+        val candidate = candidate(
+            source = "网易云音乐",
+            sourceId = "netease-fairy-tale-town",
+            track = "童话镇",
+            artist = "李雨霏_晚饭",
+            album = "童话镇",
+            durationMs = 212_571L
+        )
+
+        assertEquals(EvidenceLevel.NEAR, artistEvidence(query, candidate))
+        assertEquals(
+            listOf(candidate.sourceId),
+            LyricsCandidateSelector.selectCandidates(query, listOf(candidate)).map { it.sourceId }
+        )
+    }
+
+    @Test
+    fun `accepts an ordered continuous subject across formatting boundaries`() {
+        assertEquals(
+            EvidenceLevel.NEAR,
+            titleEvidence(
+                titleIdentity("AA  BB  CC.DD_EE"),
+                titleIdentity("AA BB CC")
+            )
+        )
+        assertEquals(
+            EvidenceLevel.NEAR,
+            artistEvidence(
+                firstTrack = "A Song",
+                firstArtist = "AA  BB  CC.DD_EE",
+                secondTrack = "A Song",
+                secondArtist = "AA BB CC"
+            )
+        )
+    }
+
+    @Test
+    fun `accepts a complete Latin display name segment`() {
+        assertEquals(
+            EvidenceLevel.NEAR,
+            artistEvidence(
+                firstTrack = "千年泪",
+                firstArtist = "Tank Lu",
+                secondTrack = "千年泪",
+                secondArtist = "Tank"
+            )
+        )
+    }
+
+    @Test
+    fun `does not join noncontiguous display name segments`() {
+        assertEquals(
+            EvidenceLevel.DIFFERENT,
+            titleEvidence(
+                titleIdentity("AA XX CC"),
+                titleIdentity("AA BB CC")
+            )
+        )
+        assertEquals(
+            EvidenceLevel.DIFFERENT,
+            artistEvidence(
+                firstTrack = "A Song",
+                firstArtist = "AA XX CC",
+                secondTrack = "A Song",
+                secondArtist = "AA BB CC"
+            )
+        )
+    }
+
+    @Test
+    fun `does not invent an artist display component without a separator`() {
+        assertEquals(
+            EvidenceLevel.DIFFERENT,
+            artistEvidence(
+                firstTrack = "童话镇",
+                firstArtist = "李雨霏",
+                secondTrack = "童话镇",
+                secondArtist = "李雨霏晚饭"
+            )
+        )
+    }
+
+    @Test
+    fun `keeps duration as a hard boundary for underscore artist display names`() {
+        val query = LyricsLookup(
+            track = "童话镇",
+            artist = "李雨霏",
+            album = "童话镇 - Single",
+            durationMs = 219_196L
+        )
+        val candidates = listOf(
+            candidate(
+                source = "QQ音乐",
+                sourceId = "qq-fairy-tale-town",
+                track = "童话镇",
+                artist = "李雨霏",
+                album = "童话镇",
+                durationMs = 212_000L
+            ),
+            candidate(
+                source = "网易云音乐",
+                sourceId = "netease-fairy-tale-town",
+                track = "童话镇",
+                artist = "李雨霏_晚饭",
+                album = "童话镇",
+                durationMs = 212_571L
+            )
+        )
+
+        assertEquals(EvidenceLevel.NEAR, artistEvidence(query, candidates.last()))
+        assertTrue(LyricsCandidateSelector.selectCandidates(query, candidates).isEmpty())
     }
 
     @Test
@@ -1210,7 +1340,7 @@ class DirectLyricsRepositoryTest {
     }
 
     @Test
-    fun `rejects a partial title rather than guessing a longer title`() {
+    fun `accepts a continuously contained title subject`() {
         val query = LyricsLookup(
             track = "Example Song Extended",
             artist = "Artist",
@@ -1218,7 +1348,8 @@ class DirectLyricsRepositoryTest {
             durationMs = 200_000L
         )
 
-        assertTrue(
+        assertEquals(
+            listOf("partial-title"),
             LyricsCandidateSelector.selectCandidates(
                 query,
                 listOf(
@@ -1231,7 +1362,7 @@ class DirectLyricsRepositoryTest {
                         durationMs = 200_000L
                     )
                 )
-            ).isEmpty()
+            ).map { it.sourceId }
         )
     }
 

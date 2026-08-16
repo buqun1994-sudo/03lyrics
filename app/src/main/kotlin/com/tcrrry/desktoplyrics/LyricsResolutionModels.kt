@@ -3,7 +3,7 @@ package com.tcrrry.desktoplyrics
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal const val LYRICS_MATCHER_POLICY_VERSION = 2
+internal const val LYRICS_MATCHER_POLICY_VERSION = 3
 
 internal data class LyricsLookup(
     val track: String,

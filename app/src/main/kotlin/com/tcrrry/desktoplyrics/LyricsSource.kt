@@ -22,6 +22,12 @@ internal interface LyricsCatalogSource : LyricsBodySource {
         deadlineNanos: Long,
         cancellation: LyricsCancellationSignal
     ): List<LyricsResult>
+
+    fun fallback(
+        query: LyricsLookup,
+        deadlineNanos: Long,
+        cancellation: LyricsCancellationSignal
+    ): List<LyricsResult> = emptyList()
 }
 
 internal interface LyricsExactAndFallbackSource : LyricsBodySource {

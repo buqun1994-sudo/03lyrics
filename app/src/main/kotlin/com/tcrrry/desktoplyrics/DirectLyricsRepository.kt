@@ -200,7 +200,7 @@ internal class DirectLyricsRepository internal constructor(
                     primaryOutstanding == 0 && activeBodySources.isEmpty()
                 if (!fallbackStarted && (primaryPhaseExpired || primaryPhaseExhausted)) {
                     fallbackStarted = true
-                    fallbackOutstanding = 1
+                    fallbackOutstanding = catalogSources.size + 1
                     submitCatalog(
                         sourceName = exactAndFallbackSource.sourceName,
                         phase = CatalogPhase.FALLBACK,
@@ -210,6 +210,18 @@ internal class DirectLyricsRepository internal constructor(
                         futures = futures
                     ) {
                         exactAndFallbackSource.fallback(query, totalDeadlineNanos, cancellation)
+                    }
+                    catalogSources.forEach { source ->
+                        submitCatalog(
+                            sourceName = source.sourceName,
+                            phase = CatalogPhase.FALLBACK,
+                            deadlineNanos = totalDeadlineNanos,
+                            cancellation = cancellation,
+                            events = events,
+                            futures = futures
+                        ) {
+                            source.fallback(query, totalDeadlineNanos, cancellation)
+                        }
                     }
                 }
 
