@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 fun String.asBuildConfigString(): String = buildString {
@@ -14,6 +15,10 @@ fun String.asBuildConfigString(): String = buildString {
     }
     append('"')
 }
+
+fun Properties.requiredValue(name: String): String =
+    getProperty(name)?.trim()?.takeIf(String::isNotEmpty)
+        ?: error("Staging APK signing property '$name' is required")
 
 plugins {
     id("com.android.application")
@@ -32,8 +37,12 @@ val debugCommerceEnvironment = providers.gradleProperty("deviceCommerceEnvironme
     .get()
     .trim()
     .lowercase()
+val stagingCommerceApiBaseUrl = providers.gradleProperty("deviceCommerceStagingApiBaseUrl")
+    .orElse("")
+    .get()
+    .trim()
 val debugCommerceApiBaseUrl = if (debugCommerceEnvironment == "staging") {
-    "https://api-staging.9studio.fun"
+    stagingCommerceApiBaseUrl
 } else {
     ""
 }
@@ -54,6 +63,43 @@ val productionLicensePublicKeyBase64 = providers
     .gradleProperty("deviceCommerceProductionLicensePublicKeyBase64")
     .orElse("")
     .get()
+
+val stagingSigningPropertiesFile = providers
+    .gradleProperty("deviceCommerceStagingSigningPropertiesFile")
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+    ?.let(rootProject::file)
+val stagingSigningProperties = Properties()
+val stagingSigningStoreFile = if (debugCommerceEnvironment == "staging") {
+    require(debugCommerceApiBaseUrl.startsWith("https://")) {
+        "Staging Device Commerce API must use HTTPS"
+    }
+    require(stagingLicenseKeyId.isNotBlank()) {
+        "Staging Device Commerce license keyId is required"
+    }
+    require(stagingLicensePublicKeyBase64.isNotBlank()) {
+        "Staging Device Commerce license public key is required"
+    }
+    val propertiesFile = requireNotNull(stagingSigningPropertiesFile) {
+        "Staging APK signing properties file is required"
+    }
+    require(propertiesFile.isFile) {
+        "Staging APK signing properties file does not exist"
+    }
+    propertiesFile.inputStream().use(stagingSigningProperties::load)
+    val configuredStoreFile = stagingSigningProperties.requiredValue("storeFile")
+    val candidate = File(configuredStoreFile)
+    val resolved = if (candidate.isAbsolute) {
+        candidate
+    } else {
+        propertiesFile.parentFile.resolve(configuredStoreFile)
+    }
+    require(resolved.isFile) { "Staging APK keystore does not exist" }
+    resolved
+} else {
+    null
+}
 
 android {
     namespace = "com.tcrrry.desktoplyrics"
@@ -77,10 +123,19 @@ android {
                 keyPassword = signingProperties.getProperty("keyPassword")
             }
         }
+        if (stagingSigningStoreFile != null) {
+            create("staging") {
+                storeFile = stagingSigningStoreFile
+                storePassword = stagingSigningProperties.requiredValue("storePassword")
+                keyAlias = stagingSigningProperties.requiredValue("keyAlias")
+                keyPassword = stagingSigningProperties.requiredValue("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         getByName("debug") {
+            signingConfigs.findByName("staging")?.let { signingConfig = it }
             buildConfigField(
                 "String",
                 "DEVICE_COMMERCE_ENVIRONMENT",

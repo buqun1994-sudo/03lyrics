@@ -197,7 +197,7 @@ class CloudDeviceCommercialGateway(
                 return EntitlementQueryResult.Failure(CommercialFailure.STORAGE)
             }
         }
-        val remote = if (hasStoredLicense) {
+        val initialRemote = if (hasStoredLicense) {
             refreshRemoteLicense(
                 identity = identity,
                 nowEpochMs = nowEpochMs,
@@ -206,10 +206,18 @@ class CloudDeviceCommercialGateway(
         } else {
             startRemoteTrial(identity, nowEpochMs)
         }
+        val remote = if (initialRemote == RemoteEntitlement.RecoveryRequired) {
+            recoverRemoteEntitlementOnce(nowEpochMs)
+        } else {
+            initialRemote
+        }
 
         val entitlement = when (remote) {
             is RemoteEntitlement.Ready -> remote.entitlement
             RemoteEntitlement.Expired -> EntitlementState.Expired
+            RemoteEntitlement.RecoveryRequired -> {
+                return EntitlementQueryResult.Failure(CommercialFailure.DEVICE_MISMATCH)
+            }
             is RemoteEntitlement.Failure -> {
                 val localValid = local as? LocalLicenseState.Valid
                 if (localValid != null && remote.allowLocalFallback) {
@@ -428,6 +436,32 @@ class CloudDeviceCommercialGateway(
         }
     }
 
+    private suspend fun recoverRemoteEntitlementOnce(nowEpochMs: Long): RemoteEntitlement =
+        when (val recovery = restorePurchase(nowEpochMs)) {
+            is PurchaseRecoveryResult.Success -> RemoteEntitlement.Ready(recovery.entitlement)
+            PurchaseRecoveryResult.NotFound -> {
+                val identity = runCatching { identityProvider.loadOrCreate() }.getOrElse {
+                    return RemoteEntitlement.Failure(CommercialFailure.STORAGE, false)
+                }
+                when (val restarted = startRemoteTrial(identity, nowEpochMs)) {
+                    RemoteEntitlement.RecoveryRequired -> RemoteEntitlement.Failure(
+                        CommercialFailure.DEVICE_MISMATCH,
+                        false
+                    )
+                    else -> restarted
+                }
+            }
+            PurchaseRecoveryResult.NetworkFailure -> RemoteEntitlement.Failure(
+                CommercialFailure.NETWORK,
+                true
+            )
+            is PurchaseRecoveryResult.Failure -> RemoteEntitlement.Failure(
+                recovery.reason,
+                recovery.reason == CommercialFailure.NETWORK ||
+                    recovery.reason == CommercialFailure.RATE_LIMITED
+            )
+        }
+
     @Volatile
     private var lastProofFailure: CommercialFailure = CommercialFailure.UNKNOWN
 
@@ -512,6 +546,7 @@ class CloudDeviceCommercialGateway(
     ): RemoteEntitlement {
         return when (response) {
             is DeviceCommerceApiResult.Failure -> when (response.failure.errorCode) {
+                "device_key_mismatch" -> RemoteEntitlement.RecoveryRequired
                 "trial_expired" -> {
                     store.delete(SecureCommercialRecord.LICENSE)
                     RemoteEntitlement.Expired
@@ -907,6 +942,7 @@ class CloudDeviceCommercialGateway(
     private sealed interface RemoteEntitlement {
         data class Ready(val entitlement: EntitlementState) : RemoteEntitlement
         data object Expired : RemoteEntitlement
+        data object RecoveryRequired : RemoteEntitlement
         data class Failure(
             val reason: CommercialFailure,
             val allowLocalFallback: Boolean

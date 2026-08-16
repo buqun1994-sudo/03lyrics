@@ -141,6 +141,35 @@ class CloudDeviceCommercialGatewayTest {
     }
 
     @Test
+    fun `same fingerprint reinstall automatically recovers pro during entitlement query`() =
+        runBlocking {
+            val fixture = FixtureHarness()
+            val quote = (fixture.gateway.queryEntitlement(fixture.now) as EntitlementQueryResult.Ready)
+                .snapshot.quote!!
+            val payment = fixture.gateway.createPayment(quote, PaymentMethod.WECHAT, fixture.now)
+                as PaymentCreationResult.Ready
+            fixture.transport.paymentOutcome = DebugPaymentOutcome.PAID
+            assertEquals(
+                PaymentStatusResult.Paid,
+                fixture.gateway.refreshPayment(payment.session, fixture.now)
+            )
+
+            val reinstalled = fixture.newClientWithSameFingerprint()
+            val restored = reinstalled.gateway.queryEntitlement(reinstalled.now)
+                as EntitlementQueryResult.Ready
+
+            assertEquals(EntitlementState.Pro, restored.snapshot.entitlement)
+            assertFalse(reinstalled.identity.previousSignatureUsed)
+            assertTrue(
+                reinstalled.store.read(SecureCommercialRecord.LICENSE) is SecureStoreReadResult.Value
+            )
+            assertTrue(
+                reinstalled.store.read(SecureCommercialRecord.DEVICE_TOKEN) is
+                    SecureStoreReadResult.Value
+            )
+        }
+
+    @Test
     fun `network failure preserves valid local license and first trial cannot start offline`() =
         runBlocking {
             val fixture = FixtureHarness()
@@ -207,12 +236,29 @@ class CloudDeviceCommercialGatewayTest {
         )
 
         val reinstalled = fixture.newClientWithSameFingerprint()
-        val withoutOldKey = reinstalled.gateway.restorePurchase(fixture.now)
-            as PurchaseRecoveryResult.Success
+        val withoutOldKey = reinstalled.gateway.queryEntitlement(fixture.now)
+            as EntitlementQueryResult.Ready
         assertFalse(reinstalled.identity.previousSignatureUsed)
         assertEquals(
             originalEnd,
-            (withoutOldKey.entitlement as EntitlementState.Trial).expiresAtEpochMs
+            (withoutOldKey.snapshot.entitlement as EntitlementState.Trial).expiresAtEpochMs
+        )
+    }
+
+    @Test
+    fun `automatic recovery keeps same fingerprint rejection fail closed`() = runBlocking {
+        val fixture = FixtureHarness()
+        fixture.gateway.queryEntitlement(fixture.now)
+        fixture.transport.recoveryScenario = DebugRecoveryScenario.DIFFERENT_DEVICE
+
+        val reinstalled = fixture.newClientWithSameFingerprint()
+
+        assertEquals(
+            EntitlementQueryResult.Failure(CommercialFailure.DEVICE_MISMATCH),
+            reinstalled.gateway.queryEntitlement(reinstalled.now)
+        )
+        assertFalse(
+            reinstalled.store.read(SecureCommercialRecord.LICENSE) is SecureStoreReadResult.Value
         )
     }
 
