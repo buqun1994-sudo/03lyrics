@@ -1,5 +1,6 @@
 package com.tcrrry.desktoplyrics.commercial
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,6 +73,31 @@ class CommercialLayoutContractTest {
         assertFalse(content.contains("commercial_entitlement_offer_arrow"))
         assertFalse(strings.contains("让每一句歌词"))
         assertFalse(strings.contains("让喜欢的歌词"))
+    }
+
+    @Test
+    fun `commercial display uses title case Pro without changing protocol words`() {
+        val strings = File(appDirectory, "src/main/res/values/strings.xml").readText()
+
+        assertTrue(strings.contains(">Pro</string>"))
+        assertTrue(strings.contains("现在购买 Pro"))
+        assertTrue(strings.contains("Pro 权益已生效"))
+        assertTrue(strings.contains("恢复成功，Pro 已生效"))
+        assertFalse(
+            Regex("(?<![A-Za-z0-9])PRO(?![A-Za-z0-9])").containsMatchIn(strings)
+        )
+        assertEquals(
+            "03歌词 Pro 永久权益",
+            normalizeCommercialDisplayText("03歌词 PRO 永久权益")
+        )
+        assertEquals(
+            "03歌词Pro永久权益",
+            normalizeCommercialDisplayText("03歌词PRO永久权益")
+        )
+        assertEquals(
+            "PROTOCOL Pro",
+            normalizeCommercialDisplayText("PROTOCOL PRO")
+        )
     }
 
     @Test

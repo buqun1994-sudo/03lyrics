@@ -287,7 +287,7 @@ class CommercialSettingsRenderer(
         marketingOriginalPrice.text = quote.originalPrice.text
         marketingDiscount.text = offerDiscount
         marketingFinalPrice.text = quote.finalPrice.text
-        productValue.text = quote.productName
+        productValue.text = normalizeCommercialDisplayText(quote.productName)
         originalPriceValue.text = quote.originalPrice.text
         discountValue.text = quote.discountLabel ?: context.getString(R.string.commercial_no_discount)
         finalPriceValue.text = quote.finalPrice.text
@@ -537,3 +537,9 @@ class CommercialSettingsRenderer(
     private fun color(resource: Int): Int = ContextCompat.getColor(context, resource)
 
 }
+
+internal fun normalizeCommercialDisplayText(value: String): String =
+    value.replace(COMMERCIAL_PRO_DISPLAY_TOKEN_REGEX, "Pro")
+
+private val COMMERCIAL_PRO_DISPLAY_TOKEN_REGEX =
+    Regex("(?<![A-Za-z0-9])PRO(?![A-Za-z0-9])")

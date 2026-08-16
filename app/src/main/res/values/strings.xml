@@ -22,7 +22,7 @@
     <string name="settings_restart_requires_authorization">系统授权未完成，暂时无法重启悬浮歌词</string>
     <string name="commercial_badge_trial">试用</string>
     <string name="commercial_badge_expired">过期</string>
-    <string name="commercial_badge_pro">PRO</string>
+    <string name="commercial_badge_pro">Pro</string>
     <string name="commercial_badge_checking">确认中</string>
     <string name="commercial_badge_error">异常</string>
     <string name="commercial_trial_active">试用权益生效中</string>
@@ -40,7 +40,7 @@
     <string name="commercial_clock_error">设备时间异常，暂时无法确认权益</string>
     <string name="commercial_retry">重新确认</string>
     <string name="commercial_checkout">前往支付</string>
-    <string name="commercial_offer_title">现在购买 PRO</string>
+    <string name="commercial_offer_title">现在购买 Pro</string>
     <string name="commercial_offer_price_label">限时价</string>
     <string name="commercial_offer_original_price_label">原价</string>
     <string name="commercial_offer_discount">立享%1$s</string>
@@ -76,12 +76,12 @@
     <string name="commercial_qr_title">扫码支付</string>
     <string name="commercial_qr_load_error">二维码暂时无法显示，请稍后重试</string>
     <string name="commercial_payment_success_title">支付成功</string>
-    <string name="commercial_pro_title">PRO 权益已生效</string>
+    <string name="commercial_pro_title">Pro 权益已生效</string>
     <string name="commercial_pro_body">感谢支持，权益生效中 · 永久</string>
     <string name="commercial_order_back">返回权益</string>
     <string name="commercial_restore_purchase">恢复购买</string>
     <string name="commercial_restore_running">正在恢复购买</string>
-    <string name="commercial_restore_success">恢复成功，PRO 已生效</string>
+    <string name="commercial_restore_success">恢复成功，Pro 已生效</string>
     <string name="commercial_restore_not_found">未找到可恢复的购买</string>
     <string name="commercial_restore_network_error">网络异常，暂时无法恢复购买</string>
     <string name="commercial_restore_device_mismatch">当前设备与原购买设备不一致，无法恢复</string>
