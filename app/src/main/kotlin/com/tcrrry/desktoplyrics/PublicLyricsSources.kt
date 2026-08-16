@@ -13,7 +13,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 
 internal class LrcLibLyricsSource(
-    private val transport: HttpLyricsTransport = HttpLyricsTransport()
+    private val transport: LyricsTransport = HttpLyricsTransport()
 ) : LyricsExactAndFallbackSource {
     override val sourceName: String = SOURCE_LRCLIB
 
@@ -22,7 +22,7 @@ internal class LrcLibLyricsSource(
         deadlineNanos: Long,
         cancellation: LyricsCancellationSignal
     ): LyricsResult? {
-        val terms = LyricsCandidateSelector.lrcLibExactTerms(query)
+        val terms = LyricsSearchPlanner.lrcLibExactTerms(query)
         val url = buildString {
             append("https://lrclib.net/api/get")
             append("?track_name=${encode(terms.track)}")
@@ -44,7 +44,7 @@ internal class LrcLibLyricsSource(
         deadlineNanos: Long,
         cancellation: LyricsCancellationSignal
     ): List<LyricsResult> {
-        val terms = LyricsCandidateSelector.searchTerms(query)
+        val terms = LyricsSearchPlanner.primaryTerms(query)
         val url = "https://lrclib.net/api/search" +
             "?track_name=${encode(terms.track)}&artist_name=${encode(terms.artist)}"
         val list = JSONArray(transport.getText(url, JSON_HEADERS, deadlineNanos, cancellation))
@@ -82,41 +82,17 @@ internal class LrcLibLyricsSource(
 }
 
 internal class QqLyricsSource(
-    private val transport: HttpLyricsTransport = HttpLyricsTransport()
+    private val transport: LyricsTransport = HttpLyricsTransport()
 ) : LyricsCatalogSource {
     override val sourceName: String = SOURCE_QQ
 
     override fun search(
-        query: LyricsLookup,
-        deadlineNanos: Long,
-        cancellation: LyricsCancellationSignal
-    ): List<LyricsResult> {
-        val terms = LyricsCandidateSelector.searchTerms(query)
-        return searchCatalog(
-            "${terms.track} ${terms.artist}".trim(),
-            deadlineNanos,
-            cancellation
-        )
-    }
-
-    override fun fallback(
-        query: LyricsLookup,
-        deadlineNanos: Long,
-        cancellation: LyricsCancellationSignal
-    ): List<LyricsResult> {
-        val album = normalizedAlbumQueryText(query.album)
-        if (album.isBlank()) return emptyList()
-        val terms = LyricsCandidateSelector.searchTerms(query)
-        return searchCatalog("${terms.track} $album", deadlineNanos, cancellation)
-    }
-
-    private fun searchCatalog(
-        searchText: String,
+        request: LyricsCatalogSearchRequest,
         deadlineNanos: Long,
         cancellation: LyricsCancellationSignal
     ): List<LyricsResult> {
         val searchUrl = "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp" +
-            "?format=json&p=1&n=8&w=${encode(searchText)}"
+            "?format=json&p=1&n=8&w=${encode(request.text)}"
         val root = JSONObject(transport.getText(searchUrl, headers(), deadlineNanos, cancellation))
         val songs = root.optJSONObject("data")
             ?.optJSONObject("song")
@@ -186,41 +162,17 @@ internal class QqLyricsSource(
 }
 
 internal class NetEaseLyricsSource(
-    private val transport: HttpLyricsTransport = HttpLyricsTransport()
+    private val transport: LyricsTransport = HttpLyricsTransport()
 ) : LyricsCatalogSource {
     override val sourceName: String = SOURCE_NETEASE
 
     override fun search(
-        query: LyricsLookup,
-        deadlineNanos: Long,
-        cancellation: LyricsCancellationSignal
-    ): List<LyricsResult> {
-        val terms = LyricsCandidateSelector.searchTerms(query)
-        return searchCatalog(
-            "${terms.track} ${terms.artist}".trim(),
-            deadlineNanos,
-            cancellation
-        )
-    }
-
-    override fun fallback(
-        query: LyricsLookup,
-        deadlineNanos: Long,
-        cancellation: LyricsCancellationSignal
-    ): List<LyricsResult> {
-        val album = normalizedAlbumQueryText(query.album)
-        if (album.isBlank()) return emptyList()
-        val terms = LyricsCandidateSelector.searchTerms(query)
-        return searchCatalog("${terms.track} $album", deadlineNanos, cancellation)
-    }
-
-    private fun searchCatalog(
-        searchText: String,
+        request: LyricsCatalogSearchRequest,
         deadlineNanos: Long,
         cancellation: LyricsCancellationSignal
     ): List<LyricsResult> {
         val searchUrl = "https://music.163.com/api/search/get/web" +
-            "?type=1&limit=8&s=${encode(searchText)}"
+            "?type=1&limit=8&s=${encode(request.text)}"
         val root = JSONObject(transport.getText(searchUrl, headers(), deadlineNanos, cancellation))
         val songs = root.optJSONObject("result")?.optJSONArray("songs") ?: return emptyList()
         return buildList {
@@ -273,19 +225,35 @@ internal class NetEaseLyricsSource(
     )
 }
 
+internal interface LyricsTransport {
+    fun getText(
+        url: String,
+        headers: Map<String, String>,
+        deadlineNanos: Long,
+        cancellation: LyricsCancellationSignal
+    ): String
+
+    fun getBytes(
+        url: String,
+        headers: Map<String, String>,
+        deadlineNanos: Long,
+        cancellation: LyricsCancellationSignal
+    ): ByteArray
+}
+
 internal class HttpLyricsTransport(
     private val connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
     private val readTimeoutMs: Int = READ_TIMEOUT_MS,
     private val maximumResponseBytes: Int = MAX_RESPONSE_BYTES
-) {
-    fun getText(
+) : LyricsTransport {
+    override fun getText(
         url: String,
         headers: Map<String, String>,
         deadlineNanos: Long,
         cancellation: LyricsCancellationSignal
     ): String = getBytes(url, headers, deadlineNanos, cancellation).toString(Charsets.UTF_8)
 
-    fun getBytes(
+    override fun getBytes(
         url: String,
         headers: Map<String, String>,
         deadlineNanos: Long,

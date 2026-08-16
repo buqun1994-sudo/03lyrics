@@ -24,7 +24,7 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
             durationMs = 289_250L
         )
         val selectorStartedAt = SystemClock.elapsedRealtime()
-        val exactTerms = LyricsCandidateSelector.lrcLibExactTerms(query)
+        val exactTerms = LyricsSearchPlanner.lrcLibExactTerms(query)
         val selectorElapsedMs = SystemClock.elapsedRealtime() - selectorStartedAt
         assertEquals("六哲, 陈娟儿", exactTerms.artist)
 
@@ -255,6 +255,116 @@ class DirectLyricsRepositoryNetworkInstrumentationTest {
             assertTrue(LyricsCandidateSelector.matchesVersion(query, result))
             assertTrue(
                 "Shai catalog lookup took ${elapsedMs}ms",
+                elapsedMs <= LOCALIZED_CATALOG_PATH_LIMIT_MS
+            )
+        } finally {
+            repository.close()
+        }
+    }
+
+    @Test
+    fun resolvesQianNianLeiAcrossLiveCatalogReleaseVariants() {
+        val arguments: Bundle = InstrumentationRegistry.getArguments()
+        assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
+
+        val query = LyricsLookup(
+            track = "千年泪",
+            artist = "Tank Lu",
+            album = "Fighting! 生存之道",
+            durationMs = 260_000L
+        )
+        val repository = DirectLyricsRepository()
+        try {
+            val startedAt = SystemClock.elapsedRealtime()
+            val result = repository.resolveFoundLyrics(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                durationMs = query.durationMs
+            )
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+            InstrumentationRegistry.getInstrumentation().sendStatus(
+                0,
+                Bundle().apply {
+                    putString(
+                        "stream",
+                        "Qian Nian Lei network smoke: ${elapsedMs}ms/${result.source}/" +
+                            "${result.sourceId}/${result.candidateArtist}\n"
+                    )
+                }
+            )
+
+            assertEquals("千年泪", result.candidateTrack)
+            assertEquals("Tank", result.candidateArtist)
+            assertTrue(
+                LyricsCandidateSelector.hasMatchingDuration(query.durationMs, result.durationMs)
+            )
+            assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(result.lyrics))
+            assertEquals(
+                EvidenceReason.CONTIGUOUS_SUBJECT,
+                artistMetadataEvidence(
+                    query.track,
+                    query.artist,
+                    result.candidateTrack,
+                    result.candidateArtist
+                ).reason
+            )
+            assertTrue(
+                "Album expansion took ${elapsedMs}ms",
+                elapsedMs <= LOCALIZED_CATALOG_PATH_LIMIT_MS
+            )
+        } finally {
+            repository.close()
+        }
+    }
+
+    @Test
+    fun resolvesTwinkleFromThePrimaryLocalizedSubgroupCandidate() {
+        val arguments: Bundle = InstrumentationRegistry.getArguments()
+        assumeTrue(arguments.getString(NETWORK_SMOKE_ARGUMENT) == "true")
+
+        val query = LyricsLookup(
+            track = "Twinkle",
+            artist = "少女时代-太蒂徐",
+            album = "'Twinkle' Mini Album",
+            durationMs = 206_796L
+        )
+        val repository = DirectLyricsRepository()
+        try {
+            val startedAt = SystemClock.elapsedRealtime()
+            val result = repository.resolveFoundLyrics(
+                track = query.track,
+                artist = query.artist,
+                album = query.album,
+                durationMs = query.durationMs
+            )
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+            InstrumentationRegistry.getInstrumentation().sendStatus(
+                0,
+                Bundle().apply {
+                    putString(
+                        "stream",
+                        "Twinkle network smoke: ${elapsedMs}ms/${result.source}/${result.sourceId}\n"
+                    )
+                }
+            )
+
+            assertEquals("Twinkle", result.candidateTrack)
+            assertTrue(
+                LyricsCandidateSelector.hasMatchingDuration(query.durationMs, result.durationMs)
+            )
+            assertEquals(LyricsKind.SYNCHRONIZED, classifyLyrics(result.lyrics))
+            assertEquals(
+                EvidenceReason.CONTIGUOUS_SUBJECT,
+                artistMetadataEvidence(
+                    query.track,
+                    query.artist,
+                    result.candidateTrack,
+                    result.candidateArtist
+                ).reason
+            )
+            assertTrue(
+                "Twinkle catalog lookup took ${elapsedMs}ms",
                 elapsedMs <= LOCALIZED_CATALOG_PATH_LIMIT_MS
             )
         } finally {

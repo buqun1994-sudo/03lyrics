@@ -18,16 +18,10 @@ internal interface LyricsBodySource {
 
 internal interface LyricsCatalogSource : LyricsBodySource {
     fun search(
-        query: LyricsLookup,
+        request: LyricsCatalogSearchRequest,
         deadlineNanos: Long,
         cancellation: LyricsCancellationSignal
     ): List<LyricsResult>
-
-    fun fallback(
-        query: LyricsLookup,
-        deadlineNanos: Long,
-        cancellation: LyricsCancellationSignal
-    ): List<LyricsResult> = emptyList()
 }
 
 internal interface LyricsExactAndFallbackSource : LyricsBodySource {

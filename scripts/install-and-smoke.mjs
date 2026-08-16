@@ -64,7 +64,10 @@ const serviceBefore = adbRun(
   true
 ).output.includes("LyricsOverlayService");
 
-const install = adbRun(["install", "-r", apkPath], "保留数据覆盖安装失败");
+const install = adbRun(
+  ["install", "--no-streaming", "-r", apkPath],
+  "保留数据覆盖安装失败"
+);
 if (!/\bSuccess\b/.test(install.output)) fail("ADB 未返回安装成功", install.output);
 
 const launch = adbRun(

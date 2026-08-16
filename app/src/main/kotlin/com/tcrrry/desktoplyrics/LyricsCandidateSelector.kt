@@ -18,30 +18,6 @@ internal object LyricsCandidateSelector {
             hasKnownDuration(secondDurationMs) &&
             abs(firstDurationMs - secondDurationMs) <= MAX_DURATION_DELTA_MS
 
-    fun searchTerms(query: LyricsLookup): LyricsSearchTerms {
-        val title = titleIdentity(query.track)
-        return LyricsSearchTerms(
-            track = title.searchText.ifBlank { query.track.trim() },
-            artist = query.artist.trim()
-        )
-    }
-
-    fun lrcLibExactTerms(query: LyricsLookup): LrcLibExactLookupTerms {
-        val search = searchTerms(query)
-        val declaredArtists = artistNames(query.artist).toSet()
-        val missingFeaturedArtists = featuredArtistDisplayNames(query.track)
-            .filterNot { normalizeText(it) in declaredArtists }
-        return LrcLibExactLookupTerms(
-            track = search.track,
-            artist = (listOf(search.artist) + missingFeaturedArtists)
-                .filter(String::isNotBlank)
-                .distinctBy(::normalizeText)
-                .joinToString(", "),
-            album = normalizedAlbumQueryText(query.album),
-            durationMs = query.durationMs
-        )
-    }
-
     fun selectCandidates(
         query: LyricsLookup,
         candidates: Iterable<LyricsResult>
@@ -96,31 +72,43 @@ internal object LyricsCandidateSelector {
             .distinctBy(::candidateIdentity)
             .toList()
         val queryTitle = titleIdentity(query.track)
-        val eligibleCandidates = uniqueCandidates.asSequence()
-            .mapNotNull { candidate -> candidateMetadata(query, candidate) }
+        val candidateMetadata = uniqueCandidates.asSequence()
+            .map { candidate -> candidateMetadata(query, candidate) }
             .toList()
-        val hasMultipleSources = eligibleCandidates.asSequence()
+        val comparableCandidates = candidateMetadata.filter { metadata ->
+            metadata.preconditions.isEmpty()
+        }
+        val hasMultipleSources = comparableCandidates.asSequence()
             .map { metadata -> metadata.candidate.source }
             .filter(String::isNotBlank)
             .distinct()
             .take(MINIMUM_SUPPORTING_SOURCES)
             .count() >= MINIMUM_SUPPORTING_SOURCES
-        val eligibleEvidence = eligibleCandidates.map { metadata ->
-            val directTitleEvidence = titleEvidence(queryTitle, metadata.title)
+        val candidateEvidence = candidateMetadata.map { metadata ->
+            val directTitleEvidence = titleMetadataEvidence(queryTitle, metadata.title)
             val effectiveTitleEvidence = when {
                 directTitleEvidence.isConfirmed() -> directTitleEvidence
-                directTitleEvidence == EvidenceLevel.UNKNOWN &&
-                    hasIndependentTitleBridge(queryTitle, metadata, eligibleCandidates) ->
-                    EvidenceLevel.NEAR
+                directTitleEvidence.level == EvidenceLevel.UNKNOWN &&
+                    metadata.preconditions.isEmpty() &&
+                    hasIndependentTitleBridge(queryTitle, metadata, comparableCandidates) ->
+                    MetadataEvidence(
+                        EvidenceLevel.NEAR,
+                        EvidenceReason.INDEPENDENT_TITLE_BRIDGE
+                    )
                 else -> directTitleEvidence
             }
-            candidateEvidence(query, metadata.candidate, effectiveTitleEvidence)
+            candidateEvidence(
+                query = query,
+                candidate = metadata.candidate,
+                titleEvidence = effectiveTitleEvidence,
+                preconditions = metadata.preconditions
+            )
         }
-        val matched = eligibleEvidence.asSequence()
-            .map { evidence -> withSupportingCandidates(evidence, eligibleEvidence, hasMultipleSources) }
+        val matched = candidateEvidence.asSequence()
+            .map { evidence -> withSupportingCandidates(evidence, candidateEvidence, hasMultipleSources) }
             .filter { evidence -> includeRejected || evidence.isEligible() }
             .sortedWith(
-                compareByDescending<CandidateEvidence> { it.versionEvidence.titleScore() }
+                compareByDescending<CandidateEvidence> { it.versionEvidence.level.titleScore() }
                     .thenByDescending { it.rankingScore() }
                     .thenBy { it.titleAnnotationRank }
                     .thenByDescending { it.supportingSources }
@@ -185,19 +173,23 @@ internal object LyricsCandidateSelector {
     private fun candidateMetadata(
         query: LyricsLookup,
         candidate: LyricsResult
-    ): CandidateMetadata? {
-        if (!hasKnownDuration(candidate.durationMs) ||
-            !hasMatchingDuration(query.durationMs, candidate.durationMs) ||
-            !isValidArtist(candidate.candidateArtist)
-        ) {
-            return null
-        }
-        val wantedTitle = titleIdentity(query.track)
+    ): CandidateMetadata {
         val foundTitle = titleIdentity(candidate.candidateTrack)
-        if (!wantedTitle.isValid || !foundTitle.isValid) {
-            return null
+        val preconditions = buildSet {
+            when {
+                !hasKnownDuration(candidate.durationMs) ->
+                    add(CandidateRejection.INVALID_DURATION)
+                !hasMatchingDuration(query.durationMs, candidate.durationMs) ->
+                    add(CandidateRejection.DURATION_CONFLICT)
+            }
+            if (!isValidArtist(candidate.candidateArtist)) {
+                add(CandidateRejection.INVALID_ARTIST)
+            }
+            if (!foundTitle.isValid) {
+                add(CandidateRejection.INVALID_TITLE)
+            }
         }
-        return CandidateMetadata(candidate, foundTitle)
+        return CandidateMetadata(candidate, foundTitle, preconditions)
     }
 
     private fun hasIndependentTitleBridge(
@@ -227,19 +219,25 @@ internal object LyricsCandidateSelector {
     private fun candidateEvidence(
         query: LyricsLookup,
         candidate: LyricsResult,
-        titleEvidence: EvidenceLevel
+        titleEvidence: MetadataEvidence,
+        preconditions: Set<CandidateRejection>
     ): CandidateEvidence {
-
         return CandidateEvidence(
             candidate = candidate,
             titleEvidence = titleEvidence,
-            versionEvidence = versionEvidence(
+            versionEvidence = versionMetadataEvidence(
                 titleIdentity(query.track),
                 titleIdentity(candidate.candidateTrack)
             ),
-            artistEvidence = artistEvidence(query, candidate),
-            albumEvidence = albumEvidence(query.album, candidate.candidateAlbum),
-            titleAnnotationRank = titleAnnotationRank(query, candidate)
+            artistEvidence = artistMetadataEvidence(
+                query.track,
+                query.artist,
+                candidate.candidateTrack,
+                candidate.candidateArtist
+            ),
+            albumEvidence = albumMetadataEvidence(query.album, candidate.candidateAlbum),
+            titleAnnotationRank = titleAnnotationRank(query, candidate),
+            preconditions = preconditions
         )
     }
 
@@ -248,10 +246,16 @@ internal object LyricsCandidateSelector {
         candidates: List<CandidateEvidence>,
         hasMultipleSources: Boolean
     ): CandidateEvidence {
-        if (!hasMultipleSources || !evidence.titleEvidence.isConfirmed()) return evidence
+        if (!hasMultipleSources ||
+            evidence.preconditions.isNotEmpty() ||
+            !evidence.titleEvidence.isConfirmed()
+        ) {
+            return evidence
+        }
         val peers = candidates.asSequence()
             .filter { peer ->
-                candidateIdentity(peer.candidate) != candidateIdentity(evidence.candidate) &&
+                peer.preconditions.isEmpty() &&
+                    candidateIdentity(peer.candidate) != candidateIdentity(evidence.candidate) &&
                     peer.candidate.source.isNotBlank() &&
                     peer.candidate.source != evidence.candidate.source &&
                     candidatesDescribeSameRecording(evidence.candidate, peer.candidate)
@@ -319,33 +323,30 @@ internal object LyricsCandidateSelector {
 
     private data class CandidateEvidence(
         val candidate: LyricsResult,
-        val titleEvidence: EvidenceLevel,
-        val versionEvidence: EvidenceLevel,
-        val artistEvidence: EvidenceLevel,
-        val albumEvidence: EvidenceLevel,
+        val titleEvidence: MetadataEvidence,
+        val versionEvidence: MetadataEvidence,
+        val artistEvidence: MetadataEvidence,
+        val albumEvidence: MetadataEvidence,
         val titleAnnotationRank: Int,
+        val preconditions: Set<CandidateRejection>,
         val supportingSources: Int = 1,
         val proofCandidates: List<LyricsResult> = listOf(candidate)
     ) {
-        fun isEligible(): Boolean =
-            titleEvidence.isConfirmed() &&
-                artistEvidence != EvidenceLevel.DIFFERENT &&
-                (
-                    artistEvidence.isConfirmed() ||
-                        albumEvidence.isConfirmed() ||
-                        supportingSources >= MINIMUM_SUPPORTING_SOURCES
-                    )
+        fun isEligible(): Boolean = rejectionReasons().isEmpty()
 
         fun rankingScore(): Int =
-            titleEvidence.titleScore() +
-                artistEvidence.artistScore() +
-                albumEvidence.albumScore() +
+            titleEvidence.level.titleScore() +
+                artistEvidence.level.artistScore() +
+                albumEvidence.level.albumScore() +
                 consensusBonus()
 
         fun summary(): String =
-            "eligible=${isEligible()} rank=${rankingScore()} title=$titleEvidence " +
-                "version=$versionEvidence artist=$artistEvidence album=$albumEvidence " +
-                "sources=$supportingSources"
+            "eligible=${isEligible()} rejected=${rejectionReasons().joinToString(",")} " +
+                "rank=${rankingScore()} " +
+                "title=${titleEvidence.level}/${titleEvidence.reason} " +
+                "version=${versionEvidence.level}/${versionEvidence.reason} " +
+                "artist=${artistEvidence.level}/${artistEvidence.reason} " +
+                "album=${albumEvidence.level}/${albumEvidence.reason} sources=$supportingSources"
 
         fun selection(): LyricsCandidateSelection = LyricsCandidateSelection(
             candidate = candidate,
@@ -364,12 +365,48 @@ internal object LyricsCandidateSelector {
                 0
             }
         }
+
+        private fun rejectionReasons(): Set<CandidateRejection> = buildSet {
+            addAll(preconditions)
+            when {
+                versionEvidence.level == EvidenceLevel.DIFFERENT ->
+                    add(CandidateRejection.VERSION_CONFLICT)
+                titleEvidence.level == EvidenceLevel.DIFFERENT ->
+                    add(CandidateRejection.TITLE_CONFLICT)
+                !titleEvidence.isConfirmed() ->
+                    add(CandidateRejection.TITLE_UNCONFIRMED)
+            }
+            if (artistEvidence.level == EvidenceLevel.DIFFERENT) {
+                add(CandidateRejection.ARTIST_CONFLICT)
+            }
+            if (titleEvidence.isConfirmed() &&
+                artistEvidence.level != EvidenceLevel.DIFFERENT &&
+                !artistEvidence.isConfirmed() &&
+                !albumEvidence.isConfirmed() &&
+                supportingSources < MINIMUM_SUPPORTING_SOURCES
+            ) {
+                add(CandidateRejection.INSUFFICIENT_SUPPORT)
+            }
+        }
     }
 
     private data class CandidateMetadata(
         val candidate: LyricsResult,
-        val title: TitleIdentity
+        val title: TitleIdentity,
+        val preconditions: Set<CandidateRejection>
     )
+
+    private enum class CandidateRejection {
+        INVALID_DURATION,
+        DURATION_CONFLICT,
+        INVALID_ARTIST,
+        INVALID_TITLE,
+        VERSION_CONFLICT,
+        TITLE_CONFLICT,
+        TITLE_UNCONFIRMED,
+        ARTIST_CONFLICT,
+        INSUFFICIENT_SUPPORT
+    }
 
 
     private const val MINIMUM_SUPPORTING_SOURCES = 2

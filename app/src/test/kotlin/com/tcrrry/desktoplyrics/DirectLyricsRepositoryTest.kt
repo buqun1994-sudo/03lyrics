@@ -47,6 +47,15 @@ class DirectLyricsRepositoryTest {
                 secondArtist = "少女时代-TaeTiSeo"
             )
         )
+        assertEquals(
+            EvidenceReason.CONTIGUOUS_SUBJECT,
+            artistMetadataEvidence(
+                firstTrack = "Twinkle",
+                firstArtist = "少女时代-太蒂徐",
+                secondTrack = "Twinkle",
+                secondArtist = "少女时代-TaeTiSeo"
+            ).reason
+        )
         assertEquals(listOf("QQ音乐", "网易云音乐"), selected.map { it.source })
     }
 
@@ -215,6 +224,40 @@ class DirectLyricsRepositoryTest {
                 secondArtist = "Tank"
             )
         )
+        assertEquals(
+            EvidenceReason.CONTIGUOUS_SUBJECT,
+            artistMetadataEvidence(
+                firstTrack = "千年泪",
+                firstArtist = "Tank Lu",
+                secondTrack = "千年泪",
+                secondArtist = "Tank"
+            ).reason
+        )
+    }
+
+    @Test
+    fun `diagnostics retain a hard duration rejection reason`() {
+        val query = LyricsLookup(
+            track = "A Song",
+            artist = "Artist",
+            album = "Album",
+            durationMs = 200_000L
+        )
+        val summary = LyricsCandidateSelector.selectionSummary(
+            query,
+            listOf(
+                candidate(
+                    source = SOURCE_QQ,
+                    sourceId = "too-long",
+                    track = query.track,
+                    artist = query.artist,
+                    album = query.album,
+                    durationMs = 205_000L
+                )
+            )
+        )
+
+        assertTrue(summary.contains("DURATION_CONFLICT"))
     }
 
     @Test
@@ -935,7 +978,7 @@ class DirectLyricsRepositoryTest {
 
     @Test
     fun `uses the base title for catalog search when featured artists are written in brackets`() {
-        val terms = LyricsCandidateSelector.searchTerms(
+        val terms = LyricsSearchPlanner.primaryTerms(
             LyricsLookup(
                 track = "错错错 (feat. 陈娟儿)",
                 artist = "六哲",
@@ -950,7 +993,7 @@ class DirectLyricsRepositoryTest {
 
     @Test
     fun `builds exact LRCLIB terms from the recording identity`() {
-        val terms = LyricsCandidateSelector.lrcLibExactTerms(
+        val terms = LyricsSearchPlanner.lrcLibExactTerms(
             LyricsLookup(
                 track = "错错错 (feat. 陈娟儿)",
                 artist = "六哲",
@@ -967,7 +1010,7 @@ class DirectLyricsRepositoryTest {
 
     @Test
     fun `uses the album core for exact LRCLIB terms`() {
-        val terms = LyricsCandidateSelector.lrcLibExactTerms(
+        val terms = LyricsSearchPlanner.lrcLibExactTerms(
             LyricsLookup(
                 track = "摩天动物园",
                 artist = "邓紫棋",
@@ -1035,7 +1078,7 @@ class DirectLyricsRepositoryTest {
 
     @Test
     fun `does not duplicate featured artists already present in the artist field`() {
-        val terms = LyricsCandidateSelector.lrcLibExactTerms(
+        val terms = LyricsSearchPlanner.lrcLibExactTerms(
             LyricsLookup(
                 track = "错错错 (feat. 陈娟儿)",
                 artist = "六哲/陈娟儿",
@@ -1050,7 +1093,7 @@ class DirectLyricsRepositoryTest {
 
     @Test
     fun `keeps explicit recording versions in catalog search terms`() {
-        val terms = LyricsCandidateSelector.searchTerms(
+        val terms = LyricsSearchPlanner.primaryTerms(
             LyricsLookup(
                 track = "Super Girl (Korean Version) (Anniversary Release)",
                 artist = "SUPER JUNIOR-M",

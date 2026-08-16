@@ -31,127 +31,6 @@ internal data class ArtistIdentity(
     val effective: Set<String> = declared + featured
 }
 
-internal enum class EvidenceLevel {
-    EXACT,
-    NEAR,
-    UNKNOWN,
-    DIFFERENT;
-
-    fun isConfirmed(): Boolean = this == EXACT || this == NEAR
-
-    fun titleScore(): Int = when (this) {
-        EXACT -> 4
-        NEAR -> 3
-        UNKNOWN -> 0
-        DIFFERENT -> -5
-    }
-
-    fun artistScore(): Int = when (this) {
-        EXACT -> 3
-        NEAR -> 2
-        UNKNOWN -> 0
-        DIFFERENT -> -2
-    }
-
-    fun albumScore(): Int = when (this) {
-        EXACT -> 3
-        NEAR -> 2
-        UNKNOWN -> 0
-        DIFFERENT -> -1
-    }
-}
-
-internal fun titleAnnotationRank(
-    query: LyricsLookup,
-    candidate: LyricsResult
-): Int {
-    val wanted = titleIdentity(query.track)
-    val found = titleIdentity(candidate.candidateTrack)
-    val wantedArtists = artistIdentity(query.track, query.artist).effective
-    val foundArtists = artistIdentity(candidate.candidateTrack, candidate.candidateArtist).effective
-    val featuredExact = wanted.featuredArtists.all(foundArtists::contains) &&
-        found.featuredArtists.all(wantedArtists::contains)
-    if (wanted.annotations == found.annotations && featuredExact) return 0
-
-    val wantedHasAnnotations = wanted.annotations.isNotEmpty() ||
-        wanted.featuredArtists.isNotEmpty()
-    val foundHasAnnotations = found.annotations.isNotEmpty() ||
-        found.featuredArtists.isNotEmpty()
-    if (!wantedHasAnnotations || !foundHasAnnotations) return 1
-
-    val featuredRelated = wanted.featuredArtists.any(foundArtists::contains) ||
-        found.featuredArtists.any(wantedArtists::contains)
-    val versionRelated = wanted.versionQualifiers.isNotEmpty() &&
-        wanted.versionQualifiers == found.versionQualifiers
-    val annotationRelated = wanted.annotationTokens.any(found.annotationTokens::contains)
-    return if (featuredRelated || versionRelated || annotationRelated) 1 else 2
-}
-
-internal fun albumEvidence(first: String, second: String): EvidenceLevel {
-    val firstAlbum = normalizedAlbum(first)
-    val secondAlbum = normalizedAlbum(second)
-    if (firstAlbum.isBlank() || secondAlbum.isBlank()) return EvidenceLevel.UNKNOWN
-    if (firstAlbum == secondAlbum) return EvidenceLevel.EXACT
-    val firstCore = normalizedAlbumCore(first)
-    val secondCore = normalizedAlbumCore(second)
-    if (firstCore.isNotBlank() && firstCore == secondCore) return EvidenceLevel.NEAR
-    if (nearMetadataText(first, second)) return EvidenceLevel.NEAR
-    return if (haveDisjointScripts(firstAlbum, secondAlbum)) {
-        EvidenceLevel.UNKNOWN
-    } else {
-        EvidenceLevel.DIFFERENT
-    }
-}
-
-internal fun titlesMatch(first: String, second: String): Boolean {
-    val firstTitle = titleIdentity(first)
-    val secondTitle = titleIdentity(second)
-    return firstTitle.isValid && secondTitle.isValid &&
-        titleEvidence(firstTitle, secondTitle).isConfirmed()
-}
-
-internal fun versionEvidence(first: TitleIdentity, second: TitleIdentity): EvidenceLevel = when {
-    first.versionQualifiers == second.versionQualifiers -> EvidenceLevel.EXACT
-    first.versionQualifiers.isEmpty() || second.versionQualifiers.isEmpty() -> EvidenceLevel.NEAR
-    else -> EvidenceLevel.DIFFERENT
-}
-
-internal fun titleEvidence(first: TitleIdentity, second: TitleIdentity): EvidenceLevel {
-    if (!first.isValid || !second.isValid) return EvidenceLevel.UNKNOWN
-    val baseEvidence = when {
-        first.base == second.base -> EvidenceLevel.EXACT
-        else -> {
-            val firstBases = first.alternateBases + first.base
-            val secondBases = second.alternateBases + second.base
-            when {
-                firstBases.any(secondBases::contains) -> EvidenceLevel.NEAR
-                hasContiguousSubjectRelation(first.baseSegments, second.baseSegments) ->
-                    EvidenceLevel.NEAR
-                firstBases.any { firstBase ->
-                    secondBases.any { secondBase ->
-                        hasMinimumTextSimilarity(
-                            firstBase,
-                            secondBase,
-                            MINIMUM_TITLE_SIMILARITY_PERCENT
-                        )
-                    }
-                } -> EvidenceLevel.NEAR
-                haveDisjointScripts(first.base, second.base) -> EvidenceLevel.UNKNOWN
-                else -> EvidenceLevel.DIFFERENT
-            }
-        }
-    }
-    val versionEvidence = versionEvidence(first, second)
-    return when {
-        baseEvidence == EvidenceLevel.DIFFERENT ||
-            versionEvidence == EvidenceLevel.DIFFERENT -> EvidenceLevel.DIFFERENT
-        baseEvidence == EvidenceLevel.UNKNOWN -> EvidenceLevel.UNKNOWN
-        baseEvidence == EvidenceLevel.NEAR ||
-            versionEvidence == EvidenceLevel.NEAR -> EvidenceLevel.NEAR
-        else -> EvidenceLevel.EXACT
-    }
-}
-
 internal fun titleIdentity(value: String): TitleIdentity {
     val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
     val versionQualifiers = mutableSetOf<String>()
@@ -211,64 +90,6 @@ internal fun artistNames(value: String): List<String> = value
     .map(::normalizeText)
     .filter(String::isNotBlank)
 
-internal fun artistEvidence(
-    query: LyricsLookup,
-    candidate: LyricsResult
-): EvidenceLevel = artistEvidence(
-    query.track,
-    query.artist,
-    candidate.candidateTrack,
-    candidate.candidateArtist
-)
-
-internal fun artistEvidence(
-    firstTrack: String,
-    firstArtist: String,
-    secondTrack: String,
-    secondArtist: String
-): EvidenceLevel {
-    if (!isValidArtist(firstArtist) || !isValidArtist(secondArtist)) {
-        return EvidenceLevel.UNKNOWN
-    }
-    val first = artistIdentity(firstTrack, firstArtist)
-    val second = artistIdentity(secondTrack, secondArtist)
-    if (first.effective == second.effective) return EvidenceLevel.EXACT
-    if (first.declared == second.declared) return EvidenceLevel.NEAR
-
-    if (first.effective.containsAll(second.effective)) {
-        val omitted = first.effective - second.effective
-        if (omitted.isNotEmpty() && omitted.all(first.featured::contains)) {
-            return EvidenceLevel.NEAR
-        }
-    }
-    if (second.effective.containsAll(first.effective)) {
-        val omitted = second.effective - first.effective
-        if (omitted.isNotEmpty() && omitted.all(second.featured::contains)) {
-            return EvidenceLevel.NEAR
-        }
-    }
-    if (hasContiguousArtistSubject(first, second)) {
-        return EvidenceLevel.NEAR
-    }
-    if (first.effective.any { firstName ->
-            second.effective.any { secondName ->
-                hasMinimumTextSimilarity(
-                    firstName,
-                    secondName,
-                    MINIMUM_ARTIST_SIMILARITY_PERCENT
-                )
-            }
-        }
-    ) {
-        return EvidenceLevel.NEAR
-    }
-    return if (haveDisjointScripts(firstArtist, secondArtist)) {
-        EvidenceLevel.UNKNOWN
-    } else {
-        EvidenceLevel.DIFFERENT
-    }
-}
-
 internal fun artistIdentity(track: String, artist: String): ArtistIdentity {
     val featured = titleIdentity(track).featuredArtists
     return ArtistIdentity(
@@ -297,7 +118,7 @@ internal fun normalizedAlbumCore(value: String): String {
     return normalizedAlbum(withoutReleaseSuffix)
 }
 
-private fun hasContiguousArtistSubject(
+internal fun hasContiguousArtistSubject(
     first: ArtistIdentity,
     second: ArtistIdentity
 ): Boolean = first.displayNameSegments.any { firstSegments ->
@@ -310,6 +131,17 @@ private fun artistDisplayNameSegments(value: String): List<List<String>> = value
     .split(ARTIST_SEPARATOR_PATTERN)
     .map(::structuredTextSegments)
     .filter(List<String>::isNotEmpty)
+
+internal fun artistSearchAnchor(value: String): String? = artistDisplayNameSegments(value)
+    .asSequence()
+    .flatten()
+    .filter { segment -> segment.length >= MINIMUM_STRUCTURED_CORE_LENGTH }
+    .withIndex()
+    .maxWithOrNull(
+        compareBy<IndexedValue<String>> { indexed -> indexed.value.length }
+            .thenByDescending { indexed -> indexed.index }
+    )
+    ?.value
 
 private fun structuredTextSegments(value: String): List<String> {
     val segments = mutableListOf<String>()
@@ -346,7 +178,7 @@ private fun structuredTextSegments(value: String): List<String> {
     return segments
 }
 
-private fun hasContiguousSubjectRelation(
+internal fun hasContiguousSubjectRelation(
     first: List<String>,
     second: List<String>
 ): Boolean {
@@ -397,7 +229,7 @@ private data class CommonSegmentSpan(
     val length: Int
 )
 
-private fun nearMetadataText(first: String, second: String): Boolean {
+internal fun nearMetadataText(first: String, second: String): Boolean {
     val firstNormalized = normalizeText(first)
     val secondNormalized = normalizeText(second)
     val firstTokens = metadataTokens(first)
@@ -421,7 +253,7 @@ private fun nearMetadataText(first: String, second: String): Boolean {
         shorter.length * 100 >= longer.length * MINIMUM_NEAR_TEXT_PERCENT
 }
 
-private fun hasMinimumTextSimilarity(
+internal fun hasMinimumTextSimilarity(
     first: String,
     second: String,
     minimumPercent: Int
@@ -464,7 +296,7 @@ private fun metadataTokens(value: String): Set<String> =
         .filter(String::isNotBlank)
         .toSet()
 
-private fun haveDisjointScripts(first: String, second: String): Boolean {
+internal fun haveDisjointScripts(first: String, second: String): Boolean {
     val firstScripts = scripts(first)
     val secondScripts = scripts(second)
     return firstScripts.isNotEmpty() && secondScripts.isNotEmpty() &&
@@ -590,8 +422,8 @@ private val CJK_SEQUENCE_PATTERN = Regex("[\\u3400-\\u9fff\\uF900-\\uFAFF]+")
 private val ANNOTATION_STOP_WORDS = setOf("the", "and", "from", "with", "of")
 private const val MINIMUM_NEAR_TEXT_PERCENT = 70
 private const val MINIMUM_FUZZY_TEXT_LENGTH = 8
-private const val MINIMUM_TITLE_SIMILARITY_PERCENT = 85
-private const val MINIMUM_ARTIST_SIMILARITY_PERCENT = 90
+internal const val MINIMUM_TITLE_SIMILARITY_PERCENT = 85
+internal const val MINIMUM_ARTIST_SIMILARITY_PERCENT = 90
 private const val MINIMUM_ALBUM_SIMILARITY_PERCENT = 80
 private const val MINIMUM_STRUCTURED_CORE_LENGTH = 2
 private val LANGUAGE_DISPLAY_LOCALES = listOf(
