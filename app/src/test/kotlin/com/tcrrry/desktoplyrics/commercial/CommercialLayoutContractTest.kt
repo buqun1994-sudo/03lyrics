@@ -107,12 +107,16 @@ class CommercialLayoutContractTest {
 
         assertTrue(activity.contains("@+id/settings_navigation_display_icon"))
         assertTrue(activity.contains("@+id/settings_navigation_system_icon"))
+        assertTrue(activity.contains("@+id/settings_navigation_cache_icon"))
+        assertTrue(activity.contains("@+id/settings_navigation_search_icon"))
         assertTrue(activity.contains("@+id/settings_navigation_entitlement_icon"))
         assertTrue(activity.contains("android:layout_alignBottom=\"@id/settings_title_text\""))
         assertTrue(activity.contains("android:layout_toEndOf=\"@id/settings_title_text\""))
         assertTrue(activity.contains("android:layout_marginBottom=\"8dp\""))
-        assertTrue(strings.contains("<string name=\"settings_navigation_display\">显示设置</string>"))
-        assertTrue(strings.contains("<string name=\"settings_navigation_system\">系统设置</string>"))
+        assertTrue(strings.contains("<string name=\"settings_navigation_display\">歌词设置</string>"))
+        assertTrue(strings.contains("<string name=\"settings_navigation_system\">服务状态</string>"))
+        assertTrue(strings.contains("<string name=\"settings_navigation_cache\">歌词缓存</string>"))
+        assertTrue(strings.contains("<string name=\"settings_navigation_search\">歌词查找</string>"))
         assertTrue(strings.contains("<string name=\"settings_navigation_entitlement\">权益中心</string>"))
     }
 

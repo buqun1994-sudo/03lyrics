@@ -142,10 +142,30 @@ class LyricsOverlayTimingInstrumentationTest {
     @Test
     fun desktopSurfaceUsesStaticEdgeFadeWithoutAffectingTopbar() {
         evaluate("window.LobstaOverlay.setSurfaceMode('desktop'); true")
+        val desktopViewportHeight = evaluate(
+            "document.querySelector('.lyrics-viewport').clientHeight"
+        )
         val desktopMask = evaluate(
             "getComputedStyle(document.querySelector('.lyrics-viewport')).webkitMaskImage"
         )
         assertTrue("desktop lyric viewport should use a linear alpha mask", desktopMask.contains("linear-gradient"))
+
+        evaluate("window.LobstaOverlay.setDesktopVisibleRatio(0.5926); true")
+        assertEquals(
+            "updating the mask boundary must not reflow the lyric viewport",
+            desktopViewportHeight,
+            evaluate("document.querySelector('.lyrics-viewport').clientHeight")
+        )
+        assertEquals(
+            "\"59.2600%\"",
+            evaluate("document.documentElement.style.getPropertyValue('--desktop-visible-bottom')")
+        )
+        assertTrue(
+            "desktop mask should fade at the clipped visible boundary",
+            evaluate(
+                "getComputedStyle(document.querySelector('.lyrics-viewport')).webkitMaskImage"
+            ).contains("59.26%")
+        )
 
         evaluate("window.LobstaOverlay.setSurfaceMode('topbar'); true")
         assertEquals(

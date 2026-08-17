@@ -118,13 +118,20 @@ class LyricsOverlayService : Service() {
     private var lyricsTranslationEnabled = LYRICS_TRANSLATION_DEFAULT
     private var translationAvailable = false
     private var backgroundMode = BACKGROUND_DEFAULT
-    private var fontScalePercent = FONT_SCALE_DEFAULT_PERCENT
+    private var topbarFontScalePercent = FONT_SCALE_DEFAULT_PERCENT
+    private var wallpaperFontScalePercent = FONT_SCALE_DEFAULT_PERCENT
+    private var wallpaperBlurEnabled = WALLPAPER_BLUR_DEFAULT
+    private var wallpaperShadowEnabled = WALLPAPER_SHADOW_DEFAULT
+    private var wallpaperSpacing = WallpaperLyricsSpacing.STANDARD
+    private var wallpaperFocus = WallpaperLyricsFocus.CENTER
     private var nightTheme = true
     private var surfaceMode = LyricsSurfaceMode.TOPBAR
     private var surfaceHandoffTarget: LyricsSurfaceMode? = null
     private var surfaceHandoffGeneration = 0L
     private var displayState: IcarDisplayState? = null
     private var desktopSurfaceOccupied = false
+    private var rightDockState = IcarRightDockWindowState.UNKNOWN
+    private var desktopVisibleRatioBasisPoints: Int? = null
     private var monitorStarted = false
     private var foregroundStarted = false
     private var audioRouteMonitorStarted = false
@@ -146,6 +153,14 @@ class LyricsOverlayService : Service() {
     private var bluetoothReportedPlaybackState: Int? = null
     private var lastLyricsUsageKey = ""
     private var activeLyricsRequestJob: Job? = null
+    private var manualLyricsJob: Job? = null
+    private var manualLyricsCancellation: LyricsCancellationSignal? = null
+    private var manualSearchBinding: LyricsPlaybackIdentity? = null
+    private var manualSearchState = LyricsManualSearchState.IDLE
+    private val manualSearchCandidates = linkedMapOf<String, LyricsResult>()
+    private var manualLyricsGeneration = 0L
+    private var settingsStateGeneration = 0L
+    private var observedSettingsPlayback: LyricsPlaybackIdentity? = null
     private val runtimeGeneration = AtomicLong(0L)
     @Volatile private var latestLyricsRequestId = 0
 
@@ -173,6 +188,13 @@ class LyricsOverlayService : Service() {
         if (desktopSurfaceOccupied != occupied) {
             desktopSurfaceOccupied = occupied
             Log.i(LOG_TAG, "External desktop surface occupancy=$occupied")
+            if (displayState != null || overlayRoot != null) applyCurrentSurface()
+        }
+    }
+    private val rightDockStateListener: (IcarRightDockWindowState) -> Unit = { state ->
+        if (rightDockState != state) {
+            rightDockState = state
+            Log.i(LOG_TAG, "Right Dock window status=${state.status} top=${state.expandedTopPx}")
             if (displayState != null || overlayRoot != null) applyCurrentSurface()
         }
     }
@@ -256,6 +278,7 @@ class LyricsOverlayService : Service() {
         announceOverlayState()
         loadRuntimePreferences()
         SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
+        IcarRightDockStateRegistry.addListener(rightDockStateListener)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -473,13 +496,78 @@ class LyricsOverlayService : Service() {
         }
 
         if (intent?.action == ACTION_SET_FONT_SCALE) {
-            val previousPercent = fontScalePercent
-            fontScalePercent = normalizedFontScale(
+            val normalized = normalizedFontScale(
                 intent.getIntExtra(EXTRA_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
             )
-            prefs.edit().putInt(PREF_FONT_SCALE_PERCENT, fontScalePercent).apply()
-            applyFontScale(previousPercent, adjustCompactHeight = true)
+            topbarFontScalePercent = normalized
+            wallpaperFontScalePercent = normalized
+            prefs.edit()
+                .putInt(PREF_TOPBAR_FONT_SCALE_PERCENT, normalized)
+                .putInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, normalized)
+                .apply()
+            applyDisplayPreferencesToWeb()
             refreshTopbarPresentationGeometry()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_TOPBAR_FONT_SCALE) {
+            topbarFontScalePercent = normalizedFontScale(
+                intent.getIntExtra(EXTRA_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
+            )
+            prefs.edit()
+                .putInt(PREF_TOPBAR_FONT_SCALE_PERCENT, topbarFontScalePercent)
+                .apply()
+            applyDisplayPreferencesToWeb()
+            refreshTopbarPresentationGeometry()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_WALLPAPER_FONT_SCALE) {
+            wallpaperFontScalePercent = normalizedFontScale(
+                intent.getIntExtra(EXTRA_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
+            )
+            prefs.edit()
+                .putInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, wallpaperFontScalePercent)
+                .apply()
+            applyDisplayPreferencesToWeb()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_WALLPAPER_BLUR) {
+            wallpaperBlurEnabled = intent.getBooleanExtra(
+                EXTRA_WALLPAPER_BLUR_ENABLED,
+                WALLPAPER_BLUR_DEFAULT
+            )
+            prefs.edit().putBoolean(PREF_WALLPAPER_BLUR_ENABLED, wallpaperBlurEnabled).apply()
+            applyDisplayPreferencesToWeb()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_WALLPAPER_SHADOW) {
+            wallpaperShadowEnabled = intent.getBooleanExtra(
+                EXTRA_WALLPAPER_SHADOW_ENABLED,
+                WALLPAPER_SHADOW_DEFAULT
+            )
+            prefs.edit().putBoolean(PREF_WALLPAPER_SHADOW_ENABLED, wallpaperShadowEnabled).apply()
+            applyDisplayPreferencesToWeb()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_WALLPAPER_SPACING) {
+            wallpaperSpacing = WallpaperLyricsSpacing.fromPreference(
+                intent.getStringExtra(EXTRA_WALLPAPER_SPACING)
+            )
+            prefs.edit().putString(PREF_WALLPAPER_SPACING, wallpaperSpacing.preferenceValue).apply()
+            applyDisplayPreferencesToWeb()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_WALLPAPER_FOCUS) {
+            wallpaperFocus = WallpaperLyricsFocus.fromPreference(
+                intent.getStringExtra(EXTRA_WALLPAPER_FOCUS)
+            )
+            prefs.edit().putString(PREF_WALLPAPER_FOCUS, wallpaperFocus.preferenceValue).apply()
+            applyDisplayPreferencesToWeb()
             if (overlayRoot != null) return START_STICKY
         }
 
@@ -522,6 +610,7 @@ class LyricsOverlayService : Service() {
             localSettingsOpen = true
             if (monitorStarted) {
                 applyCurrentSurface()
+                publishSettingsState()
                 return START_STICKY
             }
         }
@@ -538,13 +627,42 @@ class LyricsOverlayService : Service() {
             }
         }
 
-        prefs.edit().putBoolean(PREF_AUTO_START, true).apply()
+        when (intent?.action) {
+            ACTION_REQUEST_SETTINGS_STATE -> {
+                if (lyricsCache == null) startRuntime()
+                publishSettingsState()
+                return START_STICKY
+            }
+            ACTION_SEARCH_MANUAL_LYRICS -> {
+                if (lyricsRepository == null) startRuntime()
+                searchManualLyrics(intent)
+                return START_STICKY
+            }
+            ACTION_SELECT_MANUAL_LYRICS -> {
+                if (lyricsCache == null) startRuntime()
+                selectManualLyrics(intent.getStringExtra(EXTRA_MANUAL_CANDIDATE_TOKEN).orEmpty())
+                return START_STICKY
+            }
+            ACTION_RESTORE_AUTOMATIC_LYRICS -> {
+                if (lyricsCache == null) startRuntime()
+                restoreAutomaticLyrics()
+                return START_STICKY
+            }
+            ACTION_CLEAR_CURRENT_LYRICS_CACHE -> {
+                if (lyricsCache == null) startRuntime()
+                clearCurrentLyricsCache()
+                return START_STICKY
+            }
+        }
+
         startRuntime()
+        publishSettingsState()
         return START_STICKY
     }
 
     override fun onDestroy() {
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
+        IcarRightDockStateRegistry.removeListener(rightDockStateListener)
         commercialRefreshJob.cancel()
         releaseRuntimeResources()
         mainHandler.removeCallbacksAndMessages(null)
@@ -556,8 +674,14 @@ class LyricsOverlayService : Service() {
     private fun loadRuntimePreferences() {
         nightTheme = isNightTheme(resources.configuration)
         backgroundMode = BACKGROUND_TRANSPARENT
-        fontScalePercent = normalizedFontScale(
+        val legacyFontScale = normalizedFontScale(
             prefs.getInt(PREF_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
+        )
+        topbarFontScalePercent = normalizedFontScale(
+            prefs.getInt(PREF_TOPBAR_FONT_SCALE_PERCENT, legacyFontScale)
+        )
+        wallpaperFontScalePercent = normalizedFontScale(
+            prefs.getInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, legacyFontScale)
         )
         compact = true
         surfaceMode = LyricsSurfaceMode.TOPBAR
@@ -572,8 +696,24 @@ class LyricsOverlayService : Service() {
             PREF_LYRICS_TRANSLATION_ENABLED,
             LYRICS_TRANSLATION_DEFAULT
         )
+        wallpaperBlurEnabled = prefs.getBoolean(
+            PREF_WALLPAPER_BLUR_ENABLED,
+            WALLPAPER_BLUR_DEFAULT
+        )
+        wallpaperShadowEnabled = prefs.getBoolean(
+            PREF_WALLPAPER_SHADOW_ENABLED,
+            WALLPAPER_SHADOW_DEFAULT
+        )
+        wallpaperSpacing = WallpaperLyricsSpacing.fromPreference(
+            prefs.getString(PREF_WALLPAPER_SPACING, WallpaperLyricsSpacing.STANDARD.preferenceValue)
+        )
+        wallpaperFocus = WallpaperLyricsFocus.fromPreference(
+            prefs.getString(PREF_WALLPAPER_FOCUS, WallpaperLyricsFocus.CENTER.preferenceValue)
+        )
         prefs.edit()
             .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
+            .putInt(PREF_TOPBAR_FONT_SCALE_PERCENT, topbarFontScalePercent)
+            .putInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, wallpaperFontScalePercent)
             .apply()
     }
 
@@ -616,6 +756,11 @@ class LyricsOverlayService : Service() {
 
     private fun releaseRuntimeResources() {
         runtimeGeneration.incrementAndGet()
+        cancelManualLyricsWork()
+        manualSearchBinding = null
+        manualSearchCandidates.clear()
+        manualSearchState = LyricsManualSearchState.IDLE
+        observedSettingsPlayback = null
         val activeRequest = synchronized(lyricsUsageLock) {
             latestLyricsRequestId = 0
             lastLyricsUsageKey = ""
@@ -650,6 +795,7 @@ class LyricsOverlayService : Service() {
 
     private fun destroyOverlay() {
         webReady = false
+        desktopVisibleRatioBasisPoints = null
         val player = webView
         val root = overlayRoot
         cancelSurfaceHandoff(resetAlpha = false)
@@ -796,6 +942,234 @@ class LyricsOverlayService : Service() {
                 }
             }
             if (shouldStart) requestJob.start() else requestJob.cancel()
+        }
+    }
+
+    private fun searchManualLyrics(intent: Intent) {
+        val playback = currentPlaybackIdentity()
+        val track = intent.getStringExtra(EXTRA_MANUAL_TRACK)?.trim().orEmpty()
+        val artist = intent.getStringExtra(EXTRA_MANUAL_ARTIST)?.trim().orEmpty()
+        val album = intent.getStringExtra(EXTRA_MANUAL_ALBUM)?.trim().orEmpty()
+        if (playback?.isUsable != true || track.isBlank()) {
+            cancelManualLyricsWork()
+            manualSearchBinding = null
+            manualSearchCandidates.clear()
+            manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
+            publishSettingsState()
+            return
+        }
+        val repository = lyricsRepository ?: return
+        val scope = lyricsScope ?: return
+        cancelManualLyricsWork()
+        manualSearchBinding = playback
+        manualSearchCandidates.clear()
+        manualSearchState = LyricsManualSearchState.SEARCHING
+        publishSettingsState()
+
+        val generation = manualLyricsGeneration
+        val cancellation = LyricsCancellationSignal()
+        manualLyricsCancellation = cancellation
+        val job = scope.launch {
+            val results = repository.searchManualCandidates(
+                LyricsLookup(track, artist, album, playback.durationMs),
+                cancellation
+            )
+            mainHandler.post {
+                if (generation != manualLyricsGeneration) return@post
+                manualLyricsJob = null
+                manualLyricsCancellation = null
+                manualSearchCandidates.clear()
+                results.forEach { candidate ->
+                    manualSearchCandidates[LyricsManualSearchPolicy.token(candidate)] = candidate
+                }
+                manualSearchState = if (results.isEmpty()) {
+                    LyricsManualSearchState.EMPTY
+                } else {
+                    LyricsManualSearchState.READY
+                }
+                publishSettingsState()
+            }
+        }
+        manualLyricsJob = job
+    }
+
+    private fun selectManualLyrics(token: String) {
+        val playback = currentPlaybackIdentity()
+        val binding = manualSearchBinding
+        val candidate = manualSearchCandidates[token]
+        if (binding?.isUsable != true || !samePlayback(binding, playback)) {
+            cancelManualLyricsWork()
+            manualSearchCandidates.clear()
+            manualSearchBinding = null
+            manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
+            publishSettingsState()
+            return
+        }
+        if (candidate == null) {
+            manualSearchState = LyricsManualSearchState.ERROR
+            publishSettingsState()
+            return
+        }
+        val repository = lyricsRepository ?: return
+        val cache = lyricsCache ?: return
+        val scope = lyricsScope ?: return
+        cancelManualLyricsWork()
+        manualSearchState = LyricsManualSearchState.APPLYING
+        publishSettingsState()
+
+        val generation = manualLyricsGeneration
+        val cancellation = LyricsCancellationSignal()
+        manualLyricsCancellation = cancellation
+        val loadJob = scope.launch {
+            val result = repository.loadManualLyrics(candidate, cancellation)
+            mainHandler.post {
+                if (generation != manualLyricsGeneration) return@post
+                manualLyricsCancellation = null
+                if (!samePlayback(binding, currentPlaybackIdentity())) {
+                    manualLyricsJob = null
+                    manualSearchCandidates.clear()
+                    manualSearchBinding = null
+                    manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
+                    publishSettingsState()
+                    return@post
+                }
+                if (result == null) {
+                    manualLyricsJob = null
+                    manualSearchState = LyricsManualSearchState.ERROR
+                    publishSettingsState()
+                    return@post
+                }
+                val cacheJob = scope.launch {
+                    cache.putManual(binding, result)
+                    mainHandler.post cacheCommitted@{
+                        if (generation != manualLyricsGeneration) return@cacheCommitted
+                        manualLyricsJob = null
+                        manualSearchState = LyricsManualSearchState.READY
+                        reloadCurrentLyrics()
+                        publishSettingsState()
+                    }
+                }
+                manualLyricsJob = cacheJob
+            }
+        }
+        manualLyricsJob = loadJob
+    }
+
+    private fun restoreAutomaticLyrics() {
+        val playback = currentPlaybackIdentity()
+        val cache = lyricsCache
+        val scope = lyricsScope
+        if (playback?.isUsable != true || cache == null || scope == null) {
+            manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
+            publishSettingsState()
+            return
+        }
+        scope.launch {
+            cache.clearManual(playback)
+            mainHandler.post {
+                reloadCurrentLyrics()
+                publishSettingsState()
+            }
+        }
+    }
+
+    private fun clearCurrentLyricsCache() {
+        val playback = currentPlaybackIdentity()
+        val cache = lyricsCache
+        val scope = lyricsScope
+        if (playback?.isUsable != true || cache == null || scope == null) {
+            publishSettingsState()
+            return
+        }
+        scope.launch {
+            cache.clearCurrent(playback)
+            mainHandler.post { publishSettingsState() }
+        }
+    }
+
+    private fun cancelManualLyricsWork() {
+        manualLyricsGeneration += 1L
+        manualLyricsCancellation?.cancel()
+        manualLyricsCancellation = null
+        manualLyricsJob?.cancel()
+        manualLyricsJob = null
+    }
+
+    private fun reloadCurrentLyrics() {
+        if (!webReady) return
+        webView?.evaluateJavascript(
+            "window.LobstaOverlay && window.LobstaOverlay.retryLyrics();",
+            null
+        )
+    }
+
+    private fun currentPlaybackIdentity(): LyricsPlaybackIdentity? {
+        val metadata = currentController?.metadata ?: return null
+        val track = mediaTitle(metadata).orEmpty()
+        if (track.isBlank()) return null
+        val artist = firstMetadataString(
+            metadata,
+            MediaMetadata.METADATA_KEY_ARTIST,
+            MediaMetadata.METADATA_KEY_ALBUM_ARTIST,
+            MediaMetadata.METADATA_KEY_AUTHOR,
+            MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE
+        ).orEmpty()
+        val album = firstMetadataString(metadata, MediaMetadata.METADATA_KEY_ALBUM).orEmpty()
+        return LyricsPlaybackIdentity(
+            track,
+            artist,
+            album,
+            metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
+        )
+    }
+
+    private fun samePlayback(
+        first: LyricsPlaybackIdentity?,
+        second: LyricsPlaybackIdentity?
+    ): Boolean = when {
+        first == null || second == null -> first == second
+        first.isUsable && second.isUsable -> first.sameRecordingAs(second)
+        else -> first == second
+    }
+
+    private fun refreshSettingsPlaybackIdentity() {
+        val current = currentPlaybackIdentity()
+        if (samePlayback(observedSettingsPlayback, current)) return
+        observedSettingsPlayback = current
+        if (manualSearchBinding != null && !samePlayback(manualSearchBinding, current)) {
+            cancelManualLyricsWork()
+            manualSearchBinding = null
+            manualSearchCandidates.clear()
+            manualSearchState = LyricsManualSearchState.IDLE
+        }
+        publishSettingsState()
+    }
+
+    private fun publishSettingsState() {
+        val cache = lyricsCache ?: return
+        val scope = lyricsScope ?: return
+        val playback = currentPlaybackIdentity()
+        val searchState = manualSearchState
+        val candidates = manualSearchCandidates.map { (token, result) ->
+            LyricsManualSearchCandidate(token, result.candidateSnapshot())
+        }
+        val generation = ++settingsStateGeneration
+        scope.launch {
+            val snapshot = cache.snapshot(playback)
+            val state = LyricsSettingsRuntimeState(
+                playback = playback,
+                cache = snapshot,
+                searchState = searchState,
+                searchCandidates = candidates
+            )
+            mainHandler.post {
+                if (generation != settingsStateGeneration) return@post
+                sendBroadcast(
+                    Intent(ACTION_SETTINGS_STATE_CHANGED)
+                        .setPackage(packageName)
+                        .putExtra(EXTRA_SETTINGS_STATE, state.encode())
+                )
+            }
         }
     }
 
@@ -1039,8 +1413,10 @@ class LyricsOverlayService : Service() {
     @Suppress("SetJavaScriptEnabled")
     private fun createOverlay() {
         val generation = runtimeGeneration.get()
+        val presentation = currentPresentation()
+        surfaceMode = presentation.surfaceMode
         compact = surfaceMode == LyricsSurfaceMode.TOPBAR
-        val geometry = overlayGeometry(surfaceMode, displayState)
+        val geometry = geometryForPresentation(presentation)
         if (geometry.width <= 0 || geometry.height <= 0) {
             Log.i(LOG_TAG, "Lyric surface withheld because no safe width is available")
             return
@@ -1069,6 +1445,8 @@ class LyricsOverlayService : Service() {
         windowParams = params
 
         val root = FrameLayout(this).apply {
+            clipChildren = true
+            clipToPadding = true
             clipToOutline = true
             elevation = 0f
             background = overlayBackground(compact)
@@ -1079,7 +1457,7 @@ class LyricsOverlayService : Service() {
         webContainer = webContainerView
         root.addView(webContainerView, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            if (compact) topbarWindowHeight() else ViewGroup.LayoutParams.MATCH_PARENT,
+            if (compact) topbarWindowHeight() else desktopWindowHeight(),
             Gravity.TOP
         ))
 
@@ -1104,8 +1482,17 @@ class LyricsOverlayService : Service() {
                     if (generation != runtimeGeneration.get() || view !== webView) return
                     webReady = true
                     applyThemeToWeb()
-                    applyFontScale(fontScalePercent, adjustCompactHeight = false)
+                    applyDisplayPreferencesToWeb()
                     applySurfaceModeToWeb()
+                    applyDesktopVisibleBoundaryToWeb(
+                        OverlayGeometry(
+                            x = params.x,
+                            y = params.y,
+                            width = params.width,
+                            height = params.height
+                        ),
+                        force = true
+                    )
                     applyTopbarLines()
                     applyLyricsTranslationEnabled()
                     applyBackgroundMode()
@@ -1130,6 +1517,7 @@ class LyricsOverlayService : Service() {
         updateWebContainerLayout(compact)
 
         windowManager.addView(root, params)
+        updateOverlayVisibility(geometry, presentation.visibility)
     }
 
     private data class OverlayGeometry(
@@ -1140,42 +1528,67 @@ class LyricsOverlayService : Service() {
     )
 
     private fun onIcarDisplayStateChanged(state: IcarDisplayState) {
-        val previous = displayState
         displayState = state
-        applyCurrentSurface(previous)
+        applyCurrentSurface()
     }
 
-    /** Reconciles launcher, system-window, leased-surface, local-page, and preference state. */
-    private fun applyCurrentSurface(previousState: IcarDisplayState? = null) {
-        val nextSurfaceMode = IcarLyricsSurfacePolicy.effectiveSurfaceMode(
+    /** Resolves the only lyric presentation from the latest vehicle and user state. */
+    private fun currentPresentation(): IcarLyricsPresentation =
+        IcarLyricsPresentationPolicy.resolve(
             displayState = displayState,
             wallpaperLyricsEnabled = wallpaperLyricsEnabled,
             localSettingsOpen = localSettingsOpen,
-            desktopSurfaceOccupied = desktopSurfaceOccupied
+            desktopSurfaceOccupied = desktopSurfaceOccupied,
+            rightDockState = rightDockState
         )
-        val geometry = overlayGeometry(nextSurfaceMode, displayState)
-        if (overlayRoot == null && geometry.width > 0 && geometry.height > 0) {
-            surfaceMode = nextSurfaceMode
+
+    private fun geometryForPresentation(presentation: IcarLyricsPresentation): OverlayGeometry =
+        overlayGeometry(
+            mode = presentation.surfaceMode,
+            state = displayState,
+            desktopBottomLimitPx = presentation.desktopBottomLimitPx
+        )
+
+    private fun geometryForSurface(mode: LyricsSurfaceMode): OverlayGeometry {
+        val presentation = currentPresentation()
+        return overlayGeometry(
+            mode = mode,
+            state = displayState,
+            desktopBottomLimitPx = if (presentation.surfaceMode == mode) {
+                presentation.desktopBottomLimitPx
+            } else {
+                null
+            }
+        )
+    }
+
+    private fun applyCurrentSurface() {
+        val presentation = currentPresentation()
+        val nextSurfaceMode = presentation.surfaceMode
+        val geometry = geometryForPresentation(presentation)
+        val root = overlayRoot
+        if (root == null) {
             createOverlay()
             return
+        }
+        if (presentation.visibility == LyricsOverlayVisibility.HIDDEN) {
+            cancelSurfaceHandoff()
+            root.visibility = View.GONE
         }
         if (surfaceMode != nextSurfaceMode ||
             (surfaceHandoffTarget != null && surfaceHandoffTarget != nextSurfaceMode)
         ) {
             applySurfaceMode(nextSurfaceMode)
         }
-        if (surfaceMode == nextSurfaceMode &&
-            nextSurfaceMode == LyricsSurfaceMode.TOPBAR &&
-            previousState?.topbarGeometry() != displayState?.topbarGeometry()
-        ) {
-            displayState?.let(::applyTopbarGeometry)
+        if (surfaceMode == nextSurfaceMode) {
+            windowParams?.let { params -> applyOverlayGeometry(params, geometry) }
         }
-        updateOverlayVisibility(geometry)
+        updateOverlayVisibility(geometry, presentation.visibility)
     }
 
     private fun applySurfaceMode(nextSurfaceMode: LyricsSurfaceMode) {
         val root = overlayRoot
-        val geometry = overlayGeometry(nextSurfaceMode, displayState)
+        val geometry = geometryForSurface(nextSurfaceMode)
         if (root == null || root.visibility != View.VISIBLE ||
             !IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)
         ) {
@@ -1221,7 +1634,7 @@ class LyricsOverlayService : Service() {
     ) {
         if (!isCurrentSurfaceHandoff(root, nextSurfaceMode, generation)) return
         root.alpha = 0f
-        val geometry = overlayGeometry(nextSurfaceMode, displayState)
+        val geometry = geometryForSurface(nextSurfaceMode)
         if (!IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)) {
             commitSurfaceMode(nextSurfaceMode, geometry)
             finishSurfaceHandoff(root, nextSurfaceMode, generation)
@@ -1286,7 +1699,7 @@ class LyricsOverlayService : Service() {
 
     private fun commitSurfaceMode(
         nextSurfaceMode: LyricsSurfaceMode,
-        geometry: OverlayGeometry = overlayGeometry(nextSurfaceMode, displayState),
+        geometry: OverlayGeometry = geometryForSurface(nextSurfaceMode),
         onWebApplied: (() -> Unit)? = null
     ) {
         surfaceMode = nextSurfaceMode
@@ -1310,22 +1723,53 @@ class LyricsOverlayService : Service() {
 
     private fun applyOverlayGeometry(params: WindowManager.LayoutParams, geometry: OverlayGeometry) {
         if (!IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)) {
-            overlayRoot?.visibility = View.GONE
             return
         }
+        val changed = params.x != geometry.x ||
+            params.y != geometry.y ||
+            params.width != geometry.width ||
+            params.height != geometry.height
         params.x = geometry.x
         params.y = geometry.y
         params.width = geometry.width
         params.height = geometry.height
+        applyDesktopVisibleBoundaryToWeb(geometry)
+        if (!changed) return
         overlayRoot?.let { root ->
-            root.visibility = View.VISIBLE
             runCatching { windowManager.updateViewLayout(root, params) }
                 .onFailure { error -> Log.w(LOG_TAG, "Unable to update lyric surface", error) }
         }
     }
 
-    private fun updateOverlayVisibility(geometry: OverlayGeometry = overlayGeometry(surfaceMode, displayState)) {
+    private fun applyDesktopVisibleBoundaryToWeb(
+        geometry: OverlayGeometry,
+        force: Boolean = false
+    ) {
+        if (!webReady) return
+        val ratioBasisPoints = if (surfaceMode == LyricsSurfaceMode.DESKTOP) {
+            IcarWallpaperClipPolicy.visibleRatioBasisPoints(
+                defaultHeightPx = desktopWindowHeight(),
+                visibleHeightPx = geometry.height
+            )
+        } else {
+            IcarWallpaperClipPolicy.FULL_RATIO_BASIS_POINTS
+        }
+        if (!force && desktopVisibleRatioBasisPoints == ratioBasisPoints) return
+        desktopVisibleRatioBasisPoints = ratioBasisPoints
+        val ratio = ratioBasisPoints.toDouble() /
+            IcarWallpaperClipPolicy.FULL_RATIO_BASIS_POINTS
+        webView?.evaluateJavascript(
+            "window.LobstaOverlay && window.LobstaOverlay.setDesktopVisibleRatio($ratio);",
+            null
+        )
+    }
+
+    private fun updateOverlayVisibility(
+        geometry: OverlayGeometry,
+        visibility: LyricsOverlayVisibility
+    ) {
         overlayRoot?.visibility = if (
+            visibility == LyricsOverlayVisibility.VISIBLE &&
             IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)
         ) {
             View.VISIBLE
@@ -1336,7 +1780,8 @@ class LyricsOverlayService : Service() {
 
     private fun overlayGeometry(
         mode: LyricsSurfaceMode,
-        state: IcarDisplayState?
+        state: IcarDisplayState?,
+        desktopBottomLimitPx: Int? = null
     ): OverlayGeometry {
         val realMetrics = DisplayMetrics()
         @Suppress("DEPRECATION")
@@ -1350,12 +1795,17 @@ class LyricsOverlayService : Service() {
             val left = scaledX(DESKTOP_LEFT)
             val top = scaledY(DESKTOP_TOP)
             val right = scaledX(DESKTOP_RIGHT).coerceAtMost(screenWidth)
-            val bottom = scaledY(DESKTOP_BOTTOM).coerceAtMost(screenHeight)
+            val defaultBottom = scaledY(DESKTOP_BOTTOM).coerceAtMost(screenHeight)
+            val bottom = IcarWallpaperClipPolicy.bottomPx(
+                defaultBottomPx = defaultBottom,
+                dockTopPx = desktopBottomLimitPx,
+                safeGapPx = scaledY(RIGHT_DOCK_SAFE_GAP)
+            )
             return OverlayGeometry(
                 x = left,
                 y = top,
                 width = max(1, right - left),
-                height = max(1, bottom - top)
+                height = max(0, bottom - top)
             )
         }
 
@@ -1427,9 +1877,23 @@ class LyricsOverlayService : Service() {
             maximumHeight,
             max(
                 baseHeight,
-                dp(LyricsTopbarHeightPolicy.requiredHeightDp(topbarLines, fontScalePercent))
+                dp(
+                    LyricsTopbarHeightPolicy.requiredHeightDp(
+                        topbarLines,
+                        topbarFontScalePercent
+                    )
+                )
             )
         )
+    }
+
+    private fun desktopWindowHeight(): Int {
+        val realMetrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(realMetrics)
+        val top = (realMetrics.heightPixels * DESKTOP_TOP / DESIGN_HEIGHT.toFloat()).roundToInt()
+        val bottom = (realMetrics.heightPixels * DESKTOP_BOTTOM / DESIGN_HEIGHT.toFloat()).roundToInt()
+        return (bottom - top).coerceAtLeast(1)
     }
 
     private fun applyBackgroundMode() {
@@ -1453,12 +1917,17 @@ class LyricsOverlayService : Service() {
         configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
             Configuration.UI_MODE_NIGHT_YES
 
-    private fun applyFontScale(
-        @Suppress("UNUSED_PARAMETER") previousPercent: Int,
-        @Suppress("UNUSED_PARAMETER") adjustCompactHeight: Boolean
-    ) {
+    private fun applyDisplayPreferencesToWeb() {
+        if (!webReady) return
+        val value = JSONObject()
+            .put("topbarFontScale", topbarFontScalePercent)
+            .put("wallpaperFontScale", wallpaperFontScalePercent)
+            .put("wallpaperBlur", wallpaperBlurEnabled)
+            .put("wallpaperShadow", wallpaperShadowEnabled)
+            .put("wallpaperSpacing", wallpaperSpacing.preferenceValue)
+            .put("wallpaperFocus", wallpaperFocus.preferenceValue)
         webView?.evaluateJavascript(
-            "window.LobstaOverlay && window.LobstaOverlay.setFontScale($fontScalePercent);",
+            "window.LobstaOverlay && window.LobstaOverlay.setDisplayPreferences($value);",
             null
         )
     }
@@ -1487,7 +1956,7 @@ class LyricsOverlayService : Service() {
             containerParams.height = if (isTopbar) {
                 topbarWindowHeight()
             } else {
-                ViewGroup.LayoutParams.MATCH_PARENT
+                desktopWindowHeight()
             }
             containerParams.gravity = Gravity.TOP
             container.layoutParams = containerParams
@@ -1734,6 +2203,7 @@ class LyricsOverlayService : Service() {
         }
         pendingSnapshot = snapshot
         deliverToWeb(snapshot)
+        refreshSettingsPlaybackIdentity()
     }
 
     private fun buildSnapshot(controller: MediaController): JSONObject {
@@ -2122,6 +2592,18 @@ class LyricsOverlayService : Service() {
         const val ACTION_STATE_CHANGED = "com.tcrrry.desktoplyrics.action.LYRICS_OVERLAY_STATE_CHANGED"
         const val ACTION_SET_BACKGROUND = "com.tcrrry.desktoplyrics.action.SET_LYRICS_BACKGROUND"
         const val ACTION_SET_FONT_SCALE = "com.tcrrry.desktoplyrics.action.SET_LYRICS_FONT_SCALE"
+        const val ACTION_SET_TOPBAR_FONT_SCALE =
+            "com.tcrrry.desktoplyrics.action.SET_TOPBAR_FONT_SCALE"
+        const val ACTION_SET_WALLPAPER_FONT_SCALE =
+            "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_FONT_SCALE"
+        const val ACTION_SET_WALLPAPER_BLUR =
+            "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_BLUR"
+        const val ACTION_SET_WALLPAPER_SHADOW =
+            "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_SHADOW"
+        const val ACTION_SET_WALLPAPER_SPACING =
+            "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_SPACING"
+        const val ACTION_SET_WALLPAPER_FOCUS =
+            "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_FOCUS"
         const val ACTION_SET_TOPBAR_LINES = "com.tcrrry.desktoplyrics.action.SET_TOPBAR_LINES"
         const val ACTION_SET_LYRICS_TRANSLATION =
             "com.tcrrry.desktoplyrics.action.SET_LYRICS_TRANSLATION"
@@ -2129,20 +2611,47 @@ class LyricsOverlayService : Service() {
             "com.tcrrry.desktoplyrics.action.SET_WALLPAPER_LYRICS"
         const val ACTION_SETTINGS_OPENED = "com.tcrrry.desktoplyrics.action.SETTINGS_OPENED"
         const val ACTION_SETTINGS_CLOSED = "com.tcrrry.desktoplyrics.action.SETTINGS_CLOSED"
+        const val ACTION_REQUEST_SETTINGS_STATE =
+            "com.tcrrry.desktoplyrics.action.REQUEST_SETTINGS_STATE"
+        const val ACTION_SETTINGS_STATE_CHANGED =
+            "com.tcrrry.desktoplyrics.action.SETTINGS_STATE_CHANGED"
+        const val ACTION_SEARCH_MANUAL_LYRICS =
+            "com.tcrrry.desktoplyrics.action.SEARCH_MANUAL_LYRICS"
+        const val ACTION_SELECT_MANUAL_LYRICS =
+            "com.tcrrry.desktoplyrics.action.SELECT_MANUAL_LYRICS"
+        const val ACTION_RESTORE_AUTOMATIC_LYRICS =
+            "com.tcrrry.desktoplyrics.action.RESTORE_AUTOMATIC_LYRICS"
+        const val ACTION_CLEAR_CURRENT_LYRICS_CACHE =
+            "com.tcrrry.desktoplyrics.action.CLEAR_CURRENT_LYRICS_CACHE"
         const val EXTRA_START_SOURCE = "start_source"
         const val EXTRA_BACKGROUND_MODE = "background_mode"
         const val EXTRA_FONT_SCALE_PERCENT = "font_scale_percent"
         const val EXTRA_TOPBAR_LINES = "topbar_lines"
         const val EXTRA_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled"
         const val EXTRA_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled"
+        const val EXTRA_WALLPAPER_BLUR_ENABLED = "wallpaper_blur_enabled"
+        const val EXTRA_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled"
+        const val EXTRA_WALLPAPER_SPACING = "wallpaper_spacing"
+        const val EXTRA_WALLPAPER_FOCUS = "wallpaper_focus"
+        const val EXTRA_MANUAL_TRACK = "manual_track"
+        const val EXTRA_MANUAL_ARTIST = "manual_artist"
+        const val EXTRA_MANUAL_ALBUM = "manual_album"
+        const val EXTRA_MANUAL_CANDIDATE_TOKEN = "manual_candidate_token"
+        const val EXTRA_SETTINGS_STATE = "settings_state"
         const val EXTRA_RUNNING = "running"
         const val PREFS_NAME = "lyrics_overlay_prefs"
         const val PREF_BACKGROUND_MODE = "background_mode"
         const val PREF_FONT_SCALE_PERCENT = "font_scale_percent"
+        const val PREF_TOPBAR_FONT_SCALE_PERCENT = "topbar_font_scale_percent_v1"
+        const val PREF_WALLPAPER_FONT_SCALE_PERCENT = "wallpaper_font_scale_percent_v1"
         const val PREF_AUTO_START = "auto_start"
         const val PREF_TOPBAR_LINES = "topbar_lines_v1"
         const val PREF_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled_v1"
         const val PREF_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled_v1"
+        const val PREF_WALLPAPER_BLUR_ENABLED = "wallpaper_blur_enabled_v1"
+        const val PREF_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled_v1"
+        const val PREF_WALLPAPER_SPACING = "wallpaper_spacing_v1"
+        const val PREF_WALLPAPER_FOCUS = "wallpaper_focus_v1"
         const val BACKGROUND_TRANSPARENT = "transparent"
         const val BACKGROUND_LOW = "low"
         const val BACKGROUND_HIGH = "high"
@@ -2151,6 +2660,8 @@ class LyricsOverlayService : Service() {
         const val FONT_SCALE_MAX_PERCENT = 150
         const val FONT_SCALE_DEFAULT_PERCENT = 100
         const val WALLPAPER_LYRICS_DEFAULT = true
+        const val WALLPAPER_BLUR_DEFAULT = true
+        const val WALLPAPER_SHADOW_DEFAULT = false
         const val LYRICS_TRANSLATION_DEFAULT = true
         const val START_SOURCE_BOOT_COMPLETED = "boot_completed"
         const val START_SOURCE_PACKAGE_REPLACED = "package_replaced"
@@ -2174,6 +2685,7 @@ class LyricsOverlayService : Service() {
         private const val DESKTOP_TOP = 90
         private const val DESKTOP_RIGHT = 1890
         private const val DESKTOP_BOTTOM = 900
+        private const val RIGHT_DOCK_SAFE_GAP = 16
         private const val SURFACE_FADE_OUT_MS = 120L
         private const val SURFACE_FADE_IN_MS = 160L
         private const val SURFACE_HIDDEN_ALPHA = 0.01f

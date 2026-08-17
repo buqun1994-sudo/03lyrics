@@ -111,6 +111,66 @@
             </LinearLayout>
 
             <LinearLayout
+                android:id="@+id/settings_navigation_cache"
+                android:layout_width="@dimen/settings_navigation_width"
+                android:layout_height="@dimen/settings_navigation_height"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="@dimen/settings_navigation_padding_start"
+                android:paddingEnd="@dimen/settings_navigation_padding_end">
+
+                <ImageView
+                    android:id="@+id/settings_navigation_cache_icon"
+                    android:layout_width="@dimen/settings_navigation_icon_size"
+                    android:layout_height="@dimen/settings_navigation_icon_size"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_settings_navigation_cache" />
+
+                <TextView
+                    android:id="@+id/settings_navigation_cache_label"
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="@dimen/settings_navigation_label_spacing"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical|start"
+                    android:importantForAccessibility="no"
+                    android:text="@string/settings_navigation_cache" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/settings_navigation_search"
+                android:layout_width="@dimen/settings_navigation_width"
+                android:layout_height="@dimen/settings_navigation_height"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="@dimen/settings_navigation_padding_start"
+                android:paddingEnd="@dimen/settings_navigation_padding_end">
+
+                <ImageView
+                    android:id="@+id/settings_navigation_search_icon"
+                    android:layout_width="@dimen/settings_navigation_icon_size"
+                    android:layout_height="@dimen/settings_navigation_icon_size"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_settings_navigation_search" />
+
+                <TextView
+                    android:id="@+id/settings_navigation_search_label"
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="@dimen/settings_navigation_label_spacing"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical|start"
+                    android:importantForAccessibility="no"
+                    android:text="@string/settings_navigation_search" />
+            </LinearLayout>
+
+            <LinearLayout
                 android:id="@+id/settings_navigation_entitlement"
                 android:layout_width="@dimen/settings_navigation_width"
                 android:layout_height="@dimen/settings_navigation_height"
@@ -165,6 +225,8 @@
 
                     <include layout="@layout/content_settings_display" />
                     <include layout="@layout/content_settings_system" />
+                    <include layout="@layout/content_settings_cache" />
+                    <include layout="@layout/content_settings_search" />
                     <include layout="@layout/content_settings_commercial" />
                 </FrameLayout>
             </ScrollView>

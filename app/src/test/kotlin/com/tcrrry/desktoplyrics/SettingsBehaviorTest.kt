@@ -193,6 +193,83 @@ class SettingsBehaviorTest {
     }
 
     @Test
+    fun `wallpaper presentation defaults preserve the current visual behavior`() {
+        assertTrue(LyricsOverlayService.WALLPAPER_BLUR_DEFAULT)
+        assertFalse(LyricsOverlayService.WALLPAPER_SHADOW_DEFAULT)
+        assertNotEquals(
+            LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT,
+            LyricsOverlayService.PREF_WALLPAPER_FONT_SCALE_PERCENT
+        )
+        assertNotEquals(
+            LyricsOverlayService.ACTION_SET_TOPBAR_FONT_SCALE,
+            LyricsOverlayService.ACTION_SET_WALLPAPER_FONT_SCALE
+        )
+    }
+
+    @Test
+    fun `settings layout exposes the confirmed five categories and display controls`() {
+        var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
+        while (!File(appDirectory, "src/main").isDirectory) {
+            appDirectory = requireNotNull(appDirectory.parentFile)
+        }
+        val activity = File(appDirectory, "src/main/res/layout/activity_main.xml").readText()
+        val display = File(
+            appDirectory,
+            "src/main/res/layout/content_settings_display.xml"
+        ).readText()
+        val search = File(
+            appDirectory,
+            "src/main/res/layout/content_settings_search.xml"
+        ).readText()
+        val cache = File(
+            appDirectory,
+            "src/main/res/layout/content_settings_cache.xml"
+        ).readText()
+
+        assertTrue(activity.contains("@+id/settings_navigation_cache"))
+        assertTrue(activity.contains("@+id/settings_navigation_search"))
+        assertTrue(display.contains("@+id/topbar_font_size_small"))
+        assertTrue(display.contains("@+id/wallpaper_font_size_small"))
+        assertTrue(display.contains("@+id/wallpaper_blur_switch"))
+        assertTrue(display.contains("@+id/wallpaper_shadow_switch"))
+        assertTrue(display.contains("@+id/wallpaper_spacing_dense"))
+        assertTrue(display.contains("@+id/wallpaper_focus_top"))
+        assertTrue(search.contains("@+id/search_track_input"))
+        assertTrue(search.contains("@+id/search_artist_input"))
+        assertTrue(search.contains("@+id/search_album_input"))
+        assertTrue(search.contains("@+id/search_action_icon"))
+        assertTrue(search.contains("@+id/search_action_label"))
+        assertTrue(cache.contains("@+id/cache_remaining_estimate_text"))
+        assertFalse(cache.contains("@+id/cache_clear_all_action"))
+    }
+
+    @Test
+    fun `display preferences remain surface specific in the web overlay`() {
+        var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
+        while (!File(appDirectory, "src/main").isDirectory) {
+            appDirectory = requireNotNull(appDirectory.parentFile)
+        }
+        val overlay = File(
+            appDirectory,
+            "src/main/assets/lyrics_overlay.html"
+        ).readText()
+        val service = File(
+            appDirectory,
+            "src/main/kotlin/com/tcrrry/desktoplyrics/LyricsOverlayService.kt"
+        ).readText()
+
+        assertTrue(overlay.contains("function setDisplayPreferences(value)"))
+        assertTrue(overlay.contains("topbarLyricFontScale"))
+        assertTrue(overlay.contains("wallpaperLyricFontScale"))
+        assertTrue(overlay.contains("desktopFocusRatio=settings.wallpaperFocus==='top' ? .15 : .48"))
+        assertTrue(overlay.contains("desktop-all-shadow"))
+        assertTrue(overlay.contains("desktop-all-shadow .line.active"))
+        assertTrue(overlay.contains("desktop-blur"))
+        assertFalse(service.contains("ACTION_CLEAR_ALL_LYRICS_CACHE"))
+        assertFalse(service.contains(".putBoolean(PREF_AUTO_START, true)"))
+    }
+
+    @Test
     fun `commercial recovery releases all lyrics runtime owners before a later rebuild`() {
         var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
         while (!File(appDirectory, "src/main").isDirectory) {

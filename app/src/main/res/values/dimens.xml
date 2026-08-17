@@ -29,6 +29,24 @@
     <dimen name="settings_switch_width">73dp</dimen>
     <dimen name="settings_switch_height">41dp</dimen>
 
+    <dimen name="settings_section_spacing">52dp</dimen>
+    <dimen name="settings_subgroup_spacing">30dp</dimen>
+    <dimen name="settings_section_summary_spacing">7dp</dimen>
+    <dimen name="settings_full_switch_card_height">116dp</dimen>
+    <dimen name="settings_compact_control_height">68dp</dimen>
+    <dimen name="settings_compact_control_gap">12dp</dimen>
+    <dimen name="settings_search_action_width">126dp</dimen>
+    <dimen name="settings_search_action_icon_size">24dp</dimen>
+    <dimen name="settings_search_action_content_gap">8dp</dimen>
+    <dimen name="settings_search_result_height">106dp</dimen>
+    <dimen name="settings_search_result_spacing">12dp</dimen>
+    <dimen name="settings_search_result_padding_horizontal">22dp</dimen>
+    <dimen name="settings_info_card_padding">26dp</dimen>
+    <dimen name="settings_info_card_spacing">14dp</dimen>
+    <dimen name="settings_action_card_height">108dp</dimen>
+    <dimen name="settings_compact_text_primary">23sp</dimen>
+    <dimen name="settings_compact_text_secondary">18sp</dimen>
+
     <dimen name="settings_window_radius">20dp</dimen>
     <dimen name="settings_control_radius">20dp</dimen>
     <dimen name="settings_selected_radius">14dp</dimen>

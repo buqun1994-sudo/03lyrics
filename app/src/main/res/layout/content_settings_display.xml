@@ -15,6 +15,13 @@
         android:layout_height="wrap_content"
         android:text="@string/settings_topbar_display" />
 
+    <TextView
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_lyrics_lines" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="@dimen/settings_segment_height"
@@ -47,10 +54,10 @@
     </LinearLayout>
 
     <TextView
-        style="@style/SettingsText.Body1.Emphasis"
+        style="@style/SettingsText.Body2.Emphasis"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/settings_group_spacing"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
         android:text="@string/settings_lyrics_size" />
 
     <LinearLayout
@@ -62,7 +69,7 @@
         android:padding="@dimen/settings_segment_padding">
 
         <TextView
-            android:id="@+id/font_size_small"
+            android:id="@+id/topbar_font_size_small"
             style="@style/SettingsText.Option"
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -73,7 +80,7 @@
             android:text="@string/settings_size_small" />
 
         <TextView
-            android:id="@+id/font_size_standard"
+            android:id="@+id/topbar_font_size_standard"
             style="@style/SettingsText.Option"
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -84,7 +91,7 @@
             android:text="@string/settings_size_standard" />
 
         <TextView
-            android:id="@+id/font_size_large"
+            android:id="@+id/topbar_font_size_large"
             style="@style/SettingsText.Option"
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -99,17 +106,117 @@
         style="@style/SettingsText.Body1.Emphasis"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/settings_group_spacing"
-        android:text="@string/settings_other" />
+        android:layout_marginTop="@dimen/settings_section_spacing"
+        android:text="@string/settings_wallpaper_lyrics_section" />
+
+    <TextView
+        style="@style/SettingsText.Caption2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_section_summary_spacing"
+        android:text="@string/settings_wallpaper_lyrics_section_summary" />
+
+    <LinearLayout
+        android:id="@+id/wallpaper_lyrics_setting"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_full_switch_card_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_card"
+        android:clickable="true"
+        android:focusable="false"
+        android:gravity="center_vertical"
+        android:importantForAccessibility="no"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/settings_switch_card_padding_start"
+        android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+        <com.tcrrry.desktoplyrics.IcarSwitch
+            android:id="@+id/wallpaper_lyrics_switch"
+            android:layout_width="@dimen/settings_switch_width"
+            android:layout_height="@dimen/settings_switch_height"
+            android:clickable="true"
+            android:contentDescription="@string/settings_wallpaper_lyrics" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/settings_switch_label_spacing"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/SettingsText.Body2.Emphasis"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_wallpaper_lyrics" />
+
+            <TextView
+                style="@style/SettingsText.Caption2"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/settings_switch_caption_spacing"
+                android:maxLines="1"
+                android:text="@string/settings_wallpaper_lyrics_summary" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_lyrics_size" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_segment_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_segment_track"
+        android:orientation="horizontal"
+        android:padding="@dimen/settings_segment_padding">
+
+        <TextView
+            android:id="@+id/wallpaper_font_size_small"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_small" />
+
+        <TextView
+            android:id="@+id/wallpaper_font_size_standard"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_standard" />
+
+        <TextView
+            android:id="@+id/wallpaper_font_size_large"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_large" />
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
         android:orientation="horizontal">
 
         <LinearLayout
-            android:id="@+id/wallpaper_lyrics_setting"
+            android:id="@+id/wallpaper_blur_setting"
             android:layout_width="@dimen/settings_switch_card_width"
             android:layout_height="@dimen/settings_switch_card_height"
             android:background="@drawable/bg_settings_card"
@@ -122,11 +229,11 @@
             android:paddingEnd="@dimen/settings_switch_card_padding_start">
 
             <com.tcrrry.desktoplyrics.IcarSwitch
-                android:id="@+id/wallpaper_lyrics_switch"
+                android:id="@+id/wallpaper_blur_switch"
                 android:layout_width="@dimen/settings_switch_width"
                 android:layout_height="@dimen/settings_switch_height"
                 android:clickable="true"
-                android:contentDescription="@string/settings_wallpaper_lyrics" />
+                android:contentDescription="@string/settings_wallpaper_blur" />
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -139,7 +246,7 @@
                     style="@style/SettingsText.Body2.Emphasis"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/settings_wallpaper_lyrics" />
+                    android:text="@string/settings_wallpaper_blur" />
 
                 <TextView
                     style="@style/SettingsText.Caption2"
@@ -147,7 +254,195 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="@dimen/settings_switch_caption_spacing"
                     android:maxLines="1"
-                    android:text="@string/settings_wallpaper_lyrics_summary" />
+                    android:text="@string/settings_wallpaper_blur_summary" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/wallpaper_shadow_setting"
+            android:layout_width="@dimen/settings_switch_card_width"
+            android:layout_height="@dimen/settings_switch_card_height"
+            android:layout_marginStart="@dimen/settings_switch_card_gap"
+            android:background="@drawable/bg_settings_card"
+            android:clickable="true"
+            android:focusable="false"
+            android:gravity="center_vertical"
+            android:importantForAccessibility="no"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/settings_switch_card_padding_start"
+            android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+            <com.tcrrry.desktoplyrics.IcarSwitch
+                android:id="@+id/wallpaper_shadow_switch"
+                android:layout_width="@dimen/settings_switch_width"
+                android:layout_height="@dimen/settings_switch_height"
+                android:clickable="true"
+                android:contentDescription="@string/settings_wallpaper_shadow" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/settings_switch_label_spacing"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_wallpaper_shadow" />
+
+                <TextView
+                    style="@style/SettingsText.Caption2"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/settings_switch_caption_spacing"
+                    android:maxLines="1"
+                    android:text="@string/settings_wallpaper_shadow_summary" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_wallpaper_spacing" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_segment_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_segment_track"
+        android:orientation="horizontal"
+        android:padding="@dimen/settings_segment_padding">
+
+        <TextView
+            android:id="@+id/wallpaper_spacing_dense"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_spacing_dense" />
+
+        <TextView
+            android:id="@+id/wallpaper_spacing_standard"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_spacing_standard" />
+
+        <TextView
+            android:id="@+id/wallpaper_spacing_loose"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_spacing_loose" />
+    </LinearLayout>
+
+    <TextView
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_wallpaper_focus" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_segment_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_segment_track"
+        android:orientation="horizontal"
+        android:padding="@dimen/settings_segment_padding">
+
+        <TextView
+            android:id="@+id/wallpaper_focus_top"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_focus_top" />
+
+        <TextView
+            android:id="@+id/wallpaper_focus_center"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_focus_center" />
+    </LinearLayout>
+
+    <TextView
+        style="@style/SettingsText.Body1.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_section_spacing"
+        android:text="@string/settings_general" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:id="@+id/auto_start_setting"
+            android:layout_width="@dimen/settings_switch_card_width"
+            android:layout_height="@dimen/settings_switch_card_height"
+            android:background="@drawable/bg_settings_card"
+            android:clickable="true"
+            android:focusable="false"
+            android:gravity="center_vertical"
+            android:importantForAccessibility="no"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/settings_switch_card_padding_start"
+            android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+            <com.tcrrry.desktoplyrics.IcarSwitch
+                android:id="@+id/auto_start_switch"
+                android:layout_width="@dimen/settings_switch_width"
+                android:layout_height="@dimen/settings_switch_height"
+                android:clickable="true"
+                android:contentDescription="@string/settings_auto_start" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/settings_switch_label_spacing"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_auto_start" />
+
+                <TextView
+                    style="@style/SettingsText.Caption2"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/settings_switch_caption_spacing"
+                    android:maxLines="2"
+                    android:text="@string/settings_auto_start_summary" />
             </LinearLayout>
         </LinearLayout>
 

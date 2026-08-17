@@ -8,6 +8,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -177,8 +178,141 @@ class LyricsCacheInstrumentationTest {
             )
 
             assertEquals(selection.candidate.sourceId, requireNotNull(cached).result.sourceId)
-            assertEquals(2, cached.proof.supportingCandidates.size)
+            assertEquals(2, requireNotNull(cached.proof).supportingCandidates.size)
         }
+    }
+
+    @Test
+    fun manualOverrideWinsAndRestoringAutomaticKeepsTheAutomaticCache() {
+        val identity = LyricsPlaybackIdentity(
+            track = "Twinkle",
+            artist = "Localized Artist",
+            album = "Twinkle Mini Album",
+            durationMs = 206_796L
+        )
+        val automatic = synchronizedResult(durationMs = 208_720L)
+        val manual = LyricsResult(
+            lyrics = "[00:01.00]manually chosen lyric",
+            durationMs = 215_000L,
+            source = "网易云音乐",
+            sourceId = "manual-version",
+            candidateTrack = "Twinkle (Live)",
+            candidateArtist = "Localized Artist",
+            candidateAlbum = "Live Album",
+            lyricsKind = LyricsKind.SYNCHRONIZED
+        )
+
+        LyricsCache(context, DATABASE_NAME).use { cache ->
+            cache.put(
+                track = identity.track,
+                artist = identity.artist,
+                album = identity.album,
+                playbackDurationMs = identity.durationMs,
+                resolved = resolved(automatic)
+            )
+            cache.putManual(identity, manual)
+
+            val selected = requireNotNull(cache.get(
+                identity.track,
+                identity.artist,
+                identity.album,
+                identity.durationMs,
+                recordUse = false
+            ))
+            assertEquals(LyricsCacheSelection.MANUAL, selected.selection)
+            assertEquals("manual-version", selected.result.sourceId)
+            assertEquals(false, selected.needsRefresh(Long.MAX_VALUE))
+
+            assertTrue(cache.clearManual(identity))
+            val restored = requireNotNull(cache.get(
+                identity.track,
+                identity.artist,
+                identity.album,
+                identity.durationMs,
+                recordUse = false
+            ))
+            assertEquals(LyricsCacheSelection.AUTOMATIC, restored.selection)
+            assertEquals(automatic.sourceId, restored.result.sourceId)
+        }
+    }
+
+    @Test
+    fun exposesCombinedStatsAndSupportsCurrentCleanup() {
+        val first = LyricsPlaybackIdentity("Twinkle", "Localized Artist", "Album", 206_796L)
+        val second = LyricsPlaybackIdentity("Second", "Artist", "Album", 190_000L)
+
+        LyricsCache(context, DATABASE_NAME).use { cache ->
+            cache.put(
+                first.track,
+                first.artist,
+                first.album,
+                first.durationMs,
+                resolved(synchronizedResult(208_720L).copy(candidateAlbum = first.album))
+            )
+            cache.putManual(
+                second,
+                synchronizedResult(second.durationMs).copy(
+                    sourceId = "manual-second",
+                    candidateTrack = second.track,
+                    candidateArtist = second.artist,
+                    candidateAlbum = second.album
+                )
+            )
+
+            val initial = cache.snapshot(second)
+            assertEquals(1, initial.stats.automaticEntries)
+            assertEquals(1, initial.stats.manualEntries)
+            assertTrue(initial.stats.totalBytes > 0L)
+            assertEquals(LyricsCacheSelection.MANUAL, requireNotNull(initial.current).selection)
+
+            assertTrue(cache.clearCurrent(first))
+            val afterCurrent = cache.snapshot(first)
+            assertEquals(0, afterCurrent.stats.automaticEntries)
+            assertEquals(1, afterCurrent.stats.manualEntries)
+            assertNull(afterCurrent.current)
+
+        }
+    }
+
+    @Test
+    fun upgradesVersionThreeWithoutDiscardingAutomaticCacheRows() {
+        val database = context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null)
+        database.execSQL(
+            """
+            CREATE TABLE lyrics_cache (
+                cache_key TEXT PRIMARY KEY NOT NULL,
+                payload_json TEXT NOT NULL,
+                byte_size INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_used_at INTEGER NOT NULL,
+                use_count INTEGER NOT NULL,
+                eviction_score INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        database.execSQL(
+            "CREATE TABLE cache_meta (meta_id INTEGER PRIMARY KEY CHECK (meta_id = 1), total_bytes INTEGER NOT NULL)"
+        )
+        database.execSQL(
+            "INSERT INTO lyrics_cache VALUES ('preserved', '{}', 2, 1, 1, 1, 1)"
+        )
+        database.execSQL("INSERT INTO cache_meta VALUES (1, 2)")
+        database.version = 3
+        database.close()
+
+        LyricsCache(context, DATABASE_NAME).use { cache ->
+            val snapshot = cache.snapshot(null)
+            assertEquals(1, snapshot.stats.automaticEntries)
+            assertEquals(0, snapshot.stats.manualEntries)
+            assertEquals(2L, snapshot.stats.totalBytes)
+        }
+        val migrated = context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null)
+        assertEquals(4, migrated.version)
+        migrated.rawQuery("SELECT COUNT(*) FROM lyrics_manual_override", null).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        migrated.close()
     }
 
     @Test
@@ -237,7 +371,7 @@ class LyricsCacheInstrumentationTest {
             cursor.moveToFirst()
             assertEquals(0L, cursor.getLong(0))
         }
-        assertEquals(3, migrated.version)
+        assertEquals(4, migrated.version)
         migrated.close()
     }
 

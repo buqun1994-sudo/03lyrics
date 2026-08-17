@@ -11,9 +11,53 @@
     android:visibility="gone">
 
     <LinearLayout
+        android:id="@+id/service_running_setting"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_full_switch_card_height"
+        android:background="@drawable/bg_settings_card"
+        android:clickable="true"
+        android:focusable="false"
+        android:gravity="center_vertical"
+        android:importantForAccessibility="no"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/settings_switch_card_padding_start"
+        android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+        <com.tcrrry.desktoplyrics.IcarSwitch
+            android:id="@+id/service_running_switch"
+            android:layout_width="@dimen/settings_switch_width"
+            android:layout_height="@dimen/settings_switch_height"
+            android:clickable="true"
+            android:contentDescription="@string/settings_service_running" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/settings_switch_label_spacing"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/SettingsText.Body2.Emphasis"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_service_running" />
+
+            <TextView
+                style="@style/SettingsText.Caption2"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/settings_switch_caption_spacing"
+                android:maxLines="1"
+                android:text="@string/settings_service_running_summary" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
         android:id="@+id/restart_lyrics_setting"
         android:layout_width="match_parent"
-        android:layout_height="@dimen/settings_switch_card_height"
+        android:layout_height="@dimen/settings_action_card_height"
+        android:layout_marginTop="@dimen/settings_group_spacing"
         android:background="@drawable/bg_settings_card"
         android:clickable="true"
         android:contentDescription="@string/accessibility_restart_lyrics"

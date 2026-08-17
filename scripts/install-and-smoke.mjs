@@ -11,6 +11,10 @@ const packageName = "com.tcrrry.desktoplyrics";
 const activityName = `${packageName}/.MainActivity`;
 const occupancyLeaseAction = "com.tcrrry.icar.surface.action.ACQUIRE_OCCUPANCY_LEASE";
 const occupancyLeaseServiceName = "SurfaceOccupancyLeaseService";
+const dockAccessibilityService = `${packageName}/${packageName}.IcarDockAccessibilityService`;
+const dockAccessibilityServiceShort = `${packageName}/.IcarDockAccessibilityService`;
+const notificationServiceRecord = `${packageName}/.MediaListenerService`;
+const startupSettleMs = 8_000;
 const defaultApk = join(root, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
 const requestedApk = process.argv[2];
 const apkPath = requestedApk
@@ -55,6 +59,85 @@ function adbRun(args, label, allowFailure = false) {
   return { status: result.status, output };
 }
 
+function parseAccessibilityServices(value) {
+  const normalized = value.trim();
+  if (!normalized || normalized === "null") return [];
+  return normalized.split(":").map((item) => item.trim()).filter(Boolean);
+}
+
+function isDockAccessibilityService(component) {
+  return component === dockAccessibilityService || component === dockAccessibilityServiceShort;
+}
+
+function enableDockAccessibilityService() {
+  const before = parseAccessibilityServices(
+    adbRun(
+      ["shell", "settings", "get", "secure", "enabled_accessibility_services"],
+      "无法读取已启用无障碍服务"
+    ).output
+  );
+  const next = before.some(isDockAccessibilityService)
+    ? before
+    : [...before, dockAccessibilityService];
+  adbRun(
+    ["shell", "settings", "put", "secure", "enabled_accessibility_services", next.join(":")],
+    "无法刷新歌词窗口避让无障碍服务"
+  );
+
+  const accessibilityEnabled = adbRun(
+    ["shell", "settings", "get", "secure", "accessibility_enabled"],
+    "无法读取无障碍总开关"
+  ).output;
+  if (accessibilityEnabled !== "1") {
+    adbRun(
+      ["shell", "settings", "put", "secure", "accessibility_enabled", "1"],
+      "无法启用无障碍总开关"
+    );
+  }
+
+  const after = parseAccessibilityServices(
+    adbRun(
+      ["shell", "settings", "get", "secure", "enabled_accessibility_services"],
+      "无法复核已启用无障碍服务"
+    ).output
+  );
+  const removedServices = before.filter((component) => !after.includes(component));
+  if (removedServices.length > 0) {
+    fail(`追加窗口避让服务时丢失既有无障碍组件：${removedServices.join(", ")}`);
+  }
+  if (!after.some(isDockAccessibilityService)) {
+    fail("歌词窗口避让无障碍服务未进入系统启用列表");
+  }
+  return { preservedCount: before.length, added: next.length !== before.length };
+}
+
+function serviceBound(serviceRecord) {
+  const dump = adbRun(
+    ["shell", "dumpsys", "activity", "services", packageName],
+    "无法读取应用服务绑定状态",
+    true
+  );
+  if (dump.status !== 0) return false;
+  const records = dump.output.split(/(?=^\s*\* ServiceRecord)/m);
+  return records.some((record) =>
+    record.includes(serviceRecord) &&
+    /requested=true received=true hasBound=true/.test(record)
+  );
+}
+
+function waitForServiceBound(serviceRecord) {
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    if (serviceBound(serviceRecord)) return true;
+    Atomics.wait(waitBuffer, 0, 0, 250);
+  }
+  return false;
+}
+
+function wait(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 const state = adbRun(["get-state"], "无法连接目标车机").output;
 if (state !== "device") fail(`目标车机状态不是 device：${state}`);
 
@@ -69,6 +152,8 @@ const install = adbRun(
   "保留数据覆盖安装失败"
 );
 if (!/\bSuccess\b/.test(install.output)) fail("ADB 未返回安装成功", install.output);
+
+const accessibilityAuthorization = enableDockAccessibilityService();
 
 const launch = adbRun(
   ["shell", "am", "start", "-W", "-n", activityName],
@@ -89,6 +174,15 @@ const packageDump = adbRun(
 const versionName = packageDump.match(/versionName=([^\s]+)/)?.[1];
 const versionCode = packageDump.match(/versionCode=(\d+)/)?.[1];
 if (!versionName || !versionCode) fail("无法确认已安装版本", packageDump);
+if (!packageDump.includes("IcarDockAccessibilityService")) {
+  fail("已安装歌词 APK 未声明窗口避让无障碍服务", packageDump);
+}
+if (!waitForServiceBound(dockAccessibilityServiceShort)) {
+  fail("歌词窗口避让无障碍服务未完成系统绑定");
+}
+if (!waitForServiceBound(notificationServiceRecord)) {
+  fail("03歌词播放状态服务未完成系统绑定");
+}
 
 const occupancyLeaseProviders = adbRun(
   ["shell", "cmd", "package", "query-services", "--brief", "-a", occupancyLeaseAction],
@@ -108,6 +202,8 @@ const activities = adbRun(
 const resumedLine = activities.split(/\r?\n/).find((line) => line.includes("mResumedActivity")) || "";
 if (!resumedLine.includes(packageName)) fail("设置页未处于前台", resumedLine);
 
+wait(startupSettleMs);
+
 const processErrors = adbRun(
   ["logcat", "-d", `--pid=${pid}`, "-v", "brief", "-t", "300", "*:E"],
   "无法读取应用错误日志",
@@ -122,7 +218,18 @@ const serviceAfter = adbRun(
   "无法读取安装后服务状态",
   true
 ).output.includes("LyricsOverlayService");
-if (!serviceAfter) fail("设置页未自动恢复歌词服务");
+if (!serviceAfter) {
+  const activeNotifications = adbRun(
+    ["shell", "dumpsys", "notification", "--noredact"],
+    "无法读取歌词恢复状态",
+    true
+  ).output.split("mArchive=Archive")[0];
+  if (activeNotifications.includes(`pkg=${packageName}`) &&
+      activeNotifications.includes("id=4204")) {
+    fail("商业门禁未开放，歌词服务处于权益恢复态");
+  }
+  fail("设置页未自动恢复歌词服务");
+}
 
 console.log("车机安装与基础 smoke 通过。");
 console.log(`- 设备：${serial}`);
@@ -130,5 +237,10 @@ console.log(`- 已安装：${packageName} ${versionName} (${versionCode})`);
 console.log(`- 进程：PID ${pid}`);
 console.log("- 设置页：已启动并位于前台");
 console.log("- 表面占用租约：已发现");
+console.log(
+  `- 窗口避让无障碍：已绑定（保留 ${accessibilityAuthorization.preservedCount} 个既有组件，` +
+    `${accessibilityAuthorization.added ? "本次已追加" : "原已启用"}）`
+);
+console.log("- 播放状态监听：已绑定");
 console.log("- 致命日志：未发现");
 console.log("- 歌词服务恢复：运行中");

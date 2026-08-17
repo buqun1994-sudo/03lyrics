@@ -29,6 +29,12 @@ internal enum class IcarDesktopSurfaceOccupancy {
     UNKNOWN
 }
 
+internal enum class IcarClimatePageOccupancy {
+    CLEAR,
+    OCCUPIED,
+    UNKNOWN
+}
+
 /**
  * The known small dynamic items between the fixed map/wallpaper and lock
  * buttons and the clock. Unknown states intentionally consume no width: the
@@ -78,7 +84,8 @@ internal object IcarTopbarLayout {
 internal data class IcarDisplayState(
     val launcherState: Int,
     val iconVisibility: Map<IcarTopbarIconSlot, IcarIconVisibility> = emptyMap(),
-    val windowMode: Int = IcarDisplayStateMonitor.WINDOW_MODE_NONE
+    val windowMode: Int = IcarDisplayStateMonitor.WINDOW_MODE_NONE,
+    val climatePageStatus: Int = IcarDisplayStateMonitor.STATE_UNKNOWN
 ) {
     val desktopSurfaceOccupancy: IcarDesktopSurfaceOccupancy
         get() = when (windowMode) {
@@ -89,6 +96,14 @@ internal data class IcarDisplayState(
                 IcarDesktopSurfaceOccupancy.OCCUPIED
             }
             else -> IcarDesktopSurfaceOccupancy.UNKNOWN
+        }
+
+    val climatePageOccupancy: IcarClimatePageOccupancy
+        get() = when (climatePageStatus) {
+            IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED -> IcarClimatePageOccupancy.CLEAR
+            IcarDisplayStateMonitor.CLIMATE_PAGE_EXPANDED,
+            IcarDisplayStateMonitor.CLIMATE_PAGE_EXPANDING -> IcarClimatePageOccupancy.OCCUPIED
+            else -> IcarClimatePageOccupancy.UNKNOWN
         }
 
     val surfaceMode: LyricsSurfaceMode
@@ -192,13 +207,15 @@ internal class IcarDisplayStateMonitor(
                 IcarTopbarIconSlot.USB_STORAGE to usbStorageVisibility(),
                 IcarTopbarIconSlot.GUARDIAN_MODE to guardianModeVisibility()
             ),
-            windowMode = readSecure(KEY_WINDOW_MODE) ?: STATE_UNKNOWN
+            windowMode = readSecure(KEY_WINDOW_MODE) ?: STATE_UNKNOWN,
+            climatePageStatus = readGlobal(KEY_CLIMATE_PAGE_STATUS) ?: STATE_UNKNOWN
         )
         if (state == lastState) return
         lastState = state
         Log.i(
             LOG_TAG,
             "iCAR display launcher=${state.launcherState} window=${state.windowMode} " +
+                "climate=${state.climatePageStatus}/${state.climatePageOccupancy} " +
                 "occupancy=${state.desktopSurfaceOccupancy} surface=${state.surfaceMode} " +
                 "topbarOccupied=${state.occupiedTopbarWidthPx()} slots=${state.iconVisibility}"
         )
@@ -324,6 +341,9 @@ internal class IcarDisplayStateMonitor(
         const val WINDOW_MODE_ADAS_CARD = 1
         const val WINDOW_MODE_STANDARD_WINDOW = 2
         const val WINDOW_MODE_ADAS_CARD_AND_STANDARD_WINDOW = 3
+        const val CLIMATE_PAGE_EXPANDED = 1
+        const val CLIMATE_PAGE_COLLAPSED = 2
+        const val CLIMATE_PAGE_EXPANDING = 3
 
         private const val WIRELESS_CHARGING_INACTIVE = 0
         private const val WIRELESS_CHARGING_ACTIVE = 1
@@ -337,6 +357,7 @@ internal class IcarDisplayStateMonitor(
             "com.mengbo.launcher3.SETTINGS_KEY_LAUNCHER_STATE"
         private const val KEY_WINDOW_MODE =
             "com.mengbo.launcher3.settings.secure.window_mode"
+        private const val KEY_CLIMATE_PAGE_STATUS = "global_setting_ac_page_status"
         private const val KEY_WIRELESS_CHARGING_STATE =
             "com.mengbo.provider.wireless_charging_state"
         private const val KEY_SD_CARD_MOUNTED = "com.mb.provider.usb_sd_mounted"
@@ -347,6 +368,7 @@ internal class IcarDisplayStateMonitor(
 
         private val OBSERVED_GLOBAL_KEYS = arrayOf(
             KEY_LAUNCHER_STATE,
+            KEY_CLIMATE_PAGE_STATUS,
             KEY_SAFE_PEDESTRIAN,
             KEY_WIRELESS_CHARGING_STATE,
             KEY_SD_CARD_MOUNTED,

@@ -49,6 +49,8 @@ class CommercialSettingsRenderer(
     private val contentScroll: ScrollView = root.findViewById(R.id.settings_content_scroll)
     private val displayContent: View = root.findViewById(R.id.settings_display_content)
     private val systemContent: View = root.findViewById(R.id.settings_system_content)
+    private val cacheContent: View = root.findViewById(R.id.settings_cache_content)
+    private val searchContent: View = root.findViewById(R.id.settings_search_content)
 
     private val entitlementPage: View = root.findViewById(R.id.commercial_entitlement_page)
     private val orderPage: View = root.findViewById(R.id.commercial_order_page)
@@ -497,7 +499,7 @@ class CommercialSettingsRenderer(
             if (summaryVisible) R.dimen.commercial_content_padding_top
             else R.dimen.commercial_content_padding_top_no_summary
         )
-        listOf(displayContent, systemContent).forEach { content ->
+        listOf(displayContent, systemContent, cacheContent, searchContent).forEach { content ->
             content.setPaddingRelative(
                 content.paddingStart,
                 topPadding,

@@ -127,6 +127,103 @@ internal class DirectLyricsRepository internal constructor(
         }
     }
 
+    fun searchManualCandidates(
+        query: LyricsLookup,
+        cancellation: LyricsCancellationSignal
+    ): List<LyricsResult> {
+        if (query.track.isBlank() || closed.get()) return emptyList()
+        val request = LyricsSearchPlanner.catalogRequests(query).firstOrNull()
+            ?: LyricsCatalogSearchRequest(
+                LyricsCatalogSearchKind.TITLE_ONLY,
+                query.track.trim()
+            )
+        activeCancellations += cancellation
+        val deadlineNanos = clock.nanoTime() +
+            TimeUnit.MILLISECONDS.toNanos(MANUAL_SEARCH_DEADLINE_MS)
+        val events = LinkedBlockingQueue<ManualSearchEvent>()
+        val futures = buildList {
+            add(executor.submit {
+                events.offer(
+                    manualSearchResult(exactAndFallbackSource.sourceName) {
+                        exactAndFallbackSource.fallback(query, deadlineNanos, cancellation)
+                    }
+                )
+            })
+            catalogSources.forEach { source ->
+                add(executor.submit {
+                    events.offer(
+                        manualSearchResult(source.sourceName) {
+                            source.search(request, deadlineNanos, cancellation)
+                        }
+                    )
+                })
+            }
+        }
+        val candidates = mutableListOf<LyricsResult>()
+        try {
+            var remainingSources = futures.size
+            while (remainingSources > 0) {
+                cancellation.throwIfCancelled()
+                val remainingNanos = deadlineNanos - clock.nanoTime()
+                if (remainingNanos <= 0L) break
+                val event = events.poll(remainingNanos, TimeUnit.NANOSECONDS) ?: break
+                remainingSources -= 1
+                candidates += event.candidates
+            }
+            return LyricsManualSearchPolicy.rank(query, candidates)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            cancellation.cancel()
+            return emptyList()
+        } catch (_: CancellationException) {
+            return emptyList()
+        } finally {
+            futures.forEach { it.cancel(true) }
+            cancellation.cancel()
+            activeCancellations -= cancellation
+        }
+    }
+
+    fun loadManualLyrics(
+        candidate: LyricsResult,
+        cancellation: LyricsCancellationSignal
+    ): LyricsResult? {
+        if (closed.get()) return null
+        val source = bodySources[candidate.source] ?: return null
+        activeCancellations += cancellation
+        val deadlineNanos = clock.nanoTime() +
+            TimeUnit.MILLISECONDS.toNanos(MANUAL_BODY_DEADLINE_MS)
+        return try {
+            source.loadLyrics(candidate, deadlineNanos, cancellation)
+                ?.takeIf { classifyLyrics(it.lyrics) == LyricsKind.SYNCHRONIZED }
+        } catch (_: CancellationException) {
+            null
+        } catch (error: Throwable) {
+            logger.warning(
+                "Manual lyrics source=${candidate.source}/${candidate.sourceId} failed",
+                error
+            )
+            null
+        } finally {
+            cancellation.cancel()
+            activeCancellations -= cancellation
+        }
+    }
+
+    private fun manualSearchResult(
+        sourceName: String,
+        search: () -> List<LyricsResult>
+    ): ManualSearchEvent = try {
+        ManualSearchEvent.Completed(
+            search().take(LyricsManualSearchPolicy.MAX_RESULTS_PER_SOURCE)
+        )
+    } catch (_: CancellationException) {
+        ManualSearchEvent.Completed(emptyList())
+    } catch (error: Throwable) {
+        logger.warning("Manual catalog source=$sourceName failed", error)
+        ManualSearchEvent.Completed(emptyList())
+    }
+
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         activeCancellations.forEach(LyricsCancellationSignal::cancel)
@@ -141,8 +238,18 @@ internal class DirectLyricsRepository internal constructor(
         ) : CoverEvent
     }
 
+    private sealed interface ManualSearchEvent {
+        val candidates: List<LyricsResult>
+
+        data class Completed(
+            override val candidates: List<LyricsResult>
+        ) : ManualSearchEvent
+    }
+
     private companion object {
         const val COVER_DEADLINE_MS = 3_000L
+        const val MANUAL_SEARCH_DEADLINE_MS = 3_800L
+        const val MANUAL_BODY_DEADLINE_MS = 3_800L
 
         fun newNetworkExecutor(): ExecutorService =
             Executors.newFixedThreadPool(NETWORK_THREAD_COUNT) { runnable ->

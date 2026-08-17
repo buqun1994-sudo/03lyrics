@@ -37,6 +37,19 @@
         <item name="android:fontFamily">sans-serif-medium</item>
     </style>
 
+    <style name="SettingsText.CompactPrimary" parent="SettingsText.Body1">
+        <item name="android:textSize">@dimen/settings_compact_text_primary</item>
+    </style>
+
+    <style name="SettingsText.CompactPrimary.Emphasis" parent="SettingsText.CompactPrimary">
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="SettingsText.CompactSecondary" parent="SettingsText.Body1">
+        <item name="android:textColor">@color/settings_text_secondary</item>
+        <item name="android:textSize">@dimen/settings_compact_text_secondary</item>
+    </style>
+
     <style name="SettingsText.CommercialPrice" parent="SettingsText.Body1.Emphasis">
         <item name="android:textSize">@dimen/commercial_offer_price_text</item>
     </style>

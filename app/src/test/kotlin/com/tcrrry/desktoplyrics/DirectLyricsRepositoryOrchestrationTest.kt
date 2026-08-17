@@ -469,6 +469,89 @@ class DirectLyricsRepositoryOrchestrationTest {
         }
     }
 
+    @Test
+    fun `manual search keeps bounded candidates that automatic admission would reject`() {
+        fun results(source: String, prefix: String): List<LyricsResult> = (1..10).map { index ->
+            LyricsResult(
+                durationMs = query.durationMs + index * 100L,
+                source = source,
+                sourceId = "$prefix-$index",
+                candidateTrack = "Different title $index",
+                candidateArtist = "Different artist",
+                candidateAlbum = "Different album"
+            )
+        }
+        val exact = FakeExactSource(
+            fallbackHandler = { _, _, _ -> results(SOURCE_LRCLIB, "lrc") }
+        )
+        val qq = FakeCatalogSource(
+            SOURCE_QQ,
+            searchHandler = { _, _, _ -> results(SOURCE_QQ, "qq") }
+        )
+        val netEase = FakeCatalogSource(
+            SOURCE_NETEASE,
+            searchHandler = { _, _, _ -> results(SOURCE_NETEASE, "netease") }
+        )
+        val repository = repository(exact, listOf(qq, netEase))
+
+        try {
+            val candidates = repository.searchManualCandidates(
+                query,
+                LyricsCancellationSignal()
+            )
+
+            assertEquals(LyricsManualSearchPolicy.MAX_RESULTS, candidates.size)
+            assertEquals(
+                setOf(SOURCE_LRCLIB, SOURCE_QQ, SOURCE_NETEASE),
+                candidates.map(LyricsResult::source).toSet()
+            )
+            assertTrue(LyricsCandidateSelector.selectCandidates(query, candidates).isEmpty())
+            candidates.groupBy(LyricsResult::source).values.forEach { sourceCandidates ->
+                assertTrue(sourceCandidates.size <= LyricsManualSearchPolicy.MAX_RESULTS_PER_SOURCE)
+            }
+        } finally {
+            repository.close()
+        }
+    }
+
+    @Test
+    fun `manual selection loads only the chosen catalog body`() {
+        val loads = AtomicInteger(0)
+        val chosen = candidate(SOURCE_QQ, "chosen")
+        val exact = FakeExactSource()
+        val qq = FakeCatalogSource(
+            SOURCE_QQ,
+            searchHandler = { _, _, _ -> listOf(chosen) },
+            loadHandler = { sourceCandidate, _, _ ->
+                loads.incrementAndGet()
+                sourceCandidate.synchronized()
+            }
+        )
+        val netEase = FakeCatalogSource(
+            SOURCE_NETEASE,
+            searchHandler = { _, _, _ -> emptyList() }
+        )
+        val repository = repository(exact, listOf(qq, netEase))
+
+        try {
+            val candidates = repository.searchManualCandidates(
+                query,
+                LyricsCancellationSignal()
+            )
+            assertEquals(0, loads.get())
+
+            val lyrics = repository.loadManualLyrics(
+                candidates.single(),
+                LyricsCancellationSignal()
+            )
+
+            assertEquals(1, loads.get())
+            assertEquals(LyricsKind.SYNCHRONIZED, requireNotNull(lyrics).lyricsKind)
+        } finally {
+            repository.close()
+        }
+    }
+
     private fun repository(
         exact: LyricsExactAndFallbackSource,
         sources: List<LyricsCatalogSource>,

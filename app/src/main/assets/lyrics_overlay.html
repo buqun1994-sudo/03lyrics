@@ -20,7 +20,9 @@
       --lyric-line-padding:12px;
       --desktop-lyric-size:42px;
       --desktop-active-size:58px;
+      --desktop-line-padding:14px;
       --desktop-edge-fade:64px;
+      --desktop-visible-bottom:100%;
       --overlay-background:#111217;
       --surface-background:rgba(9,10,14,.64);
       --surface-background-high:rgba(5,6,9,.86);
@@ -293,15 +295,15 @@
         to bottom,
         transparent 0,
         #000 var(--desktop-edge-fade),
-        #000 calc(100% - var(--desktop-edge-fade)),
-        transparent 100%
+        #000 calc(var(--desktop-visible-bottom) - var(--desktop-edge-fade)),
+        transparent var(--desktop-visible-bottom)
       );
       mask-image:linear-gradient(
         to bottom,
         transparent 0,
         #000 var(--desktop-edge-fade),
-        #000 calc(100% - var(--desktop-edge-fade)),
-        transparent 100%
+        #000 calc(var(--desktop-visible-bottom) - var(--desktop-edge-fade)),
+        transparent var(--desktop-visible-bottom)
       );
       -webkit-mask-repeat:no-repeat;
       mask-repeat:no-repeat;
@@ -312,9 +314,9 @@
     body.surface-desktop .lyrics-viewport::after { display:none; }
     body.surface-desktop #lyrics { padding:42% 0; }
     body.surface-desktop .line {
-      padding:14px 0; color:var(--desktop-lyric); font-size:var(--desktop-lyric-size);
+      padding:var(--desktop-line-padding) 0; color:var(--desktop-lyric); font-size:var(--desktop-lyric-size);
       line-height:1.3; font-weight:620; text-align:right; opacity:.92;
-      filter:blur(2.3px); text-shadow:none;
+      filter:none; text-shadow:none;
       transition:color .22s ease,opacity .22s ease,font-size .22s ease,filter .22s ease;
     }
     body.surface-desktop .line-translation {
@@ -322,19 +324,27 @@
       line-height:1.22; font-weight:560; opacity:.88;
     }
     body.surface-desktop .line.near {
-      color:var(--desktop-near); opacity:.96; filter:blur(1.5px); text-shadow:none;
+      color:var(--desktop-near); opacity:.96; filter:none; text-shadow:none;
     }
     body.surface-desktop .line.active {
       color:var(--foreground); opacity:1; font-size:var(--desktop-active-size); font-weight:820;
       filter:none;
-      text-shadow:var(--desktop-shadow);
+      text-shadow:none;
     }
     body.surface-desktop .line.active .line-translation {
       color:var(--foreground); font-weight:620; opacity:.84;
     }
     body.surface-desktop .line.past {
-      color:var(--desktop-past); opacity:.84; filter:blur(2.5px); text-shadow:none;
+      color:var(--desktop-past); opacity:.84; filter:none; text-shadow:none;
     }
+    body.surface-desktop.desktop-blur .line { filter:blur(2.3px); }
+    body.surface-desktop.desktop-blur .line.near { filter:blur(1.5px); }
+    body.surface-desktop.desktop-blur .line.active { filter:none; }
+    body.surface-desktop.desktop-blur .line.past { filter:blur(2.5px); }
+    body.surface-desktop.desktop-all-shadow .line,
+    body.surface-desktop.desktop-all-shadow .line.near,
+    body.surface-desktop.desktop-all-shadow .line.active,
+    body.surface-desktop.desktop-all-shadow .line.past { text-shadow:var(--desktop-shadow); }
     body.surface-desktop .compact-lyric { display:none; }
     @media (max-width:170px) {
       body:not(.compact) #player { padding-left:7px; padding-right:7px; }
@@ -403,6 +413,9 @@
     };
     let backgroundMode = 'transparent';
     let lyricFontScale=1;
+    let topbarLyricFontScale=1;
+    let wallpaperLyricFontScale=1;
+    let desktopFocusRatio=.48;
     const playback = {
       hasSession:false, track:'', artist:'', album:'', state:'paused', positionMs:0,
       durationMs:0, speed:0, timelineReady:true, receivedAt:performance.now(), key:'', lyrics:[], active:-1,
@@ -768,6 +781,10 @@
       ui.lyrics.style.transform='translate3d(0,'+value+'px,0)';
     }
 
+    function lyricsFocusRatio() {
+      return document.body.classList.contains('surface-desktop') ? desktopFocusRatio : .48;
+    }
+
     function resetManualLyricsScroll() {
       clearTimeout(manualReturnTimer);
       if(lyricMomentumFrame)cancelAnimationFrame(lyricMomentumFrame);
@@ -784,7 +801,7 @@
       const nodes=ui.lyrics.children;
       const first=nodes[0],last=nodes[nodes.length-1];
       if(!first||!last)return {min:0,max:0};
-      const center=ui.viewport.clientHeight*.48;
+      const center=ui.viewport.clientHeight*lyricsFocusRatio();
       const firstTarget=center-first.offsetTop-first.offsetHeight*.5;
       const lastTarget=center-last.offsetTop-last.offsetHeight*.5;
       return {min:Math.min(firstTarget,lastTarget),max:Math.max(firstTarget,lastTarget)};
@@ -904,7 +921,7 @@
       }
       const active = nodes[index];
       if (active) {
-        const target = ui.viewport.clientHeight * .48 - active.offsetTop - active.offsetHeight * .5;
+        const target = ui.viewport.clientHeight * lyricsFocusRatio() - active.offsetTop - active.offsetHeight * .5;
         if(!manualLyricsScroll)setLyricsTranslate(target);
         const playbackRate = playback.state === 'playing' && playback.speed > 0 ? playback.speed : 1;
         const lineEnd = lines[index + 1]
@@ -1248,26 +1265,70 @@
       const translationRows=lyricsTranslationEnabled&&resolvedTranslationAvailable?1:0;
       const secondaryRows=translationRows+(compactLineCount===2?1:0);
       const twoLineMinimum=Math.ceil(
-        10+(32*1.05+secondaryRows*20*1.12)*lyricFontScale
+        10+(32*1.05+secondaryRows*20*1.12)*topbarLyricFontScale
       );
       const twoLines = document.body.classList.contains('compact') && compactLineCount===2 && innerHeight >= twoLineMinimum;
       document.body.classList.toggle('compact-two', twoLines);
     }
 
-    function setFontScale(percent) {
-      const normalized=Math.max(75,Math.min(150,Number(percent)||100));
-      lyricFontScale=normalized/100;
+    function applyFontScales() {
+      lyricFontScale=document.body.classList.contains('surface-desktop')
+        ? wallpaperLyricFontScale
+        : topbarLyricFontScale;
       const root=document.documentElement.style;
-      root.setProperty('--lyric-font-size',(28*lyricFontScale).toFixed(2)+'px');
-      root.setProperty('--lyric-active-size',(34*lyricFontScale).toFixed(2)+'px');
-      root.setProperty('--compact-font-size',(32*lyricFontScale).toFixed(2)+'px');
-      root.setProperty('--compact-next-size',(20*lyricFontScale).toFixed(2)+'px');
-      root.setProperty('--desktop-lyric-size',(42*lyricFontScale).toFixed(2)+'px');
-      root.setProperty('--desktop-active-size',(58*lyricFontScale).toFixed(2)+'px');
-      root.setProperty('--desktop-translation-size',(28*lyricFontScale).toFixed(2)+'px');
-      root.setProperty('--lyric-line-padding',(8+4*lyricFontScale).toFixed(2)+'px');
+      root.setProperty('--lyric-font-size',(28*wallpaperLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--lyric-active-size',(34*wallpaperLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--compact-font-size',(32*topbarLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--compact-next-size',(20*topbarLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--desktop-lyric-size',(42*wallpaperLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--desktop-active-size',(58*wallpaperLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--desktop-translation-size',(28*wallpaperLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--lyric-line-padding',(8+4*wallpaperLyricFontScale).toFixed(2)+'px');
       updateCompactLayout();
       recenterAfterLayout();
+    }
+
+    function setDisplayPreferences(value) {
+      const settings=value||{};
+      const topbarPercent=Math.max(75,Math.min(150,Number(settings.topbarFontScale)||100));
+      const wallpaperPercent=Math.max(75,Math.min(150,Number(settings.wallpaperFontScale)||100));
+      topbarLyricFontScale=topbarPercent/100;
+      wallpaperLyricFontScale=wallpaperPercent/100;
+      const spacing=settings.wallpaperSpacing==='dense'
+        ? 8
+        : settings.wallpaperSpacing==='loose' ? 22 : 14;
+      document.documentElement.style.setProperty('--desktop-line-padding',spacing+'px');
+      desktopFocusRatio=settings.wallpaperFocus==='top' ? .15 : .48;
+      document.body.classList.toggle('desktop-blur',settings.wallpaperBlur!==false);
+      document.body.classList.toggle('desktop-all-shadow',settings.wallpaperShadow===true);
+      applyFontScales();
+    }
+
+    function setDesktopVisibleRatio(value) {
+      const numeric=Number(value);
+      const ratio=Number.isFinite(numeric)?Math.max(0,Math.min(1,numeric)):1;
+      document.documentElement.style.setProperty(
+        '--desktop-visible-bottom',
+        (ratio*100).toFixed(4)+'%'
+      );
+    }
+
+    function setFontScale(percent) {
+      setDisplayPreferences({
+        topbarFontScale:percent,
+        wallpaperFontScale:percent,
+        wallpaperBlur:document.body.classList.contains('desktop-blur'),
+        wallpaperShadow:document.body.classList.contains('desktop-all-shadow'),
+        wallpaperFocus:desktopFocusRatio===.15?'top':'center'
+      });
+    }
+
+    function retryLyrics() {
+      if(!playback.key||!playback.track)return;
+      playback.requestId++;
+      pendingTrackTransition=true;
+      clearLyricsForTrackChange();
+      resolveTrack(playback.track,playback.artist,playback.key,playback.requestId);
     }
     addEventListener('resize', () => {
       updateCompactLayout();
@@ -1278,7 +1339,10 @@
       updatePlayback,
       receiveLyrics,
       receiveRemoteCover,
+      retryLyrics,
       setFontScale,
+      setDisplayPreferences,
+      setDesktopVisibleRatio,
       setTheme(value) {
         const light=value==='light';
         document.body.classList.toggle('theme-light',light);
@@ -1290,6 +1354,7 @@
         document.body.classList.toggle('compact',!desktop);
         document.body.classList.toggle('surface-topbar',!desktop);
         document.body.classList.toggle('surface-desktop',desktop);
+        applyFontScales();
         updateCompactLayout();
         recenterAfterLayout();
       },

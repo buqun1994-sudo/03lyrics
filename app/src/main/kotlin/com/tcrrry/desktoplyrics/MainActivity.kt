@@ -1,7 +1,9 @@
 package com.tcrrry.desktoplyrics
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
 import android.database.ContentObserver
 import android.content.res.ColorStateList
@@ -12,7 +14,6 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -35,30 +36,45 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences(LyricsOverlayService.PREFS_NAME, Context.MODE_PRIVATE)
     }
 
-    private lateinit var currentLineOption: TextView
-    private lateinit var currentAndNextOption: TextView
-    private lateinit var smallSizeOption: TextView
-    private lateinit var standardSizeOption: TextView
-    private lateinit var largeSizeOption: TextView
     private lateinit var displayNavigationItem: NavigationItem
     private lateinit var systemNavigationItem: NavigationItem
+    private lateinit var cacheNavigationItem: NavigationItem
+    private lateinit var searchNavigationItem: NavigationItem
     private lateinit var commercialNavigationItem: NavigationItem
     private lateinit var displayContent: View
     private lateinit var systemContent: View
+    private lateinit var cacheContent: View
+    private lateinit var searchContent: View
     private lateinit var commercialContent: View
     private lateinit var contentScroll: ScrollView
-    private lateinit var wallpaperLyricsSetting: LinearLayout
-    private lateinit var wallpaperLyricsSwitch: IcarSwitch
-    private lateinit var lyricsTranslationSetting: LinearLayout
-    private lateinit var lyricsTranslationSwitch: IcarSwitch
-    private lateinit var restartLyricsSetting: LinearLayout
+    private lateinit var lyricsSettingsRenderer: LyricsSettingsRenderer
     private lateinit var commercialRenderer: CommercialSettingsRenderer
     private lateinit var commercialController: CommercialController
     private var themePalette = IcarThemeColorPalette.resolve(null, false)
     private var renderedNightMode = false
     private var themeObserverRegistered = false
-    private var renderingOptions = false
-    private var selectedSection = SettingsSection.DISPLAY
+    private var settingsReceiverRegistered = false
+    private var selectedSection = SettingsSection.LYRICS
+
+    private val settingsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                LyricsOverlayService.ACTION_STATE_CHANGED -> {
+                    val running = intent.getBooleanExtra(
+                        LyricsOverlayService.EXTRA_RUNNING,
+                        LyricsOverlayService.isRunning
+                    )
+                    lyricsSettingsRenderer.renderServiceRunning(running)
+                    if (!running) updateOptions()
+                }
+                LyricsOverlayService.ACTION_SETTINGS_STATE_CHANGED -> {
+                    LyricsSettingsRuntimeState.decode(
+                        intent.getStringExtra(LyricsOverlayService.EXTRA_SETTINGS_STATE)
+                    )?.let(lyricsSettingsRenderer::renderRuntimeState)
+                }
+            }
+        }
+    }
 
     private val themeColorObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
@@ -71,11 +87,6 @@ class MainActivity : AppCompatActivity() {
         renderedNightMode = isNightMode()
         setContentView(R.layout.activity_main)
 
-        currentLineOption = findViewById(R.id.topbar_lines_current)
-        currentAndNextOption = findViewById(R.id.topbar_lines_current_next)
-        smallSizeOption = findViewById(R.id.font_size_small)
-        standardSizeOption = findViewById(R.id.font_size_standard)
-        largeSizeOption = findViewById(R.id.font_size_large)
         displayNavigationItem = navigationItem(
             R.id.settings_navigation_display,
             R.id.settings_navigation_display_icon,
@@ -86,6 +97,16 @@ class MainActivity : AppCompatActivity() {
             R.id.settings_navigation_system_icon,
             R.id.settings_navigation_system_label
         )
+        cacheNavigationItem = navigationItem(
+            R.id.settings_navigation_cache,
+            R.id.settings_navigation_cache_icon,
+            R.id.settings_navigation_cache_label
+        )
+        searchNavigationItem = navigationItem(
+            R.id.settings_navigation_search,
+            R.id.settings_navigation_search_icon,
+            R.id.settings_navigation_search_label
+        )
         commercialNavigationItem = navigationItem(
             R.id.settings_navigation_entitlement,
             R.id.settings_navigation_entitlement_icon,
@@ -93,43 +114,46 @@ class MainActivity : AppCompatActivity() {
         )
         displayContent = findViewById(R.id.settings_display_content)
         systemContent = findViewById(R.id.settings_system_content)
+        cacheContent = findViewById(R.id.settings_cache_content)
+        searchContent = findViewById(R.id.settings_search_content)
         commercialContent = findViewById(R.id.settings_commercial_content)
         contentScroll = findViewById(R.id.settings_content_scroll)
-        wallpaperLyricsSetting = findViewById(R.id.wallpaper_lyrics_setting)
-        wallpaperLyricsSwitch = findViewById(R.id.wallpaper_lyrics_switch)
-        lyricsTranslationSetting = findViewById(R.id.lyrics_translation_setting)
-        lyricsTranslationSwitch = findViewById(R.id.lyrics_translation_switch)
-        restartLyricsSetting = findViewById(R.id.restart_lyrics_setting)
+
+        lyricsSettingsRenderer = LyricsSettingsRenderer(
+            root = findViewById(android.R.id.content),
+            actions = LyricsSettingsActions(
+                onTopbarLinesChanged = ::setTopbarLines,
+                onTopbarFontScaleChanged = ::setTopbarFontScale,
+                onWallpaperEnabledChanged = ::setWallpaperLyricsEnabled,
+                onWallpaperFontScaleChanged = ::setWallpaperFontScale,
+                onWallpaperBlurChanged = ::setWallpaperBlurEnabled,
+                onWallpaperShadowChanged = ::setWallpaperShadowEnabled,
+                onWallpaperSpacingChanged = ::setWallpaperSpacing,
+                onWallpaperFocusChanged = ::setWallpaperFocus,
+                onAutoStartChanged = ::setAutoStartEnabled,
+                onTranslationChanged = ::setLyricsTranslationEnabled,
+                onServiceRunningChanged = ::setServiceRunning,
+                onRestartService = ::restartLyricsOverlay,
+                onSearch = ::searchLyrics,
+                onSelectCandidate = ::selectManualLyrics,
+                onDeleteCurrentCache = ::deleteCurrentLyricsCache,
+                onRestoreAutomatic = ::restoreAutomaticLyrics
+            )
+        )
 
         selectedSection = SettingsSection.from(
             savedInstanceState?.getString(STATE_SELECTED_SECTION)
                 ?: intent.getStringExtra(EXTRA_OPEN_SETTINGS_SECTION)
         )
 
-        currentLineOption.setOnClickListener { setTopbarLines(1) }
-        currentAndNextOption.setOnClickListener { setTopbarLines(2) }
-        smallSizeOption.setOnClickListener { setFontScale(FONT_SCALE_SMALL) }
-        standardSizeOption.setOnClickListener { setFontScale(FONT_SCALE_STANDARD) }
-        largeSizeOption.setOnClickListener { setFontScale(FONT_SCALE_LARGE) }
-        wallpaperLyricsSetting.setOnClickListener {
-            wallpaperLyricsSwitch.isChecked = !wallpaperLyricsSwitch.isChecked
-        }
-        wallpaperLyricsSwitch.setOnCheckedChangeListener { _, enabled ->
-            if (!renderingOptions) setWallpaperLyricsEnabled(enabled)
-        }
-        lyricsTranslationSetting.setOnClickListener {
-            lyricsTranslationSwitch.isChecked = !lyricsTranslationSwitch.isChecked
-        }
-        lyricsTranslationSwitch.setOnCheckedChangeListener { _, enabled ->
-            if (!renderingOptions) setLyricsTranslationEnabled(enabled)
-        }
-        displayNavigationItem.container.setOnClickListener { showSection(SettingsSection.DISPLAY) }
-        systemNavigationItem.container.setOnClickListener { showSection(SettingsSection.SYSTEM) }
+        displayNavigationItem.container.setOnClickListener { showSection(SettingsSection.LYRICS) }
+        systemNavigationItem.container.setOnClickListener { showSection(SettingsSection.SERVICE) }
+        cacheNavigationItem.container.setOnClickListener { showSection(SettingsSection.CACHE) }
+        searchNavigationItem.container.setOnClickListener { showSection(SettingsSection.SEARCH) }
         commercialNavigationItem.container.setOnClickListener {
             commercialController.showEntitlementPage()
             showSection(SettingsSection.COMMERCIAL)
         }
-        restartLyricsSetting.setOnClickListener { restartLyricsOverlay() }
 
         commercialRenderer = CommercialSettingsRenderer(
             root = findViewById(android.R.id.content),
@@ -182,20 +206,24 @@ class MainActivity : AppCompatActivity() {
             recreate()
             return
         }
-        if (::currentLineOption.isInitialized) {
+        if (::lyricsSettingsRenderer.isInitialized) {
             refreshThemePalette()
         }
     }
 
     override fun onStart() {
         super.onStart()
+        registerSettingsReceiver()
         registerThemeColorObserver()
         refreshThemePalette()
+        lyricsSettingsRenderer.renderServiceRunning(LyricsOverlayService.isRunning)
         ensureLyricsOverlayForSettings()
+        requestSettingsState()
     }
 
     override fun onStop() {
         unregisterThemeColorObserver()
+        unregisterSettingsReceiver()
         if (!isChangingConfigurations) {
             notifyOverlay(LyricsOverlayService.ACTION_SETTINGS_CLOSED)
         }
@@ -227,21 +255,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setFontScale(percent: Int) {
+    private fun setTopbarFontScale(percent: Int) {
         val normalized = percent.coerceIn(
             LyricsOverlayService.FONT_SCALE_MIN_PERCENT,
             LyricsOverlayService.FONT_SCALE_MAX_PERCENT
         )
         overlayPrefs.edit()
-            .putInt(LyricsOverlayService.PREF_FONT_SCALE_PERCENT, normalized)
+            .putInt(LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT, normalized)
             .apply()
         updateOptions()
 
         if (LyricsOverlayService.isRunning) {
             startService(Intent(this, LyricsOverlayService::class.java).apply {
-                action = LyricsOverlayService.ACTION_SET_FONT_SCALE
+                action = LyricsOverlayService.ACTION_SET_TOPBAR_FONT_SCALE
                 putExtra(LyricsOverlayService.EXTRA_FONT_SCALE_PERCENT, normalized)
             })
+        }
+    }
+
+    private fun setWallpaperFontScale(percent: Int) {
+        val normalized = percent.coerceIn(
+            LyricsOverlayService.FONT_SCALE_MIN_PERCENT,
+            LyricsOverlayService.FONT_SCALE_MAX_PERCENT
+        )
+        overlayPrefs.edit()
+            .putInt(LyricsOverlayService.PREF_WALLPAPER_FONT_SCALE_PERCENT, normalized)
+            .apply()
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_WALLPAPER_FONT_SCALE) {
+            putExtra(LyricsOverlayService.EXTRA_FONT_SCALE_PERCENT, normalized)
         }
     }
 
@@ -249,25 +291,66 @@ class MainActivity : AppCompatActivity() {
         overlayPrefs.edit()
             .putBoolean(LyricsOverlayService.PREF_WALLPAPER_LYRICS_ENABLED, enabled)
             .apply()
-
-        if (LyricsOverlayService.isRunning) {
-            startService(Intent(this, LyricsOverlayService::class.java).apply {
-                action = LyricsOverlayService.ACTION_SET_WALLPAPER_LYRICS
-                putExtra(LyricsOverlayService.EXTRA_WALLPAPER_LYRICS_ENABLED, enabled)
-            })
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_WALLPAPER_LYRICS) {
+            putExtra(LyricsOverlayService.EXTRA_WALLPAPER_LYRICS_ENABLED, enabled)
         }
+    }
+
+    private fun setWallpaperBlurEnabled(enabled: Boolean) {
+        overlayPrefs.edit()
+            .putBoolean(LyricsOverlayService.PREF_WALLPAPER_BLUR_ENABLED, enabled)
+            .apply()
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_WALLPAPER_BLUR) {
+            putExtra(LyricsOverlayService.EXTRA_WALLPAPER_BLUR_ENABLED, enabled)
+        }
+    }
+
+    private fun setWallpaperShadowEnabled(enabled: Boolean) {
+        overlayPrefs.edit()
+            .putBoolean(LyricsOverlayService.PREF_WALLPAPER_SHADOW_ENABLED, enabled)
+            .apply()
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_WALLPAPER_SHADOW) {
+            putExtra(LyricsOverlayService.EXTRA_WALLPAPER_SHADOW_ENABLED, enabled)
+        }
+    }
+
+    private fun setWallpaperSpacing(spacing: WallpaperLyricsSpacing) {
+        overlayPrefs.edit()
+            .putString(LyricsOverlayService.PREF_WALLPAPER_SPACING, spacing.preferenceValue)
+            .apply()
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_WALLPAPER_SPACING) {
+            putExtra(LyricsOverlayService.EXTRA_WALLPAPER_SPACING, spacing.preferenceValue)
+        }
+    }
+
+    private fun setWallpaperFocus(focus: WallpaperLyricsFocus) {
+        overlayPrefs.edit()
+            .putString(LyricsOverlayService.PREF_WALLPAPER_FOCUS, focus.preferenceValue)
+            .apply()
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_WALLPAPER_FOCUS) {
+            putExtra(LyricsOverlayService.EXTRA_WALLPAPER_FOCUS, focus.preferenceValue)
+        }
+    }
+
+    private fun setAutoStartEnabled(enabled: Boolean) {
+        overlayPrefs.edit()
+            .putBoolean(LyricsOverlayService.PREF_AUTO_START, enabled)
+            .apply()
+        updateOptions()
     }
 
     private fun setLyricsTranslationEnabled(enabled: Boolean) {
         overlayPrefs.edit()
             .putBoolean(LyricsOverlayService.PREF_LYRICS_TRANSLATION_ENABLED, enabled)
             .apply()
-
-        if (LyricsOverlayService.isRunning) {
-            startService(Intent(this, LyricsOverlayService::class.java).apply {
-                action = LyricsOverlayService.ACTION_SET_LYRICS_TRANSLATION
-                putExtra(LyricsOverlayService.EXTRA_LYRICS_TRANSLATION_ENABLED, enabled)
-            })
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_LYRICS_TRANSLATION) {
+            putExtra(LyricsOverlayService.EXTRA_LYRICS_TRANSLATION_ENABLED, enabled)
         }
     }
 
@@ -282,60 +365,67 @@ class MainActivity : AppCompatActivity() {
         } else {
             2
         }
-        val fontScale = overlayPrefs.getInt(
+        val legacyFontScale = overlayPrefs.getInt(
             LyricsOverlayService.PREF_FONT_SCALE_PERCENT,
             LyricsOverlayService.FONT_SCALE_DEFAULT_PERCENT
         ).coerceIn(
             LyricsOverlayService.FONT_SCALE_MIN_PERCENT,
             LyricsOverlayService.FONT_SCALE_MAX_PERCENT
         )
-
-        renderingOptions = true
-        try {
-            renderWallpaperLyricsSwitch(
-                overlayPrefs.getBoolean(
+        lyricsSettingsRenderer.renderPreferences(
+            LyricsSettingsPreferences(
+                topbarLines = lines,
+                topbarFontScale = overlayPrefs.getInt(
+                    LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT,
+                    legacyFontScale
+                ),
+                wallpaperEnabled = overlayPrefs.getBoolean(
                     LyricsOverlayService.PREF_WALLPAPER_LYRICS_ENABLED,
                     LyricsOverlayService.WALLPAPER_LYRICS_DEFAULT
-                )
-            )
-            renderLyricsTranslationSwitch(
-                overlayPrefs.getBoolean(
+                ),
+                wallpaperFontScale = overlayPrefs.getInt(
+                    LyricsOverlayService.PREF_WALLPAPER_FONT_SCALE_PERCENT,
+                    legacyFontScale
+                ),
+                wallpaperBlur = overlayPrefs.getBoolean(
+                    LyricsOverlayService.PREF_WALLPAPER_BLUR_ENABLED,
+                    LyricsOverlayService.WALLPAPER_BLUR_DEFAULT
+                ),
+                wallpaperShadow = overlayPrefs.getBoolean(
+                    LyricsOverlayService.PREF_WALLPAPER_SHADOW_ENABLED,
+                    LyricsOverlayService.WALLPAPER_SHADOW_DEFAULT
+                ),
+                wallpaperSpacing = WallpaperLyricsSpacing.fromPreference(
+                    overlayPrefs.getString(
+                        LyricsOverlayService.PREF_WALLPAPER_SPACING,
+                        WallpaperLyricsSpacing.STANDARD.preferenceValue
+                    )
+                ),
+                wallpaperFocus = WallpaperLyricsFocus.fromPreference(
+                    overlayPrefs.getString(
+                        LyricsOverlayService.PREF_WALLPAPER_FOCUS,
+                        WallpaperLyricsFocus.CENTER.preferenceValue
+                    )
+                ),
+                autoStart = overlayPrefs.getBoolean(
+                    LyricsOverlayService.PREF_AUTO_START,
+                    false
+                ),
+                translationEnabled = overlayPrefs.getBoolean(
                     LyricsOverlayService.PREF_LYRICS_TRANSLATION_ENABLED,
                     LyricsOverlayService.LYRICS_TRANSLATION_DEFAULT
                 )
             )
-            renderNavigation()
-            setOptionSelected(currentLineOption, lines == 1)
-            setOptionSelected(currentAndNextOption, lines == 2)
-
-            val selectedFontScale = when {
-                fontScale < (FONT_SCALE_SMALL + FONT_SCALE_STANDARD) / 2 -> FONT_SCALE_SMALL
-                fontScale > (FONT_SCALE_STANDARD + FONT_SCALE_LARGE) / 2 -> FONT_SCALE_LARGE
-                else -> FONT_SCALE_STANDARD
-            }
-            setOptionSelected(smallSizeOption, selectedFontScale == FONT_SCALE_SMALL)
-            setOptionSelected(standardSizeOption, selectedFontScale == FONT_SCALE_STANDARD)
-            setOptionSelected(largeSizeOption, selectedFontScale == FONT_SCALE_LARGE)
-        } finally {
-            renderingOptions = false
-        }
+        )
+        renderNavigation()
     }
 
-    private fun setOptionSelected(option: TextView, selected: Boolean) {
-        option.setBackgroundResource(if (selected) R.drawable.bg_settings_segment_selected else 0)
-        option.backgroundTintList = if (selected) {
-            ColorStateList.valueOf(themePalette.accentColor)
-        } else {
-            null
-        }
-        option.setTextColor(
-            if (selected) themePalette.accentTextColor
-            else ContextCompat.getColor(this, R.color.settings_text_option)
-        )
-        option.typeface = Typeface.create(
-            if (selected) "sans-serif-medium" else "sans-serif",
-            Typeface.NORMAL
-        )
+    private fun notifyDisplaySetting(action: String, extras: Intent.() -> Unit) {
+        if (!LyricsOverlayService.isRunning) return
+        startService(Intent(this, LyricsOverlayService::class.java).apply {
+            this.action = action
+            extras()
+        })
     }
 
     private fun setNavigationSelected(item: NavigationItem) {
@@ -362,6 +452,8 @@ class MainActivity : AppCompatActivity() {
         listOf(
             displayNavigationItem,
             systemNavigationItem,
+            cacheNavigationItem,
+            searchNavigationItem,
             commercialNavigationItem
         ).filterNot { it === selectedItem }.forEach(::setNavigationUnselected)
         setNavigationSelected(selectedItem)
@@ -372,21 +464,13 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun renderWallpaperLyricsSwitch(enabled: Boolean) {
-        wallpaperLyricsSwitch.accentColor = themePalette.accentColor
-        wallpaperLyricsSwitch.isChecked = enabled
-    }
-
-    private fun renderLyricsTranslationSwitch(enabled: Boolean) {
-        lyricsTranslationSwitch.accentColor = themePalette.accentColor
-        lyricsTranslationSwitch.isChecked = enabled
-    }
-
     private fun showSection(section: SettingsSection) {
         selectedSection = section
         commercialRenderer.setSummaryVisibleForSection(section != SettingsSection.COMMERCIAL)
-        displayContent.visibility = if (section == SettingsSection.DISPLAY) View.VISIBLE else View.GONE
-        systemContent.visibility = if (section == SettingsSection.SYSTEM) View.VISIBLE else View.GONE
+        displayContent.visibility = if (section == SettingsSection.LYRICS) View.VISIBLE else View.GONE
+        systemContent.visibility = if (section == SettingsSection.SERVICE) View.VISIBLE else View.GONE
+        cacheContent.visibility = if (section == SettingsSection.CACHE) View.VISIBLE else View.GONE
+        searchContent.visibility = if (section == SettingsSection.SEARCH) View.VISIBLE else View.GONE
         commercialContent.visibility = if (section == SettingsSection.COMMERCIAL) {
             View.VISIBLE
         } else {
@@ -397,8 +481,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun navigationItem(section: SettingsSection): NavigationItem = when (section) {
-        SettingsSection.DISPLAY -> displayNavigationItem
-        SettingsSection.SYSTEM -> systemNavigationItem
+        SettingsSection.LYRICS -> displayNavigationItem
+        SettingsSection.SERVICE -> systemNavigationItem
+        SettingsSection.CACHE -> cacheNavigationItem
+        SettingsSection.SEARCH -> searchNavigationItem
         SettingsSection.COMMERCIAL -> commercialNavigationItem
     }
 
@@ -411,12 +497,84 @@ class MainActivity : AppCompatActivity() {
     private fun hasNotificationListenerAccess(): Boolean =
         NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
 
+    private fun setServiceRunning(enabled: Boolean) {
+        if (!enabled) {
+            if (LyricsOverlayService.isRunning) {
+                startService(Intent(this, LyricsOverlayService::class.java).apply {
+                    action = LyricsOverlayService.ACTION_STOP
+                })
+            } else {
+                lyricsSettingsRenderer.renderServiceRunning(false)
+            }
+            return
+        }
+        if (!hasRequiredLyricsAccess()) {
+            lyricsSettingsRenderer.renderServiceRunning(false)
+            Toast.makeText(
+                this,
+                R.string.settings_service_requires_authorization,
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, LyricsOverlayService::class.java).apply {
+                action = LyricsOverlayService.ACTION_START
+            }
+        )
+    }
+
+    private fun searchLyrics(track: String, artist: String, album: String) {
+        sendRuntimeCommand(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_SEARCH_MANUAL_LYRICS
+            putExtra(LyricsOverlayService.EXTRA_MANUAL_TRACK, track)
+            putExtra(LyricsOverlayService.EXTRA_MANUAL_ARTIST, artist)
+            putExtra(LyricsOverlayService.EXTRA_MANUAL_ALBUM, album)
+        })
+    }
+
+    private fun selectManualLyrics(token: String) {
+        sendRuntimeCommand(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_SELECT_MANUAL_LYRICS
+            putExtra(LyricsOverlayService.EXTRA_MANUAL_CANDIDATE_TOKEN, token)
+        })
+    }
+
+    private fun deleteCurrentLyricsCache() {
+        sendRuntimeCommand(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_CLEAR_CURRENT_LYRICS_CACHE
+        })
+    }
+
+    private fun restoreAutomaticLyrics() {
+        sendRuntimeCommand(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_RESTORE_AUTOMATIC_LYRICS
+        })
+    }
+
+    private fun requestSettingsState() {
+        sendRuntimeCommand(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_REQUEST_SETTINGS_STATE
+        })
+    }
+
+    private fun sendRuntimeCommand(intent: Intent) {
+        if (!hasRequiredLyricsAccess()) return
+        if (LyricsOverlayService.isRunning) {
+            startService(intent)
+        } else {
+            ContextCompat.startForegroundService(this, intent)
+        }
+    }
+
+    private fun hasRequiredLyricsAccess(): Boolean = LyricsStartupPolicy.hasRequiredAccess(
+        overlayAccess = Settings.canDrawOverlays(this),
+        notificationAccess = hasNotificationListenerAccess()
+    )
+
     private fun restartLyricsOverlay() {
-        if (!LyricsStartupPolicy.hasRequiredAccess(
-                overlayAccess = Settings.canDrawOverlays(this),
-                notificationAccess = hasNotificationListenerAccess()
-            )
-        ) {
+        if (!hasRequiredLyricsAccess()) {
             Toast.makeText(
                 this,
                 R.string.settings_restart_requires_authorization,
@@ -447,7 +605,33 @@ class MainActivity : AppCompatActivity() {
                 accentTextColor = themePalette.accentTextColor
             )
         }
-        if (::currentLineOption.isInitialized) updateOptions()
+        if (::lyricsSettingsRenderer.isInitialized) {
+            lyricsSettingsRenderer.updateAccent(
+                themePalette.accentColor,
+                themePalette.accentTextColor
+            )
+            updateOptions()
+        }
+    }
+
+    private fun registerSettingsReceiver() {
+        if (settingsReceiverRegistered) return
+        ContextCompat.registerReceiver(
+            this,
+            settingsReceiver,
+            IntentFilter().apply {
+                addAction(LyricsOverlayService.ACTION_STATE_CHANGED)
+                addAction(LyricsOverlayService.ACTION_SETTINGS_STATE_CHANGED)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        settingsReceiverRegistered = true
+    }
+
+    private fun unregisterSettingsReceiver() {
+        if (!settingsReceiverRegistered) return
+        runCatching { unregisterReceiver(settingsReceiver) }
+        settingsReceiverRegistered = false
     }
 
     private fun registerThemeColorObserver() {
@@ -473,11 +657,7 @@ class MainActivity : AppCompatActivity() {
             Configuration.UI_MODE_NIGHT_YES
 
     private fun ensureLyricsOverlayForSettings() {
-        if (!LyricsStartupPolicy.hasRequiredAccess(
-                overlayAccess = Settings.canDrawOverlays(this),
-                notificationAccess = hasNotificationListenerAccess()
-            )
-        ) return
+        if (!hasRequiredLyricsAccess()) return
         val intent = Intent(this, LyricsOverlayService::class.java).apply {
             action = LyricsOverlayService.ACTION_SETTINGS_OPENED
         }
@@ -534,19 +714,18 @@ class MainActivity : AppCompatActivity() {
         const val EXTRA_OPEN_SETTINGS_SECTION = "open_settings_section"
         const val SECTION_COMMERCIAL = "COMMERCIAL"
         const val TOPBAR_LINES_DEFAULT = 2
-        const val FONT_SCALE_SMALL = 88
-        const val FONT_SCALE_STANDARD = 100
-        const val FONT_SCALE_LARGE = 108
     }
 
     private enum class SettingsSection {
-        DISPLAY,
-        SYSTEM,
+        LYRICS,
+        SERVICE,
+        CACHE,
+        SEARCH,
         COMMERCIAL;
 
         companion object {
             fun from(value: String?): SettingsSection = entries.firstOrNull { it.name == value }
-                ?: DISPLAY
+                ?: LYRICS
         }
     }
 
