@@ -281,10 +281,15 @@ class CloudDeviceCommercialGateway(
         } else {
             startRemoteTrial(identity, nowEpochMs)
         }
-        val remote = if (initialRemote == RemoteEntitlement.RecoveryRequired) {
+        val afterRevocation = restoreOriginalTrialAfterRevocation(
+            remote = initialRemote,
+            identity = identity,
+            nowEpochMs = nowEpochMs
+        )
+        val remote = if (afterRevocation == RemoteEntitlement.RecoveryRequired) {
             recoverRemoteEntitlementOnce(nowEpochMs)
         } else {
-            initialRemote
+            afterRevocation
         }
 
         val entitlement = when (remote) {
@@ -303,6 +308,20 @@ class CloudDeviceCommercialGateway(
             }
         }
         return AccessRefreshResult.Ready(entitlement, identity)
+    }
+
+    private fun restoreOriginalTrialAfterRevocation(
+        remote: RemoteEntitlement,
+        identity: DeviceCommercialIdentity,
+        nowEpochMs: Long
+    ): RemoteEntitlement {
+        val revoked = remote as? RemoteEntitlement.Failure ?: return remote
+        if (revoked.reason != CommercialFailure.ENTITLEMENT_REVOKED) return remote
+        return when (val trial = startRemoteTrial(identity, nowEpochMs)) {
+            is RemoteEntitlement.Ready,
+            RemoteEntitlement.Expired -> trial
+            else -> revoked
+        }
     }
 
     override suspend fun requestQuote(

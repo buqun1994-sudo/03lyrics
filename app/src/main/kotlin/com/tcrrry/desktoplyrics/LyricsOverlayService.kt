@@ -105,6 +105,20 @@ class LyricsOverlayService : Service() {
     private var resumeAfterCommercialStartupRefresh = false
     private var pendingCommercialStartupIntent: Intent? = null
     private var latestStartId = 0
+    private var commercialAccessBoundaryReceiverRegistered = false
+    private val commercialRuntimeAccess by lazy {
+        CommercialRuntimeAccessGuard(
+            nowEpochMs = System::currentTimeMillis,
+            evaluateAccess = { now ->
+                CommercialRuntimeFactory.accessGate(this).evaluate(now)
+            },
+            scheduleExpiry = { runnable, delayMillis ->
+                mainHandler.postDelayed(runnable, delayMillis)
+            },
+            cancelExpiry = mainHandler::removeCallbacks,
+            onDenied = ::onCommercialRuntimeAccessDenied
+        )
+    }
 
     private var overlayRoot: FrameLayout? = null
     private var webView: WebView? = null
@@ -183,6 +197,15 @@ class LyricsOverlayService : Service() {
     }
     private val sessionRetryRunnable = Runnable {
         if (isRunning && !monitorStarted) startMediaMonitor()
+    }
+    private val commercialAccessBoundaryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_ON ||
+                intent?.action == Intent.ACTION_TIME_CHANGED
+            ) {
+                commercialRuntimeAccess.revalidate()
+            }
+        }
     }
     private val surfaceOccupancyListener: (Boolean) -> Unit = { occupied ->
         if (desktopSurfaceOccupied != occupied) {
@@ -279,6 +302,7 @@ class LyricsOverlayService : Service() {
         loadRuntimePreferences()
         SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
         IcarRightDockStateRegistry.addListener(rightDockStateListener)
+        registerCommercialAccessBoundaryReceiver()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -304,6 +328,7 @@ class LyricsOverlayService : Service() {
             if (systemDecision.clearsAutoStart) {
                 prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
             }
+            commercialRuntimeAccess.clear()
             clearRecoveryNotification()
             releaseRuntimeResources()
             stopForegroundNotification()
@@ -334,7 +359,12 @@ class LyricsOverlayService : Service() {
 
         val decision = LyricsCommercialGatePolicy.decide(systemDecision, commercialAccess)
         if (decision == LyricsStartupOutcome.COMMERCIAL_RECOVERY) {
-            if (waitingForRefresh) {
+            val runtimeActive = lyricsRepository != null || overlayRoot != null || monitorStarted
+            if (LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
+                    waitingForRefresh = waitingForRefresh,
+                    runtimeActive = runtimeActive
+                )
+            ) {
                 Log.i(LOG_TAG, "Commercial startup revalidation pending; local access denied")
                 logStartupOutcome(source, overlayAccess, notificationAccess, decision)
                 return START_NOT_STICKY
@@ -349,7 +379,8 @@ class LyricsOverlayService : Service() {
             source = source,
             startId = startId,
             overlayAccess = overlayAccess,
-            notificationAccess = notificationAccess
+            notificationAccess = notificationAccess,
+            commercialAccess = commercialAccess as CommercialAccessDecision.Allowed
         )
     }
 
@@ -424,7 +455,12 @@ class LyricsOverlayService : Service() {
             )
             return
         }
-        if (!shouldResume || lyricsRepository != null) return
+        val allowedAccess = access as CommercialAccessDecision.Allowed
+        if (lyricsRepository != null) {
+            commercialRuntimeAccess.authorize(allowedAccess)
+            return
+        }
+        if (!shouldResume) return
 
         val overlayAccess = Settings.canDrawOverlays(this)
         val notificationAccess = hasNotificationListenerAccess()
@@ -443,7 +479,8 @@ class LyricsOverlayService : Service() {
             source = startupSource(pendingIntent),
             startId = latestStartId,
             overlayAccess = overlayAccess,
-            notificationAccess = notificationAccess
+            notificationAccess = notificationAccess,
+            commercialAccess = allowedAccess
         )
     }
 
@@ -452,8 +489,10 @@ class LyricsOverlayService : Service() {
         source: String,
         startId: Int,
         overlayAccess: Boolean,
-        notificationAccess: Boolean
+        notificationAccess: Boolean,
+        commercialAccess: CommercialAccessDecision.Allowed
     ): Int {
+        commercialRuntimeAccess.authorize(commercialAccess)
         clearRecoveryNotification()
         ensureForegroundNotification()
         val result = try {
@@ -663,7 +702,9 @@ class LyricsOverlayService : Service() {
     override fun onDestroy() {
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
         IcarRightDockStateRegistry.removeListener(rightDockStateListener)
+        unregisterCommercialAccessBoundaryReceiver()
         commercialRefreshJob.cancel()
+        commercialRuntimeAccess.clear()
         releaseRuntimeResources()
         mainHandler.removeCallbacksAndMessages(null)
         isRunning = false
@@ -718,10 +759,52 @@ class LyricsOverlayService : Service() {
     }
 
     private fun startRuntime() {
+        if (!commercialRuntimeAccess.hasCurrentAccess()) {
+            Log.w(LOG_TAG, "Lyrics runtime withheld because commercial access is not granted")
+            return
+        }
         ensureLyricsRuntimeResources()
         displayStateMonitor.start()
         if (overlayRoot == null) createOverlay()
         startMediaMonitor()
+    }
+
+    private fun onCommercialRuntimeAccessDenied(access: CommercialAccessDecision.Denied) {
+        Log.i(
+            LOG_TAG,
+            "Commercial runtime access ended reason=${access.reason.name.lowercase()}"
+        )
+        enterCommercialRecoveryState(latestStartId, access)
+        logStartupOutcome(
+            source = START_SOURCE_RUNTIME_ACCESS,
+            overlayAccess = Settings.canDrawOverlays(this),
+            notificationAccess = hasNotificationListenerAccess(),
+            outcome = LyricsStartupOutcome.COMMERCIAL_RECOVERY
+        )
+    }
+
+    private fun registerCommercialAccessBoundaryReceiver() {
+        if (commercialAccessBoundaryReceiverRegistered) return
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                commercialAccessBoundaryReceiver,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_TIME_CHANGED)
+                },
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            commercialAccessBoundaryReceiverRegistered = true
+        }.onFailure { error ->
+            Log.w(LOG_TAG, "Commercial runtime access boundary receiver unavailable", error)
+        }
+    }
+
+    private fun unregisterCommercialAccessBoundaryReceiver() {
+        if (!commercialAccessBoundaryReceiverRegistered) return
+        runCatching { unregisterReceiver(commercialAccessBoundaryReceiver) }
+        commercialAccessBoundaryReceiverRegistered = false
     }
 
     private fun ensureLyricsRuntimeResources() {
@@ -1256,6 +1339,7 @@ class LyricsOverlayService : Service() {
         overlayAccess: Boolean,
         notificationAccess: Boolean
     ) {
+        commercialRuntimeAccess.clear()
         releaseRuntimeResources()
         stopForegroundNotification()
         notificationManager.notify(
@@ -1269,6 +1353,7 @@ class LyricsOverlayService : Service() {
         startId: Int,
         access: CommercialAccessDecision
     ) {
+        commercialRuntimeAccess.clear()
         releaseRuntimeResources()
         stopForegroundNotification()
         notificationManager.notify(
@@ -1412,6 +1497,10 @@ class LyricsOverlayService : Service() {
 
     @Suppress("SetJavaScriptEnabled")
     private fun createOverlay() {
+        if (!commercialRuntimeAccess.hasCurrentAccess()) {
+            Log.w(LOG_TAG, "Lyric surface withheld because commercial access is not granted")
+            return
+        }
         val generation = runtimeGeneration.get()
         val presentation = currentPresentation()
         surfaceMode = presentation.surfaceMode
@@ -1563,6 +1652,7 @@ class LyricsOverlayService : Service() {
     }
 
     private fun applyCurrentSurface() {
+        if (!commercialRuntimeAccess.hasCurrentAccess()) return
         val presentation = currentPresentation()
         val nextSurfaceMode = presentation.surfaceMode
         val geometry = geometryForPresentation(presentation)
@@ -2558,12 +2648,15 @@ class LyricsOverlayService : Service() {
     }
 
     private fun deliverToWeb(snapshot: JSONObject) {
+        if (!commercialRuntimeAccess.hasCurrentAccess()) return
         pendingSnapshot = snapshot
         if (!webReady) return
         val generation = runtimeGeneration.get()
         val targetWebView = webView ?: return
         targetWebView.post {
-            if (generation != runtimeGeneration.get() || targetWebView !== webView || !webReady) {
+            if (!commercialRuntimeAccess.hasCurrentAccess() || generation != runtimeGeneration.get() ||
+                targetWebView !== webView || !webReady
+            ) {
                 return@post
             }
             targetWebView.evaluateJavascript(
@@ -2665,6 +2758,7 @@ class LyricsOverlayService : Service() {
         const val LYRICS_TRANSLATION_DEFAULT = true
         const val START_SOURCE_BOOT_COMPLETED = "boot_completed"
         const val START_SOURCE_PACKAGE_REPLACED = "package_replaced"
+        private const val START_SOURCE_RUNTIME_ACCESS = "runtime_access"
 
         fun compactMinimumHeightDp(percent: Int): Int {
             val scale = percent.coerceIn(FONT_SCALE_MIN_PERCENT, FONT_SCALE_MAX_PERCENT) / 100f
@@ -2789,4 +2883,9 @@ internal object LyricsCommercialStartupRefreshPolicy {
         }
         else -> localAccess
     }
+
+    fun shouldDeferDeniedAccess(
+        waitingForRefresh: Boolean,
+        runtimeActive: Boolean
+    ): Boolean = waitingForRefresh && !runtimeActive
 }

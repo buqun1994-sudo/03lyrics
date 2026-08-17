@@ -141,7 +141,7 @@ class CloudDeviceCommercialGatewayTest {
     }
 
     @Test
-    fun `refund revocation closes local gate before retry restores original trial end`() =
+    fun `refund revocation atomically replaces old pro with the original trial`() =
         runBlocking {
             val fixture = FixtureHarness()
             val initial = fixture.gateway.queryEntitlement(fixture.now)
@@ -161,27 +161,14 @@ class CloudDeviceCommercialGatewayTest {
 
             fixture.store.failedDeletes += SecureCommercialRecord.LICENSE
             fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
+            val refreshed = fixture.gateway.refreshAccess(fixture.now)
+                as CommercialAccessRefreshResult.Ready
             assertEquals(
-                CommercialAccessRefreshResult.Failure(CommercialFailure.ENTITLEMENT_REVOKED),
-                fixture.gateway.refreshAccess(fixture.now)
+                originalTrialEnd,
+                (refreshed.entitlement as EntitlementState.Trial).expiresAtEpochMs
             )
             assertTrue(
                 fixture.store.read(SecureCommercialRecord.LICENSE) is SecureStoreReadResult.Value
-            )
-            assertTrue(
-                fixture.store.read(SecureCommercialRecord.ACCESS_REVOCATION) is
-                    SecureStoreReadResult.Value
-            )
-            assertEquals(
-                CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED),
-                fixture.licenseRepository.accessDecision(fixture.now)
-            )
-
-            val restored = fixture.gateway.queryEntitlement(fixture.now)
-                as EntitlementQueryResult.Ready
-            assertEquals(
-                originalTrialEnd,
-                (restored.snapshot.entitlement as EntitlementState.Trial).expiresAtEpochMs
             )
             assertEquals(
                 SecureStoreReadResult.Missing,
@@ -190,6 +177,55 @@ class CloudDeviceCommercialGatewayTest {
             assertTrue(
                 fixture.licenseRepository.accessDecision(fixture.now) is
                     CommercialAccessDecision.Allowed
+            )
+
+            val repeated = fixture.gateway.refreshAccess(fixture.now)
+                as CommercialAccessRefreshResult.Ready
+            assertEquals(
+                originalTrialEnd,
+                (repeated.entitlement as EntitlementState.Trial).expiresAtEpochMs
+            )
+            assertEquals(
+                SecureStoreReadResult.Missing,
+                fixture.store.read(SecureCommercialRecord.ACCESS_REVOCATION)
+            )
+            assertTrue(
+                fixture.licenseRepository.accessDecision(fixture.now) is
+                    CommercialAccessDecision.Allowed
+            )
+        }
+
+    @Test
+    fun `refund trial replacement stays revoked until the new license is fully persisted`() =
+        runBlocking {
+            val fixture = FixtureHarness()
+            val initial = fixture.gateway.queryEntitlement(fixture.now)
+                as EntitlementQueryResult.Ready
+            val payment = fixture.gateway.createPayment(
+                initial.snapshot.quote!!,
+                PaymentMethod.WECHAT,
+                fixture.now
+            ) as PaymentCreationResult.Ready
+            fixture.transport.paymentOutcome = DebugPaymentOutcome.PAID
+            assertEquals(
+                PaymentStatusResult.Paid,
+                fixture.gateway.refreshPayment(payment.session, fixture.now)
+            )
+
+            fixture.store.failedDeletes += SecureCommercialRecord.ACCESS_REVOCATION
+            fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
+
+            assertEquals(
+                CommercialAccessRefreshResult.Failure(
+                    CommercialFailure.ENTITLEMENT_REVOKED
+                ),
+                fixture.gateway.refreshAccess(fixture.now)
+            )
+            assertEquals(
+                CommercialAccessDecision.Denied(
+                    CommercialAccessDenial.ENTITLEMENT_REVOKED
+                ),
+                fixture.licenseRepository.accessDecision(fixture.now)
             )
         }
 
@@ -211,14 +247,10 @@ class CloudDeviceCommercialGatewayTest {
 
         fixture.now += TRIAL_DURATION_MS + 1
         fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
-        assertEquals(
-            EntitlementQueryResult.Failure(CommercialFailure.ENTITLEMENT_REVOKED),
-            fixture.gateway.queryEntitlement(fixture.now)
-        )
-        val retried = fixture.gateway.queryEntitlement(fixture.now)
+        val refreshed = fixture.gateway.queryEntitlement(fixture.now)
             as EntitlementQueryResult.Ready
 
-        assertEquals(EntitlementState.Expired, retried.snapshot.entitlement)
+        assertEquals(EntitlementState.Expired, refreshed.snapshot.entitlement)
         assertTrue(
             fixture.licenseRepository.accessDecision(fixture.now) is
                 CommercialAccessDecision.Denied

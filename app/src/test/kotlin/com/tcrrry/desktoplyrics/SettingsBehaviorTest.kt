@@ -9,6 +9,7 @@ import com.tcrrry.desktoplyrics.commercial.EntitlementState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -172,6 +173,149 @@ class SettingsBehaviorTest {
     }
 
     @Test
+    fun `denied access only waits for cloud refresh before runtime resources exist`() {
+        assertTrue(
+            LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
+                waitingForRefresh = true,
+                runtimeActive = false
+            )
+        )
+        assertFalse(
+            LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
+                waitingForRefresh = true,
+                runtimeActive = true
+            )
+        )
+        assertFalse(
+            LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
+                waitingForRefresh = false,
+                runtimeActive = false
+            )
+        )
+    }
+
+    @Test
+    fun `commercial access guard schedules the exact signed access boundary`() {
+        val harness = CommercialRuntimeAccessHarness(now = 10_000L)
+
+        harness.guard.authorize(
+            CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L)
+        )
+
+        assertEquals(listOf(5_000L), harness.scheduledDelays)
+        assertTrue(harness.guard.hasCurrentAccess())
+    }
+
+    @Test
+    fun `commercial access guard evaluates the authoritative gate at its boundary`() {
+        val harness = CommercialRuntimeAccessHarness(now = 10_000L)
+        harness.guard.authorize(
+            CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L)
+        )
+        harness.nextDecision = CommercialAccessDecision.Allowed(
+            CommercialTier.TRIAL,
+            25_000L
+        )
+
+        harness.now = 15_000L
+        harness.fireScheduledExpiry()
+
+        assertEquals(listOf(15_000L), harness.evaluatedAt)
+        assertEquals(listOf(5_000L, 10_000L), harness.scheduledDelays)
+        assertTrue(harness.guard.hasCurrentAccess())
+    }
+
+    @Test
+    fun `commercial access denial clears permission before one recovery callback`() {
+        val harness = CommercialRuntimeAccessHarness(now = 10_000L)
+        harness.guard.authorize(
+            CommercialAccessDecision.Allowed(CommercialTier.PRO, null)
+        )
+        harness.nextDecision = CommercialAccessDecision.Denied(
+            CommercialAccessDenial.ENTITLEMENT_REVOKED
+        )
+
+        harness.guard.revalidate()
+        harness.guard.revalidate()
+
+        assertTrue(harness.accessWasClearedBeforeDenial)
+        assertEquals(1, harness.denials.size)
+        assertFalse(harness.guard.hasCurrentAccess())
+    }
+
+    @Test
+    fun `commercial access refresh replaces and reschedules the prior permission`() {
+        val harness = CommercialRuntimeAccessHarness(now = 10_000L)
+        harness.guard.authorize(
+            CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L)
+        )
+        val staleExpiry = requireNotNull(harness.scheduledRunnable)
+        harness.now = 12_000L
+        harness.nextDecision = CommercialAccessDecision.Allowed(
+            CommercialTier.PRO,
+            30_000L
+        )
+
+        harness.guard.revalidate()
+        harness.now = 15_000L
+        staleExpiry.run()
+
+        assertEquals(listOf(12_000L), harness.evaluatedAt)
+        assertEquals(listOf(5_000L, 18_000L), harness.scheduledDelays)
+        assertTrue(harness.scheduledRunnable != null)
+        assertTrue(harness.guard.hasCurrentAccess())
+    }
+
+    @Test
+    fun `commercial access without a final boundary stays active without scheduling`() {
+        val harness = CommercialRuntimeAccessHarness(now = 10_000L)
+
+        harness.guard.authorize(
+            CommercialAccessDecision.Allowed(CommercialTier.PRO, null)
+        )
+        harness.now = Long.MAX_VALUE
+
+        assertNull(harness.scheduledRunnable)
+        assertTrue(harness.guard.hasCurrentAccess())
+        assertTrue(harness.evaluatedAt.isEmpty())
+    }
+
+    @Test
+    fun `clearing commercial access cancels and neutralizes stale expiry`() {
+        val harness = CommercialRuntimeAccessHarness(now = 10_000L)
+        harness.guard.authorize(
+            CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L)
+        )
+        val staleExpiry = requireNotNull(harness.scheduledRunnable)
+
+        harness.guard.clear()
+        harness.now = 15_000L
+        staleExpiry.run()
+
+        assertNull(harness.scheduledRunnable)
+        assertTrue(harness.evaluatedAt.isEmpty())
+        assertTrue(harness.denials.isEmpty())
+        assertFalse(harness.guard.hasCurrentAccess())
+    }
+
+    @Test
+    fun `commercial access guard synchronously revalidates an expired access decision`() {
+        val harness = CommercialRuntimeAccessHarness(now = 10_000L)
+        harness.guard.authorize(
+            CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L)
+        )
+        harness.now = 15_000L
+        harness.nextDecision = CommercialAccessDecision.Denied(
+            CommercialAccessDenial.LICENSE_EXPIRED
+        )
+
+        assertFalse(harness.guard.hasCurrentAccess())
+
+        assertEquals(listOf(15_000L), harness.evaluatedAt)
+        assertEquals(1, harness.denials.size)
+    }
+
+    @Test
     fun `iCAR switch geometry matches the bound MBSwitch resources`() {
         assertEquals(64f, IcarSwitchGeometry.WIDTH_PX)
         assertEquals(36f, IcarSwitchGeometry.HEIGHT_PX)
@@ -298,5 +442,49 @@ class SettingsBehaviorTest {
             LyricsTopbarHeightPolicy.requiredHeightDp(2, 108) >
                 LyricsTopbarHeightPolicy.requiredHeightDp(2, 100)
         )
+    }
+
+    private class CommercialRuntimeAccessHarness(
+        var now: Long
+    ) {
+        var nextDecision: CommercialAccessDecision = CommercialAccessDecision.Allowed(
+            CommercialTier.TRIAL,
+            now + 10_000L
+        )
+        val evaluatedAt = mutableListOf<Long>()
+        val scheduledDelays = mutableListOf<Long>()
+        val denials = mutableListOf<CommercialAccessDecision.Denied>()
+        var scheduledRunnable: Runnable? = null
+        var accessWasClearedBeforeDenial = false
+        val guard: CommercialRuntimeAccessGuard
+
+        init {
+            lateinit var initializedGuard: CommercialRuntimeAccessGuard
+            initializedGuard = CommercialRuntimeAccessGuard(
+                nowEpochMs = { now },
+                evaluateAccess = { evaluationTime ->
+                    evaluatedAt += evaluationTime
+                    nextDecision
+                },
+                scheduleExpiry = { runnable, delayMillis ->
+                    scheduledRunnable = runnable
+                    scheduledDelays += delayMillis
+                },
+                cancelExpiry = { runnable ->
+                    if (scheduledRunnable === runnable) scheduledRunnable = null
+                },
+                onDenied = { denial ->
+                    accessWasClearedBeforeDenial = !initializedGuard.hasCurrentAccess()
+                    denials += denial
+                }
+            )
+            guard = initializedGuard
+        }
+
+        fun fireScheduledExpiry() {
+            val runnable = requireNotNull(scheduledRunnable)
+            scheduledRunnable = null
+            runnable.run()
+        }
     }
 }

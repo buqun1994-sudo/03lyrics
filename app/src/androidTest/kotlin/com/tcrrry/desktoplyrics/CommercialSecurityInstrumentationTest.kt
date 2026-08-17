@@ -9,12 +9,12 @@ import com.tcrrry.desktoplyrics.commercial.CommercialDigests
 import com.tcrrry.desktoplyrics.commercial.CommercialRuntimeFactory
 import com.tcrrry.desktoplyrics.commercial.CommercialSignatureMessages
 import com.tcrrry.desktoplyrics.commercial.CommercialTier
-import com.tcrrry.desktoplyrics.commercial.DebugCommercialRuntime
 import com.tcrrry.desktoplyrics.commercial.DebugEntitlementScenario
 import com.tcrrry.desktoplyrics.commercial.EntitlementQueryResult
 import com.tcrrry.desktoplyrics.commercial.SecureCommercialRecord
 import com.tcrrry.desktoplyrics.commercial.SecureStoreReadResult
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -36,21 +36,78 @@ class CommercialSecurityInstrumentationTest {
         keyAlias = TEST_STORAGE_ALIAS,
         filePrefix = TEST_FILE_PREFIX
     )
+    private val identityManager = AndroidDeviceIdentityManager(
+        context = context,
+        secureStore = store,
+        baseKeyAlias = TEST_DEVICE_KEY_ALIAS
+    )
+
+    @Before
+    fun cleanBeforeTest() {
+        cleanTestArtifacts()
+    }
 
     @After
-    fun cleanTestStorage() {
-        SecureCommercialRecord.entries.forEach(store::delete)
-        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(TEST_STORAGE_ALIAS)
+    fun cleanAfterTest() {
+        cleanTestArtifacts()
+    }
+
+    @Test
+    fun cleanupContractLeavesNoTestArtifacts() {
+        assertTestArtifactsAbsent()
+    }
+
+    private fun cleanTestArtifacts() {
+        SecureCommercialRecord.entries.forEach { record ->
+            assertTrue("Failed to delete test record ${record.name}", store.delete(record))
+        }
+        context.noBackupFilesDir.listFiles()
+            .orEmpty()
+            .filter { it.name.startsWith(TEST_FILE_PREFIX) }
+            .forEach { file ->
+                assertTrue("Failed to delete test file ${file.name}", !file.exists() || file.delete())
+            }
+
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val aliasesToDelete = mutableListOf<String>()
+        val aliases = keyStore.aliases()
+        while (aliases.hasMoreElements()) {
+            val alias = aliases.nextElement()
+            if (isTestKeyAlias(alias)) aliasesToDelete += alias
+        }
+        aliasesToDelete.forEach(keyStore::deleteEntry)
+        assertTestArtifactsAbsent(keyStore)
+    }
+
+    private fun assertTestArtifactsAbsent(
+        keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    ) {
+        val remainingFiles = context.noBackupFilesDir.listFiles()
+            .orEmpty()
+            .filter { it.name.startsWith(TEST_FILE_PREFIX) }
+        assertTrue(
+            "Test commercial files remain: ${remainingFiles.joinToString { it.name }}",
+            remainingFiles.isEmpty()
+        )
+
+        val remainingAliases = mutableListOf<String>()
+        val aliases = keyStore.aliases()
+        while (aliases.hasMoreElements()) {
+            aliases.nextElement().takeIf(::isTestKeyAlias)?.let(remainingAliases::add)
+        }
+        assertTrue(
+            "Test AndroidKeyStore aliases remain: ${remainingAliases.joinToString()}",
+            remainingAliases.isEmpty()
+        )
     }
 
     @Test
     fun deviceKeyExportsSpkiAndSignsRawChallenge() {
-        val manager = AndroidDeviceIdentityManager(context)
-        val identity = manager.loadOrCreate()
+        val identity = identityManager.loadOrCreate()
         val spki = Base64.getDecoder().decode(identity.publicKeySpkiBase64)
         val publicKey = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(spki))
         val challenge = "instrumentation-challenge".toByteArray()
-        val signature = manager.signChallenge(challenge)
+        val signature = identityManager.signChallenge(challenge)
 
         val verified = Signature.getInstance("SHA256withECDSA").run {
             initVerify(publicKey)
@@ -78,7 +135,11 @@ class CommercialSecurityInstrumentationTest {
 
     @Test
     fun debugFixtureProducesAValidSignedTrialForTheRuntimeGate() {
-        val runtime: DebugCommercialRuntime = CommercialRuntimeFactory.debugRuntime(context)
+        val runtime = CommercialRuntimeFactory.createIsolatedFixtureRuntime(
+            store = store,
+            identityProvider = identityManager,
+            signerKeyAlias = TEST_FIXTURE_SIGNER_ALIAS
+        )
         runtime.selectEntitlementScenario(DebugEntitlementScenario.TRIAL)
         val query = runBlocking {
             runtime.gateway.queryEntitlement(System.currentTimeMillis())
@@ -92,7 +153,15 @@ class CommercialSecurityInstrumentationTest {
     }
 
     private companion object {
+        fun isTestKeyAlias(alias: String): Boolean =
+            alias == TEST_STORAGE_ALIAS ||
+                alias == TEST_FIXTURE_SIGNER_ALIAS ||
+                alias == TEST_DEVICE_KEY_ALIAS ||
+                alias.startsWith("$TEST_DEVICE_KEY_ALIAS.recovery.")
+
         const val TEST_STORAGE_ALIAS = "03lyrics_test_commercial_storage_key_v1"
+        const val TEST_DEVICE_KEY_ALIAS = "03lyrics_test_device_key_v1"
+        const val TEST_FIXTURE_SIGNER_ALIAS = "03lyrics_test_fixture_license_signer_v1"
         const val TEST_FILE_PREFIX = "commercial_test_secure_v1_"
     }
 }

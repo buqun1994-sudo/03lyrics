@@ -17,15 +17,31 @@ object CommercialRuntimeAssembler {
         val appContext = context.applicationContext
         val store = AndroidSecureCommercialStore(appContext)
         val identity = AndroidDeviceIdentityManager(appContext, store)
+        return create(
+            api = api,
+            trust = trust,
+            clientVersion = clientVersion,
+            store = store,
+            identityProvider = identity
+        )
+    }
+
+    internal fun create(
+        api: DeviceCommerceApi,
+        trust: DeviceCommerceLicenseTrust,
+        clientVersion: String,
+        store: SecureCommercialStore,
+        identityProvider: DeviceIdentityProvider
+    ): CommercialRuntime {
         val licenseRepository = CommercialLicenseRepository(
             store = store,
-            identityProvider = identity,
+            identityProvider = identityProvider,
             trust = trust
         )
         return CommercialRuntime(
             gateway = CloudDeviceCommercialGateway(
                 api = api,
-                identityProvider = identity,
+                identityProvider = identityProvider,
                 store = store,
                 trialRepository = FirstOpenTrialRepository(store),
                 licenseRepository = licenseRepository,

@@ -21,6 +21,16 @@ object CommercialRuntimeFactory {
 
     internal fun debugRuntime(context: Context): DebugCommercialRuntime = runtime(context)
 
+    internal fun createIsolatedFixtureRuntime(
+        store: SecureCommercialStore,
+        identityProvider: DeviceIdentityProvider,
+        signerKeyAlias: String
+    ): DebugCommercialRuntime = DebugCommercialRuntime.createFixture(
+        store = store,
+        identityProvider = identityProvider,
+        signerKeyAlias = signerKeyAlias
+    )
+
     private fun runtime(context: Context): DebugCommercialRuntime = runtime
         ?: synchronized(this) {
             runtime ?: DebugCommercialRuntime.create(context.applicationContext).also { runtime = it }
@@ -71,17 +81,11 @@ internal class DebugCommercialRuntime private constructor(
         fun create(context: Context): DebugCommercialRuntime {
             val store = AndroidSecureCommercialStore(context)
             return when (DeviceCommerceEnvironment.parse(BuildConfig.DEVICE_COMMERCE_ENVIRONMENT)) {
-                DeviceCommerceEnvironment.FIXTURE -> {
-                    val signer = DebugFixtureLicenseSigner()
-                    val transport = FixtureDeviceCommerceTransport(signer)
-                    val components = CommercialRuntimeAssembler.create(
-                        context = context,
-                        api = DeviceCommerceJsonApi(transport),
-                        trust = DeviceCommerceLicenseTrust(signer.keyId, signer.publicKey()),
-                        clientVersion = BuildConfig.VERSION_NAME
-                    )
-                    DebugCommercialRuntime(components, transport, store)
-                }
+                DeviceCommerceEnvironment.FIXTURE -> createFixture(
+                    store = store,
+                    identityProvider = AndroidDeviceIdentityManager(context, store),
+                    signerKeyAlias = DEFAULT_FIXTURE_SIGNER_KEY_ALIAS
+                )
                 DeviceCommerceEnvironment.STAGING -> {
                     val trust = DeviceCommerceLicenseTrustParser.parse(
                         BuildConfig.DEVICE_COMMERCE_LICENSE_KEY_ID,
@@ -115,10 +119,29 @@ internal class DebugCommercialRuntime private constructor(
                 )
             }
         }
+
+        fun createFixture(
+            store: SecureCommercialStore,
+            identityProvider: DeviceIdentityProvider,
+            signerKeyAlias: String
+        ): DebugCommercialRuntime {
+            val signer = DebugFixtureLicenseSigner(signerKeyAlias)
+            val transport = FixtureDeviceCommerceTransport(signer)
+            val components = CommercialRuntimeAssembler.create(
+                api = DeviceCommerceJsonApi(transport),
+                trust = DeviceCommerceLicenseTrust(signer.keyId, signer.publicKey()),
+                clientVersion = BuildConfig.VERSION_NAME,
+                store = store,
+                identityProvider = identityProvider
+            )
+            return DebugCommercialRuntime(components, transport, store)
+        }
     }
 }
 
-private class DebugFixtureLicenseSigner : FixtureLicenseSigner {
+private class DebugFixtureLicenseSigner(
+    private val keyAlias: String
+) : FixtureLicenseSigner {
     private val keyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
 
     override val keyId: String = DebugCommercialFixtureCatalog.LICENSE_KEY_ID
@@ -126,13 +149,13 @@ private class DebugFixtureLicenseSigner : FixtureLicenseSigner {
     @Synchronized
     override fun publicKey(): PublicKey {
         ensureKey()
-        return requireNotNull(keyStore.getCertificate(KEY_ALIAS)?.publicKey)
+        return requireNotNull(keyStore.getCertificate(keyAlias)?.publicKey)
     }
 
     @Synchronized
     override fun sign(payload: ByteArray): ByteArray {
         ensureKey()
-        val privateKey = keyStore.getKey(KEY_ALIAS, null) as PrivateKey
+        val privateKey = keyStore.getKey(keyAlias, null) as PrivateKey
         return Signature.getInstance("SHA256withECDSA").run {
             initSign(privateKey)
             update(payload)
@@ -141,11 +164,11 @@ private class DebugFixtureLicenseSigner : FixtureLicenseSigner {
     }
 
     private fun ensureKey() {
-        if (keyStore.containsAlias(KEY_ALIAS)) return
+        if (keyStore.containsAlias(keyAlias)) return
         KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEY_STORE).run {
             initialize(
                 KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
+                    keyAlias,
                     KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
                 )
                     .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
@@ -159,6 +182,7 @@ private class DebugFixtureLicenseSigner : FixtureLicenseSigner {
 
     private companion object {
         const val ANDROID_KEY_STORE = "AndroidKeyStore"
-        const val KEY_ALIAS = "03lyrics_debug_fixture_license_signer_v2"
     }
 }
+
+private const val DEFAULT_FIXTURE_SIGNER_KEY_ALIAS = "03lyrics_debug_fixture_license_signer_v2"
