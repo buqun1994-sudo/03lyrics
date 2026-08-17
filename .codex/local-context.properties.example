@@ -6,5 +6,9 @@ ANDROID_SDK_ROOT=/path/to/Android/sdk
 PRIMARY_ADB=/path/to/Android/sdk/platform-tools/adb
 FALLBACK_ADB=/optional/path/to/another/adb
 VEHICLE_ADB_SERIAL=host-or-ip:port
+# Optional. Keep empty for normal development. Use dedicated-test-device for an independent
+# target. persistent-user-vehicle additionally requires explicit approval on every invocation.
+COMMERCIAL_TEST_ADB_SERIAL=
+COMMERCIAL_TEST_DEVICE_ROLE=
 SHARED_TOOLCHAIN_DOC=/optional/path/to/toolchain/README.md
 NEW_PROJECT_TEMPLATE_DIR=/optional/path/to/NewProject

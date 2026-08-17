@@ -4,6 +4,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  hasDeadServiceConnection,
+  serviceRecordIsBound,
+} from "./lib/android-service-state.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = join(root, ".codex", "local-context.properties");
@@ -16,10 +20,6 @@ const dockAccessibilityServiceShort = `${packageName}/.IcarDockAccessibilityServ
 const notificationServiceRecord = `${packageName}/.MediaListenerService`;
 const startupSettleMs = 8_000;
 const defaultApk = join(root, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-const requestedApk = process.argv[2];
-const apkPath = requestedApk
-  ? (isAbsolute(requestedApk) ? requestedApk : resolve(root, requestedApk))
-  : defaultApk;
 
 function parseProperties(content) {
   const values = {};
@@ -39,14 +39,38 @@ function fail(message, output = "") {
   process.exit(1);
 }
 
+function parseArguments(argv) {
+  let apkPath = defaultApk;
+  let apkProvided = false;
+  let serialOverride = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--serial") {
+      const value = argv[index + 1];
+      if (!value) fail("--serial 缺少设备地址");
+      serialOverride = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--")) fail(`未知参数：${argument}`);
+    if (apkProvided) fail(`存在多余的 APK 路径：${argument}`);
+    apkPath = isAbsolute(argument) ? argument : resolve(root, argument);
+    apkProvided = true;
+  }
+  return { apkPath, serialOverride };
+}
+
+const options = parseArguments(process.argv.slice(2));
+const apkPath = options.apkPath;
+
 if (!existsSync(configPath)) fail("缺少 .codex/local-context.properties");
 if (!existsSync(apkPath)) fail(`找不到 debug APK：${apkPath}`);
 
 const config = parseProperties(readFileSync(configPath, "utf8"));
 const adb = config.PRIMARY_ADB;
-const serial = config.VEHICLE_ADB_SERIAL;
+const serial = options.serialOverride || config.VEHICLE_ADB_SERIAL;
 if (!adb || !existsSync(adb)) fail("PRIMARY_ADB 不存在");
-if (!serial) fail("本机配置缺少 VEHICLE_ADB_SERIAL");
+if (!serial) fail("未通过 --serial 指定设备，且本机配置缺少 VEHICLE_ADB_SERIAL");
 
 function adbRun(args, label, allowFailure = false) {
   const result = spawnSync(adb, ["-s", serial, ...args], {
@@ -79,10 +103,12 @@ function enableDockAccessibilityService() {
   const next = before.some(isDockAccessibilityService)
     ? before
     : [...before, dockAccessibilityService];
-  adbRun(
-    ["shell", "settings", "put", "secure", "enabled_accessibility_services", next.join(":")],
-    "无法刷新歌词窗口避让无障碍服务"
-  );
+  if (next.length !== before.length) {
+    adbRun(
+      ["shell", "settings", "put", "secure", "enabled_accessibility_services", next.join(":")],
+      "无法追加歌词窗口避让无障碍服务"
+    );
+  }
 
   const accessibilityEnabled = adbRun(
     ["shell", "settings", "get", "secure", "accessibility_enabled"],
@@ -111,27 +137,95 @@ function enableDockAccessibilityService() {
   return { preservedCount: before.length, added: next.length !== before.length };
 }
 
-function serviceBound(serviceRecord) {
-  const dump = adbRun(
+function serviceDump() {
+  return adbRun(
     ["shell", "dumpsys", "activity", "services", packageName],
     "无法读取应用服务绑定状态",
     true
   );
-  if (dump.status !== 0) return false;
-  const records = dump.output.split(/(?=^\s*\* ServiceRecord)/m);
-  return records.some((record) =>
-    record.includes(serviceRecord) &&
-    /requested=true received=true hasBound=true/.test(record)
-  );
+}
+
+function serviceBound(serviceRecord) {
+  const dump = serviceDump();
+  return dump.status === 0 && serviceRecordIsBound(dump.output, serviceRecord);
 }
 
 function waitForServiceBound(serviceRecord) {
   const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
     if (serviceBound(serviceRecord)) return true;
-    Atomics.wait(waitBuffer, 0, 0, 250);
+    Atomics.wait(waitBuffer, 0, 0, 500);
   }
   return false;
+}
+
+function waitForServiceAbsent(serviceRecord) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const dump = serviceDump();
+    if (dump.status === 0 && !dump.output.includes(serviceRecord)) return true;
+    wait(500);
+  }
+  return false;
+}
+
+function retriggerDockAccessibilityBinding() {
+  const before = parseAccessibilityServices(
+    adbRun(
+      ["shell", "settings", "get", "secure", "enabled_accessibility_services"],
+      "无法读取窗口避让无障碍服务"
+    ).output
+  );
+  if (!before.some(isDockAccessibilityService)) return;
+
+  const preserved = before.filter((component) => !isDockAccessibilityService(component));
+  adbRun(
+    ["shell", "settings", "put", "secure", "enabled_accessibility_services", preserved.join(":")],
+    "无法暂时关闭歌词窗口避让无障碍服务"
+  );
+  wait(750);
+
+  const disabled = parseAccessibilityServices(
+    adbRun(
+      ["shell", "settings", "get", "secure", "enabled_accessibility_services"],
+      "无法复核歌词窗口避让无障碍服务关闭状态"
+    ).output
+  );
+  if (disabled.some(isDockAccessibilityService)) {
+    fail("歌词窗口避让无障碍服务未完成关闭刷新");
+  }
+  const removedServices = preserved.filter((component) => !disabled.includes(component));
+  if (removedServices.length > 0) {
+    fail(`刷新窗口避让服务时丢失既有无障碍组件：${removedServices.join(", ")}`);
+  }
+  if (!waitForServiceAbsent(dockAccessibilityServiceShort)) {
+    adbRun(
+      [
+        "shell",
+        "settings",
+        "put",
+        "secure",
+        "enabled_accessibility_services",
+        [...disabled, dockAccessibilityService].join(":"),
+      ],
+      "无法恢复歌词窗口避让无障碍授权"
+    );
+    fail(
+      "歌词窗口避让无障碍服务未完成干净解绑；已恢复授权名单并停止继续刷新",
+      serviceDump().output
+    );
+  }
+
+  adbRun(
+    [
+      "shell",
+      "settings",
+      "put",
+      "secure",
+      "enabled_accessibility_services",
+      [...disabled, dockAccessibilityService].join(":"),
+    ],
+    "无法重新启用歌词窗口避让无障碍服务"
+  );
 }
 
 function wait(milliseconds) {
@@ -141,19 +235,11 @@ function wait(milliseconds) {
 const state = adbRun(["get-state"], "无法连接目标车机").output;
 if (state !== "device") fail(`目标车机状态不是 device：${state}`);
 
-const serviceBefore = adbRun(
-  ["shell", "dumpsys", "activity", "services", packageName],
-  "无法读取安装前服务状态",
-  true
-).output.includes("LyricsOverlayService");
-
 const install = adbRun(
   ["install", "--no-streaming", "-r", apkPath],
   "保留数据覆盖安装失败"
 );
 if (!/\bSuccess\b/.test(install.output)) fail("ADB 未返回安装成功", install.output);
-
-const accessibilityAuthorization = enableDockAccessibilityService();
 
 const launch = adbRun(
   ["shell", "am", "start", "-W", "-n", activityName],
@@ -177,8 +263,23 @@ if (!versionName || !versionCode) fail("无法确认已安装版本", packageDum
 if (!packageDump.includes("IcarDockAccessibilityService")) {
   fail("已安装歌词 APK 未声明窗口避让无障碍服务", packageDump);
 }
+const accessibilityAuthorization = enableDockAccessibilityService();
 if (!waitForServiceBound(dockAccessibilityServiceShort)) {
-  fail("歌词窗口避让无障碍服务未完成系统绑定");
+  const initialDump = serviceDump().output;
+  if (hasDeadServiceConnection(initialDump, dockAccessibilityServiceShort)) {
+    fail(
+      "歌词窗口避让无障碍服务未完成系统绑定：系统仍保留该服务的 DEAD 连接；需要先恢复系统无障碍管理器状态",
+      initialDump
+    );
+  }
+  retriggerDockAccessibilityBinding();
+  if (!waitForServiceBound(dockAccessibilityServiceShort)) {
+    const dump = serviceDump().output;
+    const detail = hasDeadServiceConnection(dump, dockAccessibilityServiceShort)
+      ? "系统仍保留该服务的 DEAD 连接；需要先恢复系统无障碍管理器状态"
+      : "系统未创建目标服务自己的有效绑定记录";
+    fail(`歌词窗口避让无障碍服务未完成系统绑定：${detail}`, dump);
+  }
 }
 if (!waitForServiceBound(notificationServiceRecord)) {
   fail("03歌词播放状态服务未完成系统绑定");

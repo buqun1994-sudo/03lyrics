@@ -4,7 +4,7 @@
 
 1. `config.toml` 保存可提交的项目级 Codex 配置。
 2. `local-context.properties.example` 声明本项目会使用的本机配置键，不包含个人路径。
-3. `local-context.properties` 保存当前电脑的 JDK、Android SDK、ADB、车机和模板源路径，已由 `.gitignore` 排除。
+3. `local-context.properties` 保存当前电脑的 JDK、Android SDK、ADB、车机、可选独立商业测试设备和模板源路径，已由 `.gitignore` 排除。`COMMERCIAL_TEST_ADB_SERIAL` 必须与日常 `VEHICLE_ADB_SERIAL` 分开配置，留空即禁用商业 instrumentation。
 
 ## 2. 边界
 

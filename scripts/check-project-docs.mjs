@@ -32,6 +32,7 @@ const requiredFiles = [
   "scripts/check-skills.mjs",
   "scripts/check-local-environment.mjs",
   "scripts/install-and-smoke.mjs",
+  "scripts/run-commercial-security-instrumentation.mjs",
 ];
 
 function read(relativePath) {
@@ -52,6 +53,11 @@ const product = read("docs/product/产品需求基线.md");
 const testing = read("docs/testing/验证矩阵.md");
 const operations = read("docs/operations/本地开发环境.md");
 const security = read("docs/security/安全与密钥边界.md");
+const testingRules = read("docs/architecture/rules/testing.md");
+const closeoutSkill = read(".agents/skills/task-closeout/SKILL.md");
+const localContextExample = read(".codex/local-context.properties.example");
+const installAndSmoke = read("scripts/install-and-smoke.mjs");
+const commercialInstrumentation = read("scripts/run-commercial-security-instrumentation.mjs");
 const appBuild = read("app/build.gradle.kts");
 const manifest = read("app/src/main/AndroidManifest.xml");
 const ignore = read(".gitignore");
@@ -116,6 +122,33 @@ for (const [file, content] of [
   if (!content.includes(".codex/local-context.properties")) {
     failures.push(`${file} 未声明本机上下文入口`);
   }
+}
+
+for (const [file, content, marker] of [
+  ["AGENTS.md", agents, "商业 instrumentation 不属于普通收尾"],
+  ["docs/testing/验证矩阵.md", testing, "用户日常车机默认禁止"],
+  ["docs/operations/本地开发环境.md", operations, "COMMERCIAL_TEST_ADB_SERIAL"],
+  ["docs/security/安全与密钥边界.md", security, "--user-approved-persistent-vehicle"],
+  ["docs/architecture/rules/testing.md", testingRules, "高风险改动不自动等于高破坏性测试"],
+  [".agents/skills/task-closeout/SKILL.md", closeoutSkill, "不默认安装 androidTest APK"],
+  [".codex/local-context.properties.example", localContextExample, "COMMERCIAL_TEST_DEVICE_ROLE="],
+  ["scripts/install-and-smoke.mjs", installAndSmoke, 'argument === "--serial"'],
+  [
+    "scripts/run-commercial-security-instrumentation.mjs",
+    commercialInstrumentation,
+    "COMMERCIAL_TEST_ADB_SERIAL",
+  ],
+  [
+    "scripts/run-commercial-security-instrumentation.mjs",
+    commercialInstrumentation,
+    "--user-approved-persistent-vehicle",
+  ],
+]) {
+  if (!content.includes(marker)) failures.push(`${file} 缺少商业测试设备隔离门禁：${marker}`);
+}
+
+if (testing.includes("实机统一运行 `node scripts/run-commercial-security-instrumentation.mjs`")) {
+  failures.push("docs/testing/验证矩阵.md 仍把商业 instrumentation 设为默认实机步骤");
 }
 
 const forbiddenPersonalPaths = /(?:\/Users\/[^/]+\/|[A-Za-z]:\\\\Users\\\\[^\\\\]+\\\\)/;

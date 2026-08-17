@@ -1,5 +1,21 @@
 # 项目进度
 
+## 2026-08-17 权益唯一门禁、运行期访问守卫与退款试用原子恢复
+
+1. 用户观察到“权益已撤销”后未点击重新确认、关闭设置页却重新出现歌词，要求确认权益是否为歌词显影唯一真值。代码审计确认设置页实例会自动查询权益，关闭动作本身不授权；所有歌词资源只由 `LyricsOverlayService` 创建且每个服务命令都先经过 `CommercialAccessGate`。同时发现两个需要补齐的严格边界：已有运行资源在本地门禁变为 denied 且云端复核仍进行时不能继续等待，以及服务连续运行跨过签名许可证最终有效时间时不能等下一次命令才退出。
+2. 服务现以轻量 `CommercialRuntimeAccessGuard` 保存统一门禁已经返回的单个 `Allowed?`：新许可证替换唯一到期回调，用户停止、系统授权恢复态、商业恢复态和服务销毁都先清除运行许可；到点、屏幕重新点亮、系统时间变化、Overlay 创建、表面更新和播放快照下发均受同一内存边界保护，到期重新读取统一门禁。撤销、过期、时钟、存储或其它 denied 结果沿既有 `COMMERCIAL_RECOVERY` 同步销毁歌词仓库、协调器、缓存、协程、MediaSession、WebView、Overlay 和监听；守卫不生成权益、不延长有效期，也没有新增高频联网轮询或第二套 UI 权益状态。
+3. 第一次修正版覆盖安装真实复现了更深层根因：Cloud 对退款设备的许可证刷新会返回 `entitlement_revoked`，旧客户端先停用，下一次独立查询才通过 `startTrial` 接回原试用，导致服务与设置页请求先后不同时时而撤销、时而恢复。网关现将该过程收敛到同一次核心查询：先写加密撤销标记使旧 Pro fail closed，再立即请求原试用；只有新签名试用完成验签、许可证与可信时间写入并成功删除撤销标记后才返回 `Ready(Trial)`。原试用过期返回 `Expired`；网络、验签或持久化失败继续返回原撤销结果，不能回退旧 Pro。
+4. 自动化已补充“已有资源遇到 denied 不等待”“有限/已到期/无终点运行许可”“退款后旧许可证删除失败仍在同一查询恢复原截止试用”“连续复核不在撤销与试用间交替”“新试用未完整持久化继续撤销”和“原截止后保持过期”。当前完整 Debug JVM 共 `209` 项、`0` 失败、`2` 项显式公网测试按设计跳过；`lintDebug`、Debug 与 androidTest APK 打包通过，之前的 Release 隔离编译结果继续有效。
+5. 最终 staging 应用与 androidTest APK 已关闭 Kotlin 增量后强制重建；公开 staging 信任配置落包，应用/测试 APK 均为单 signer、APK v2 有效，并与仓库外 staging keystore 和车机现有应用证书一致，签名口令与服务端秘密扫描无命中。没有应用源码晚于最终 APK。
+6. 车机先后执行两次保留数据覆盖安装，均由标准脚本完整通过设置页、版本/进程、表面占用租约、窗口避让无障碍实际绑定、通知监听实际绑定、致命日志与歌词服务恢复检查；第三次独立冷启动日志继续为 `localAllowed=true -> result=ready / localAllowed=true -> outcome=running`。最终只有 `1` 个 `LyricsOverlayService`、`1` 个 `APPLICATION_OVERLAY`、`1` 个 `MediaListenerService` 和 `1` 个 `IcarDockAccessibilityService`，商业恢复通知不存在，临时日志标签已恢复系统默认。
+7. 用户授权清理车机残留 androidTest 辅助包。只读确认 `com.tcrrry.desktoplyrics.test` 使用独立 UID、仅以 instrumentation 指向正式包且不共享应用数据后，旧证书辅助包已卸载。首次临时安装本轮测试 APK 后，`CommercialSecurityInstrumentationTest` 为 `2` 项通过、`1` 项失败；失败根因不是权益门禁回归，而是该 fixture 用例复用了 staging 运行时单例和正式安全存储，前置重置误删了本地许可证与 device token。测试包随即卸载，Cloud 恢复购买重新写回原试用签名许可证，撤销标记被清除，连续正式包覆盖安装与冷启动 smoke 均恢复唯一歌词服务和 Overlay。
+8. 实机商业测试已改为显式注入独立 AES 存储前缀、独立设备 EC 密钥和独立 fixture 签名密钥，不再读取构建环境或复用正式运行时单例；每条用例结束删除全部测试记录、AES 密钥、设备密钥及恢复派生密钥、fixture 签名密钥。商业运行时装配仍只有一条主链，staging / production 默认入口继续创建正式存储与设备身份，测试只通过内部注入入口替换基础设施。
+9. 关闭 Kotlin 增量后的 staging 全量重建通过 `209` 项 JVM 单测、`lintDebug`、Debug / androidTest 打包和 Release Kotlin 隔离编译；应用、车机已安装包和测试 APK 均为同一单 signer 且 APK v2 有效。隔离后的 `CommercialSecurityInstrumentationTest` 为 `4/4` 通过，正式权益加密记录测试前后 SHA-256 清单逐项一致，测试前缀记录为空，辅助包最终已卸载且 instrumentation 注册为空。
+10. 随后复核发现旧安装 smoke 的绑定解析会把 WebView `ServiceRecord` 中的 `requested=true received=true hasBound=true` 与后续目标 `DEAD ConnectionRecord` 混为一段，从而把窗口避让无障碍误报为已绑定。当前脚本已改为只解析目标组件自己的 `ServiceRecord`；商业事务测试也已删除显式 `am force-stop`，改为测试前确认真实绑定、只暂停目标组件并等待记录完全消失，正式权益记录则以连续两次哈希一致作为稳定快照。
+11. 当前磁盘版本已重新完成 `73` 个 Gradle 任务，包含 `209` 项 JVM、`lintDebug`、staging Debug 与 androidTest 打包，全部成功。严格安装 smoke 已保留数据覆盖安装当前 APK，并正确拦截车机遗留状态：授权名单仍完整保留 `MBMonitor / 03桌面全局返回 / 03歌词窗口避让`，通知监听与歌词服务正常，但系统只剩窗口避让服务的历史 `DEAD ConnectionRecord`，没有真实绑定记录。该状态来自此前 instrumentation 强制结束目标应用，Android 9 无障碍管理器在本次会话内无法通过重写授权或覆盖安装清除；未清数据、卸载、重启车机、提交、推送或发布。
+12. 用户随后自行强制重启车机；只读复核确认窗口避让无障碍恢复自己的有效 `ServiceRecord`，包含 `requested=true received=true hasBound=true`，目标 `DEAD ConnectionRecord` 已消失。通知监听和歌词前台服务正常，当前只有一个 `1230 x 810px` 歌词 Overlay；复核未重新安装、未运行商业 instrumentation、未修改授权或其它车机状态。
+13. 根据用户要求，商业 instrumentation 已从普通开发收尾中移除：总规则、验证矩阵、安全边界、运维说明和 `task-closeout` 均明确默认只做相关 JVM / 构建 / 正式应用最简 smoke。事务脚本改为只读取独立 `COMMERCIAL_TEST_ADB_SERIAL`，配置缺失或误指向日常车机时在任何 ADB 操作前退出；用户车机例外同时需要当次明确授权、`persistent-user-vehicle` 角色和 `--user-approved-persistent-vehicle` 参数。当前本机未配置独立测试设备，脚本拒绝路径已在任何 ADB 调用前通过；项目文档、Skill、脚本语法和 Git 文本检查均通过。本轮未运行 Gradle、未安装 APK、未连接或改动车机。
+
 ## 2026-08-17 原车右侧 Dock 裁剪与空调页隐藏
 
 1. 用户确认三类窗口必须保持不同结果：空调页展开、过渡或状态未知时隐藏顶栏和壁纸全部歌词；标准浮窗与跨应用占用租约继续把壁纸歌词切到顶栏；只有“壁纸歌词 + 原车最右侧 Dock 展开”按其真实上沿裁剪窗口下边界，左侧和中央 Dock 不处理。任何恢复都按当前全部状态重新计算，不机械恢复进入前的模式。
