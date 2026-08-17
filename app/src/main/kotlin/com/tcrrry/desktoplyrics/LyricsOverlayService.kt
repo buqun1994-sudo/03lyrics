@@ -40,6 +40,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.animation.LinearInterpolator
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -109,6 +110,8 @@ class LyricsOverlayService : Service() {
     private var fontScalePercent = FONT_SCALE_DEFAULT_PERCENT
     private var nightTheme = true
     private var surfaceMode = LyricsSurfaceMode.TOPBAR
+    private var surfaceHandoffTarget: LyricsSurfaceMode? = null
+    private var surfaceHandoffGeneration = 0L
     private var displayState: IcarDisplayState? = null
     private var desktopSurfaceOccupied = false
     private var monitorStarted = false
@@ -509,6 +512,7 @@ class LyricsOverlayService : Service() {
         webReady = false
         val player = webView
         val root = overlayRoot
+        cancelSurfaceHandoff(resetAlpha = false)
         webView = null
         webContainer = null
         overlayRoot = null
@@ -1011,9 +1015,13 @@ class LyricsOverlayService : Service() {
             createOverlay()
             return
         }
-        if (surfaceMode != nextSurfaceMode) {
+        if (surfaceMode != nextSurfaceMode ||
+            (surfaceHandoffTarget != null && surfaceHandoffTarget != nextSurfaceMode)
+        ) {
             applySurfaceMode(nextSurfaceMode)
-        } else if (nextSurfaceMode == LyricsSurfaceMode.TOPBAR &&
+        }
+        if (surfaceMode == nextSurfaceMode &&
+            nextSurfaceMode == LyricsSurfaceMode.TOPBAR &&
             previousState?.topbarGeometry() != displayState?.topbarGeometry()
         ) {
             displayState?.let(::applyTopbarGeometry)
@@ -1022,14 +1030,132 @@ class LyricsOverlayService : Service() {
     }
 
     private fun applySurfaceMode(nextSurfaceMode: LyricsSurfaceMode) {
+        val root = overlayRoot
+        val geometry = overlayGeometry(nextSurfaceMode, displayState)
+        if (root == null || root.visibility != View.VISIBLE ||
+            !IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)
+        ) {
+            cancelSurfaceHandoff()
+            commitSurfaceMode(nextSurfaceMode, geometry)
+            updateWindowTouchability(compact)
+            return
+        }
+        if (surfaceHandoffTarget == nextSurfaceMode) return
+
+        surfaceHandoffGeneration += 1
+        val generation = surfaceHandoffGeneration
+        surfaceHandoffTarget = nextSurfaceMode
+        root.animate().cancel()
+        updateWindowTouchability(isTopbar = false)
+
+        if (nextSurfaceMode == surfaceMode) {
+            startSurfaceFadeIn(root, nextSurfaceMode, generation)
+            return
+        }
+        if (root.alpha <= SURFACE_HIDDEN_ALPHA) {
+            commitSurfaceModeWhileHidden(root, nextSurfaceMode, generation)
+            return
+        }
+
+        root.animate()
+            .alpha(0f)
+            .setDuration(SURFACE_FADE_OUT_MS)
+            .setInterpolator(LinearInterpolator())
+            .withLayer()
+            .withEndAction {
+                if (isCurrentSurfaceHandoff(root, nextSurfaceMode, generation)) {
+                    commitSurfaceModeWhileHidden(root, nextSurfaceMode, generation)
+                }
+            }
+            .start()
+    }
+
+    private fun commitSurfaceModeWhileHidden(
+        root: FrameLayout,
+        nextSurfaceMode: LyricsSurfaceMode,
+        generation: Long
+    ) {
+        if (!isCurrentSurfaceHandoff(root, nextSurfaceMode, generation)) return
+        root.alpha = 0f
+        val geometry = overlayGeometry(nextSurfaceMode, displayState)
+        if (!IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)) {
+            commitSurfaceMode(nextSurfaceMode, geometry)
+            finishSurfaceHandoff(root, nextSurfaceMode, generation)
+            return
+        }
+        commitSurfaceMode(nextSurfaceMode, geometry) {
+            root.postOnAnimation {
+                if (isCurrentSurfaceHandoff(root, nextSurfaceMode, generation)) {
+                    startSurfaceFadeIn(root, nextSurfaceMode, generation)
+                }
+            }
+        }
+    }
+
+    private fun startSurfaceFadeIn(
+        root: FrameLayout,
+        target: LyricsSurfaceMode,
+        generation: Long
+    ) {
+        if (!isCurrentSurfaceHandoff(root, target, generation)) return
+        if (root.visibility != View.VISIBLE) {
+            finishSurfaceHandoff(root, target, generation)
+            return
+        }
+        root.animate().cancel()
+        root.animate()
+            .alpha(1f)
+            .setDuration(SURFACE_FADE_IN_MS)
+            .setInterpolator(LinearInterpolator())
+            .withLayer()
+            .withEndAction {
+                finishSurfaceHandoff(root, target, generation)
+            }
+            .start()
+    }
+
+    private fun finishSurfaceHandoff(
+        root: FrameLayout,
+        target: LyricsSurfaceMode,
+        generation: Long
+    ) {
+        if (!isCurrentSurfaceHandoff(root, target, generation)) return
+        root.alpha = 1f
+        surfaceHandoffTarget = null
+        updateWindowTouchability(compact)
+    }
+
+    private fun isCurrentSurfaceHandoff(
+        root: FrameLayout,
+        target: LyricsSurfaceMode,
+        generation: Long
+    ): Boolean = overlayRoot === root &&
+        surfaceHandoffTarget == target &&
+        surfaceHandoffGeneration == generation
+
+    private fun cancelSurfaceHandoff(resetAlpha: Boolean = true) {
+        surfaceHandoffGeneration += 1
+        surfaceHandoffTarget = null
+        overlayRoot?.animate()?.cancel()
+        if (resetAlpha) overlayRoot?.alpha = 1f
+    }
+
+    private fun commitSurfaceMode(
+        nextSurfaceMode: LyricsSurfaceMode,
+        geometry: OverlayGeometry = overlayGeometry(nextSurfaceMode, displayState),
+        onWebApplied: (() -> Unit)? = null
+    ) {
         surfaceMode = nextSurfaceMode
         compact = surfaceMode == LyricsSurfaceMode.TOPBAR
-        val params = windowParams ?: return
-        applyOverlayGeometry(params, overlayGeometry(surfaceMode, displayState))
+        val params = windowParams
+        if (params == null) {
+            onWebApplied?.invoke()
+            return
+        }
+        applyOverlayGeometry(params, geometry)
         overlayRoot?.background = overlayBackground(compact)
-        updateWindowTouchability(compact)
         updateWebContainerLayout(compact)
-        applySurfaceModeToWeb()
+        applySurfaceModeToWeb(onWebApplied)
     }
 
     /** Icon updates reach here only while already in topbar mode. */
@@ -1104,15 +1230,28 @@ class LyricsOverlayService : Service() {
         )
     }
 
-    private fun applySurfaceModeToWeb() {
-        if (!webReady) return
+    private fun applySurfaceModeToWeb(onApplied: (() -> Unit)? = null) {
+        if (!webReady) {
+            onApplied?.invoke()
+            return
+        }
         val encodedMode = JSONObject.quote(
             if (surfaceMode == LyricsSurfaceMode.DESKTOP) "desktop" else "topbar"
         )
-        webView?.evaluateJavascript(
-            "window.LobstaOverlay && window.LobstaOverlay.setSurfaceMode($encodedMode);",
-            null
-        )
+        val player = webView
+        if (player == null) {
+            onApplied?.invoke()
+            return
+        }
+        runCatching {
+            player.evaluateJavascript(
+                "window.LobstaOverlay && window.LobstaOverlay.setSurfaceMode($encodedMode);"
+            ) {
+                onApplied?.invoke()
+            }
+        }.onFailure {
+            onApplied?.invoke()
+        }
     }
 
     private fun overlayBackground(@Suppress("UNUSED_PARAMETER") isCompact: Boolean) =
@@ -1889,6 +2028,9 @@ class LyricsOverlayService : Service() {
         private const val DESKTOP_TOP = 90
         private const val DESKTOP_RIGHT = 1890
         private const val DESKTOP_BOTTOM = 900
+        private const val SURFACE_FADE_OUT_MS = 120L
+        private const val SURFACE_FADE_IN_MS = 160L
+        private const val SURFACE_HIDDEN_ALPHA = 0.01f
         private const val BLUETOOTH_PACKAGE = "com.android.bluetooth"
         private const val ACTION_AVRCP_PLAYBACK_POSITION_CHANGED =
             "android.bluetooth.avrcp-controller.profile.action.PLAYBACK_POS_CHANGEDS"

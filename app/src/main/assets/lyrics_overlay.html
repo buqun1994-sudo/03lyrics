@@ -20,6 +20,7 @@
       --lyric-line-padding:12px;
       --desktop-lyric-size:42px;
       --desktop-active-size:58px;
+      --desktop-edge-fade:64px;
       --overlay-background:#111217;
       --surface-background:rgba(9,10,14,.64);
       --surface-background-high:rgba(5,6,9,.86);
@@ -288,6 +289,24 @@
     body.surface-desktop #player { padding:0 54px 0 20px; }
     body.surface-desktop .lyrics-viewport {
       display:block; border-radius:0; touch-action:none;
+      -webkit-mask-image:linear-gradient(
+        to bottom,
+        transparent 0,
+        #000 var(--desktop-edge-fade),
+        #000 calc(100% - var(--desktop-edge-fade)),
+        transparent 100%
+      );
+      mask-image:linear-gradient(
+        to bottom,
+        transparent 0,
+        #000 var(--desktop-edge-fade),
+        #000 calc(100% - var(--desktop-edge-fade)),
+        transparent 100%
+      );
+      -webkit-mask-repeat:no-repeat;
+      mask-repeat:no-repeat;
+      -webkit-mask-size:100% 100%;
+      mask-size:100% 100%;
     }
     body.surface-desktop .lyrics-viewport::before,
     body.surface-desktop .lyrics-viewport::after { display:none; }
@@ -627,7 +646,7 @@
 
     function updateCompactMarquees() {
       if (compactMarqueeFrame) cancelAnimationFrame(compactMarqueeFrame);
-      const viewports = ui.compactLyric.querySelectorAll('.compact-text-viewport');
+      const viewports = ui.compactLyric.querySelectorAll('.compact-line.current .compact-text-viewport');
       viewports.forEach(viewport => {
         viewport.classList.remove('marquee');
         viewport.style.removeProperty('--compact-shift');

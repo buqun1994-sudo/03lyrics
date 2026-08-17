@@ -95,17 +95,136 @@ class LyricsOverlayTimingInstrumentationTest {
         assertMarqueeRemains(false, 150)
     }
 
-    private fun updatePosition(positionMs: Long) {
+    @Test
+    fun outgoingLongLineStaysAtItsEndWhileNextLineStartsAtBeginning() {
+        val firstLine = "This intentionally long first lyric must finish far beyond the visible top bar before the next lyric appears"
+        val secondLine = "This intentionally long second lyric must enter at its starting edge before its own horizontal sweep begins"
+        val lyrics = """
+            [00:00.00]$firstLine
+            [00:20.00]$secondLine
+        """.trimIndent()
         evaluate(
             """
             window.LobstaOverlay.updatePlayback({
               hasSession:true, track:'Timing Test', artist:'Test Artist', album:'',
-              state:'playing', positionMs:$positionMs, durationMs:30000, speed:1, timelineReady:true
+              state:'playing', positionMs:0, durationMs:30000, speed:1, timelineReady:true
+            });
+            window.LobstaOverlay.receiveLyrics(1, {
+              lyrics:${JSONObject.quote(lyrics)}, duration:30000
+            });
+            true
+            """.trimIndent()
+        )
+
+        waitForMarquee(true)
+        evaluate(
+            """
+            (() => {
+              const viewport = document.querySelector('.compact-line.current .compact-line-text');
+              viewport.style.setProperty('--compact-delay', '0s');
+              viewport.style.setProperty('--compact-duration', '0.05s');
+              return true;
+            })()
+            """.trimIndent()
+        )
+        SystemClock.sleep(120)
+        assertTrue("first line should reach a negative horizontal offset", currentTextOffset() < -4.0)
+
+        updatePosition(19_910, speed = 0.1)
+        val transition = waitForLineTransition(secondLine)
+
+        assertTrue("next line should still be waiting at its timestamp", !transition.getBoolean("currentMarquee"))
+        assertTrue("outgoing line must keep its completed marquee state", transition.getBoolean("outgoingMarquee"))
+        assertTrue("next line should enter at its starting edge", transition.getDouble("currentOffset") > -1.0)
+        assertTrue("outgoing line must not rewind while fading out", transition.getDouble("outgoingOffset") < -4.0)
+    }
+
+    @Test
+    fun desktopSurfaceUsesStaticEdgeFadeWithoutAffectingTopbar() {
+        evaluate("window.LobstaOverlay.setSurfaceMode('desktop'); true")
+        val desktopMask = evaluate(
+            "getComputedStyle(document.querySelector('.lyrics-viewport')).webkitMaskImage"
+        )
+        assertTrue("desktop lyric viewport should use a linear alpha mask", desktopMask.contains("linear-gradient"))
+
+        evaluate("window.LobstaOverlay.setSurfaceMode('topbar'); true")
+        assertEquals(
+            "topbar must not keep the desktop edge mask",
+            "\"none\"",
+            evaluate("getComputedStyle(document.querySelector('.lyrics-viewport')).webkitMaskImage")
+        )
+    }
+
+    private fun updatePosition(positionMs: Long, speed: Double = 1.0) {
+        evaluate(
+            """
+            window.LobstaOverlay.updatePlayback({
+              hasSession:true, track:'Timing Test', artist:'Test Artist', album:'',
+              state:'playing', positionMs:$positionMs, durationMs:30000, speed:$speed, timelineReady:true
             });
             true
             """.trimIndent()
         )
     }
+
+    private fun waitForLineTransition(expectedCurrentText: String): JSONObject {
+        val deadline = SystemClock.uptimeMillis() + 1_000
+        var snapshot: JSONObject
+        do {
+            snapshot = lineTransitionSnapshot()
+            if (snapshot.optString("currentText") == expectedCurrentText && snapshot.optBoolean("hasOutgoing")) {
+                return snapshot
+            }
+            SystemClock.sleep(16)
+        } while (SystemClock.uptimeMillis() < deadline)
+        assertEquals("current compact lyric", expectedCurrentText, snapshot.optString("currentText"))
+        assertTrue("outgoing compact lyric should still be present", snapshot.optBoolean("hasOutgoing"))
+        return snapshot
+    }
+
+    private fun lineTransitionSnapshot(): JSONObject = JSONObject(
+        evaluate(
+            """
+            (() => {
+              const current = document.querySelector('.compact-line.current');
+              const outgoing = document.querySelector('.compact-line.outgoing');
+              const state = (line) => {
+                const viewport = line && line.querySelector('.compact-line-text');
+                const content = viewport && viewport.querySelector('.compact-scroll-text');
+                return {
+                  text: content ? content.textContent : '',
+                  marquee: !!viewport && viewport.classList.contains('marquee'),
+                  offset: content && viewport
+                    ? content.getBoundingClientRect().left - viewport.getBoundingClientRect().left
+                    : 0
+                };
+              };
+              const currentState = state(current);
+              const outgoingState = state(outgoing);
+              return {
+                currentText: currentState.text,
+                currentMarquee: currentState.marquee,
+                currentOffset: currentState.offset,
+                hasOutgoing: !!outgoing,
+                outgoingMarquee: outgoingState.marquee,
+                outgoingOffset: outgoingState.offset
+              };
+            })()
+            """.trimIndent()
+        )
+    )
+
+    private fun currentTextOffset(): Double = evaluate(
+        """
+        (() => {
+          const viewport = document.querySelector('.compact-line.current .compact-line-text');
+          const content = viewport && viewport.querySelector('.compact-scroll-text');
+          return content && viewport
+            ? content.getBoundingClientRect().left - viewport.getBoundingClientRect().left
+            : 0;
+        })()
+        """.trimIndent()
+    ).toDouble()
 
     private fun waitForMarquee(expected: Boolean) {
         val deadline = SystemClock.uptimeMillis() + 3_000
