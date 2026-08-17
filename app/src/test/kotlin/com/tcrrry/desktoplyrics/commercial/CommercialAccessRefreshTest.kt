@@ -10,9 +10,61 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CommercialAccessRefreshTest {
+    @Test
+    fun `fresh local license avoids remote refresh until its signed renewal point`() {
+        assertFalse(
+            CommercialAccessRefreshPolicy.shouldRequestRemote(
+                localRefreshAfterEpochMs = 20_000L,
+                retryNotBeforeEpochMs = null,
+                nowEpochMs = 19_999L
+            )
+        )
+        assertTrue(
+            CommercialAccessRefreshPolicy.shouldRequestRemote(
+                localRefreshAfterEpochMs = 20_000L,
+                retryNotBeforeEpochMs = null,
+                nowEpochMs = 20_000L
+            )
+        )
+    }
+
+    @Test
+    fun `transient refresh failure permits one retry per day without delaying missing access`() {
+        val now = 20_000L
+        val retryAt = CommercialAccessRefreshPolicy.nextRetryNotBefore(now)
+
+        assertFalse(
+            CommercialAccessRefreshPolicy.shouldRequestRemote(
+                localRefreshAfterEpochMs = 10_000L,
+                retryNotBeforeEpochMs = retryAt,
+                nowEpochMs = retryAt - 1
+            )
+        )
+        assertTrue(
+            CommercialAccessRefreshPolicy.shouldRequestRemote(
+                localRefreshAfterEpochMs = 10_000L,
+                retryNotBeforeEpochMs = retryAt,
+                nowEpochMs = retryAt
+            )
+        )
+        assertTrue(
+            CommercialAccessRefreshPolicy.shouldRequestRemote(
+                localRefreshAfterEpochMs = null,
+                retryNotBeforeEpochMs = retryAt,
+                nowEpochMs = now
+            )
+        )
+        assertEquals(
+            Long.MAX_VALUE,
+            CommercialAccessRefreshPolicy.nextRetryNotBefore(Long.MAX_VALUE)
+        )
+    }
+
     @Test
     fun `concurrent startup and settings refresh share one request`() = runBlocking {
         val started = CompletableDeferred<Unit>()

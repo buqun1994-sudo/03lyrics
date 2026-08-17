@@ -6,6 +6,9 @@ ANDROID_SDK_ROOT=/path/to/Android/sdk
 PRIMARY_ADB=/path/to/Android/sdk/platform-tools/adb
 FALLBACK_ADB=/optional/path/to/another/adb
 VEHICLE_ADB_SERIAL=host-or-ip:port
+# Optional staging build inputs. These are file pointers only; never put passwords or keys here.
+DEVICE_COMMERCE_STAGING_PUBLIC_CONFIG_FILE=/path/to/staging-public.json
+DEVICE_COMMERCE_STAGING_SIGNING_PROPERTIES_FILE=/path/to/staging-signing/signing.properties
 # Optional. Keep empty for normal development. Use dedicated-test-device for an independent
 # target. persistent-user-vehicle additionally requires explicit approval on every invocation.
 COMMERCIAL_TEST_ADB_SERIAL=

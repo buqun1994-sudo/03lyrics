@@ -92,7 +92,11 @@ internal class DebugCommercialRuntime private constructor(
                         BuildConfig.DEVICE_COMMERCE_LICENSE_PUBLIC_KEY_BASE64
                     )
                     val components = if (trust != null &&
-                        BuildConfig.DEVICE_COMMERCE_API_BASE_URL.isNotBlank()
+                        BuildConfig.DEVICE_COMMERCE_API_BASE_URL.isNotBlank() &&
+                        AndroidOfficialPackageIntegrity.isTrusted(
+                            context,
+                            BuildConfig.DEVICE_COMMERCE_EXPECTED_SIGNING_CERT_SHA256
+                        )
                     ) {
                         runCatching {
                             CommercialRuntimeAssembler.create(

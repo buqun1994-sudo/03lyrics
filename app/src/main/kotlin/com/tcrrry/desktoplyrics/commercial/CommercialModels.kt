@@ -246,7 +246,13 @@ interface DeviceCommercialGateway {
         is EntitlementQueryResult.Failure -> CommercialAccessRefreshResult.Failure(result.reason)
     }
 
+    suspend fun forceRefreshAccess(nowEpochMs: Long): CommercialAccessRefreshResult =
+        refreshAccess(nowEpochMs)
+
     suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult
+
+    suspend fun forceQueryEntitlement(nowEpochMs: Long): EntitlementQueryResult =
+        queryEntitlement(nowEpochMs)
 
     suspend fun requestQuote(discountCode: String, nowEpochMs: Long): QuoteRequestResult
 

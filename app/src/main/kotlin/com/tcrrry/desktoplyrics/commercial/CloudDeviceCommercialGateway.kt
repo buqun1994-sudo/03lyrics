@@ -23,6 +23,8 @@ class CommercialLicenseRepository(
 ) {
     @Volatile
     private var revokedInProcess = false
+    @Volatile
+    private var refreshRetryNotBeforeInProcess: Long? = null
 
     internal fun readLocal(nowEpochMs: Long): LocalLicenseState {
         if (revokedInProcess) return LocalLicenseState.Revoked
@@ -86,7 +88,8 @@ class CommercialLicenseRepository(
     ) {
         is LocalLicenseState.Valid -> CommercialAccessDecision.Allowed(
             tier = local.claims.tier,
-            expiresAtEpochMs = local.claims.offlineGraceUntilEpochMs
+            expiresAtEpochMs = local.claims.offlineGraceUntilEpochMs,
+            refreshAfterEpochMs = automaticRefreshAfter(local.claims)
         )
         LocalLicenseState.Missing -> {
             CommercialAccessDecision.Denied(CommercialAccessDenial.NO_LICENSE)
@@ -159,6 +162,51 @@ class CommercialLicenseRepository(
         SecureCommercialRecordCodec.encodeInt(value)
     )
 
+    internal fun shouldRequestAutomaticRefresh(
+        claims: LicenseClaims,
+        nowEpochMs: Long
+    ): Boolean = CommercialAccessRefreshPolicy.shouldRequestRemote(
+        localRefreshAfterEpochMs = claims.expiresAtEpochMs,
+        retryNotBeforeEpochMs = readRefreshRetryNotBefore(),
+        nowEpochMs = nowEpochMs
+    )
+
+    internal fun deferRefreshRetry(nowEpochMs: Long) {
+        val retryAt = CommercialAccessRefreshPolicy.nextRetryNotBefore(nowEpochMs)
+        refreshRetryNotBeforeInProcess = retryAt
+        store.write(
+            SecureCommercialRecord.LICENSE_REFRESH_RETRY_AT,
+            SecureCommercialRecordCodec.encodeLong(retryAt)
+        )
+    }
+
+    internal fun clearRefreshRetry() {
+        refreshRetryNotBeforeInProcess = null
+        store.delete(SecureCommercialRecord.LICENSE_REFRESH_RETRY_AT)
+    }
+
+    private fun automaticRefreshAfter(claims: LicenseClaims): Long? = maxOf(
+        claims.expiresAtEpochMs,
+        readRefreshRetryNotBefore() ?: claims.expiresAtEpochMs
+    ).takeIf { it < claims.offlineGraceUntilEpochMs }
+
+    private fun readRefreshRetryNotBefore(): Long? {
+        val persisted = when (val result = store.read(
+            SecureCommercialRecord.LICENSE_REFRESH_RETRY_AT
+        )) {
+            is SecureStoreReadResult.Value -> {
+                SecureCommercialRecordCodec.decodeLong(result.bytes)?.takeIf { it >= 0L }
+                    ?: run {
+                        store.delete(SecureCommercialRecord.LICENSE_REFRESH_RETRY_AT)
+                        null
+                    }
+            }
+            SecureStoreReadResult.Missing,
+            SecureStoreReadResult.Failure -> null
+        }
+        return listOfNotNull(refreshRetryNotBeforeInProcess, persisted).maxOrNull()
+    }
+
     private fun writeObservedTime(nowEpochMs: Long): Boolean = store.write(
         SecureCommercialRecord.LICENSE_CLOCK,
         SecureCommercialRecordCodec.encodeLong(nowEpochMs)
@@ -223,14 +271,35 @@ class CloudDeviceCommercialGateway(
     private val accessRefresh = SingleFlightCommercialAccessRefresh(::refreshAccessOnce)
 
     override suspend fun refreshAccess(nowEpochMs: Long): CommercialAccessRefreshResult = when (
-        val result = accessRefresh.refresh(nowEpochMs)
+        val result = resolveAutomaticAccess(nowEpochMs)
     ) {
         is AccessRefreshResult.Ready -> CommercialAccessRefreshResult.Ready(result.entitlement)
         is AccessRefreshResult.Failure -> CommercialAccessRefreshResult.Failure(result.reason)
     }
 
-    override suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult {
-        val refreshed = when (val result = accessRefresh.refresh(nowEpochMs)) {
+    override suspend fun forceRefreshAccess(
+        nowEpochMs: Long
+    ): CommercialAccessRefreshResult = when (val result = accessRefresh.refresh(nowEpochMs)) {
+        is AccessRefreshResult.Ready -> CommercialAccessRefreshResult.Ready(result.entitlement)
+        is AccessRefreshResult.Failure -> CommercialAccessRefreshResult.Failure(result.reason)
+    }
+
+    override suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult =
+        queryEntitlement(nowEpochMs, forceRemote = false)
+
+    override suspend fun forceQueryEntitlement(nowEpochMs: Long): EntitlementQueryResult =
+        queryEntitlement(nowEpochMs, forceRemote = true)
+
+    private suspend fun queryEntitlement(
+        nowEpochMs: Long,
+        forceRemote: Boolean
+    ): EntitlementQueryResult {
+        val accessResult = if (forceRemote) {
+            accessRefresh.refresh(nowEpochMs)
+        } else {
+            resolveAutomaticAccess(nowEpochMs)
+        }
+        val refreshed = when (val result = accessResult) {
             is AccessRefreshResult.Ready -> result
             is AccessRefreshResult.Failure -> {
                 return EntitlementQueryResult.Failure(result.reason)
@@ -258,11 +327,28 @@ class CloudDeviceCommercialGateway(
         )
     }
 
+    private suspend fun resolveAutomaticAccess(nowEpochMs: Long): AccessRefreshResult {
+        val local = licenseRepository.readLocal(nowEpochMs)
+        val identity = runCatching { identityProvider.loadOrCreate() }.getOrElse {
+            return AccessRefreshResult.Failure(CommercialFailure.STORAGE)
+        }
+        val localValid = local as? LocalLicenseState.Valid
+        if (localValid != null && !licenseRepository.shouldRequestAutomaticRefresh(
+                localValid.claims,
+                nowEpochMs
+            )
+        ) {
+            return AccessRefreshResult.Ready(localValid.entitlement, identity)
+        }
+        return accessRefresh.refresh(nowEpochMs)
+    }
+
     private suspend fun refreshAccessOnce(nowEpochMs: Long): AccessRefreshResult {
         val local = licenseRepository.readLocal(nowEpochMs)
         val identity = runCatching { identityProvider.loadOrCreate() }.getOrElse {
             return AccessRefreshResult.Failure(CommercialFailure.STORAGE)
         }
+        val localValid = local as? LocalLicenseState.Valid
         val hasStoredLicense = when (store.read(SecureCommercialRecord.LICENSE)) {
             is SecureStoreReadResult.Value -> true
             SecureStoreReadResult.Missing -> false
@@ -293,14 +379,20 @@ class CloudDeviceCommercialGateway(
         }
 
         val entitlement = when (remote) {
-            is RemoteEntitlement.Ready -> remote.entitlement
-            RemoteEntitlement.Expired -> EntitlementState.Expired
+            is RemoteEntitlement.Ready -> {
+                licenseRepository.clearRefreshRetry()
+                remote.entitlement
+            }
+            RemoteEntitlement.Expired -> {
+                licenseRepository.clearRefreshRetry()
+                EntitlementState.Expired
+            }
             RemoteEntitlement.RecoveryRequired -> {
                 return AccessRefreshResult.Failure(CommercialFailure.DEVICE_MISMATCH)
             }
             is RemoteEntitlement.Failure -> {
-                val localValid = local as? LocalLicenseState.Valid
                 if (localValid != null && remote.allowLocalFallback) {
+                    licenseRepository.deferRefreshRetry(nowEpochMs)
                     localValid.entitlement
                 } else {
                     return AccessRefreshResult.Failure(remote.reason)

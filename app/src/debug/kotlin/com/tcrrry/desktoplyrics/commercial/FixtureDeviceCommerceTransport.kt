@@ -301,11 +301,18 @@ internal class FixtureDeviceCommerceTransport(
             }
             DebugEntitlementScenario.TRIAL -> {
                 identity.pro = false
-                if (identity.trialStartedAtEpochMs == null ||
-                    requireNotNull(identity.trialEndsAtEpochMs) <= nowEpochMs()
-                ) {
+                if (identity.trialStartedAtEpochMs == null) {
                     identity.trialStartedAtEpochMs = nowEpochMs()
                     identity.trialEndsAtEpochMs = nowEpochMs() + TRIAL_DURATION_MS
+                }
+                val trialEndsAt = requireNotNull(identity.trialEndsAtEpochMs)
+                if (trialEndsAt <= nowEpochMs()) {
+                    return failure(
+                        403,
+                        "trial_expired",
+                        JSONObject().put("status", "expired")
+                            .put("trialEndsAt", utc(trialEndsAt))
+                    )
                 }
                 accessSuccess("trial_active", identity, CommercialTier.TRIAL)
             }
@@ -530,11 +537,15 @@ internal class FixtureDeviceCommerceTransport(
     private fun issueLicense(identity: IdentityRecord, tier: CommercialTier): JSONObject {
         val now = nowEpochMs()
         val expiresAt = if (tier == CommercialTier.TRIAL) {
-            minOf(now + TRIAL_LICENSE_MS, requireNotNull(identity.trialEndsAtEpochMs))
+            requireNotNull(identity.trialEndsAtEpochMs)
         } else {
-            now + PERMANENT_LICENSE_MS
+            now + PRO_REFRESH_INTERVAL_MS
         }
-        val graceUntil = if (tier == CommercialTier.TRIAL) expiresAt else expiresAt + OFFLINE_GRACE_MS
+        val graceUntil = if (tier == CommercialTier.TRIAL) {
+            expiresAt
+        } else {
+            now + PRO_FINAL_ACCESS_WINDOW_MS
+        }
         val payload = JSONObject()
             .put("version", 1)
             .put("licenseId", "lic_${UUID.randomUUID().toString().replace("-", "")}")
@@ -771,8 +782,7 @@ internal class FixtureDeviceCommerceTransport(
         const val QUOTE_TTL_MS = 5 * 60 * 1000L
         const val PURCHASE_TTL_MS = 10 * 60 * 1000L
         const val TRIAL_DURATION_MS = 7L * 24 * 60 * 60 * 1000
-        const val TRIAL_LICENSE_MS = 24L * 60 * 60 * 1000
-        const val PERMANENT_LICENSE_MS = 30L * 24 * 60 * 60 * 1000
-        const val OFFLINE_GRACE_MS = 14L * 24 * 60 * 60 * 1000
+        const val PRO_REFRESH_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
+        const val PRO_FINAL_ACCESS_WINDOW_MS = 90L * 24 * 60 * 60 * 1000
     }
 }

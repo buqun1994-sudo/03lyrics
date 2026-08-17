@@ -116,7 +116,8 @@ class LyricsOverlayService : Service() {
                 mainHandler.postDelayed(runnable, delayMillis)
             },
             cancelExpiry = mainHandler::removeCallbacks,
-            onDenied = ::onCommercialRuntimeAccessDenied
+            onDenied = ::onCommercialRuntimeAccessDenied,
+            onRefreshDue = ::refreshCommercialAccessAtSignedBoundary
         )
     }
 
@@ -409,6 +410,20 @@ class LyricsOverlayService : Service() {
             LOG_TAG,
             "Commercial startup revalidation started localAllowed=${!localDenied}"
         )
+        launchCommercialAccessRefresh()
+        return localDenied
+    }
+
+    private fun refreshCommercialAccessAtSignedBoundary() {
+        if (commercialStartupRefreshPending || lyricsRepository == null) return
+        commercialStartupRefreshPending = true
+        resumeAfterCommercialStartupRefresh = false
+        pendingCommercialStartupIntent = null
+        Log.i(LOG_TAG, "Commercial signed renewal point reached; refreshing access")
+        launchCommercialAccessRefresh()
+    }
+
+    private fun launchCommercialAccessRefresh() {
         commercialRefreshScope.launch {
             val result = try {
                 CommercialRuntimeFactory.gateway(this@LyricsOverlayService)
@@ -416,12 +431,11 @@ class LyricsOverlayService : Service() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(LOG_TAG, "Commercial startup revalidation failed unexpectedly", error)
+                Log.w(LOG_TAG, "Commercial access refresh failed unexpectedly", error)
                 CommercialAccessRefreshResult.Failure(CommercialFailure.UNKNOWN)
             }
             mainHandler.post { finishCommercialStartupRefresh(result) }
         }
-        return localDenied
     }
 
     private fun finishCommercialStartupRefresh(result: CommercialAccessRefreshResult) {
@@ -441,7 +455,7 @@ class LyricsOverlayService : Service() {
         }
         Log.i(
             LOG_TAG,
-            "Commercial startup revalidation completed result=$resultLog " +
+            "Commercial access refresh completed result=$resultLog " +
                 "localAllowed=${access is CommercialAccessDecision.Allowed}"
         )
 

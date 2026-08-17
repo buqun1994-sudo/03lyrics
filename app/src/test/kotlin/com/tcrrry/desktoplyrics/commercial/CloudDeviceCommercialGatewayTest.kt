@@ -161,7 +161,7 @@ class CloudDeviceCommercialGatewayTest {
 
             fixture.store.failedDeletes += SecureCommercialRecord.LICENSE
             fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
-            val refreshed = fixture.gateway.refreshAccess(fixture.now)
+            val refreshed = fixture.gateway.forceRefreshAccess(fixture.now)
                 as CommercialAccessRefreshResult.Ready
             assertEquals(
                 originalTrialEnd,
@@ -179,7 +179,7 @@ class CloudDeviceCommercialGatewayTest {
                     CommercialAccessDecision.Allowed
             )
 
-            val repeated = fixture.gateway.refreshAccess(fixture.now)
+            val repeated = fixture.gateway.forceRefreshAccess(fixture.now)
                 as CommercialAccessRefreshResult.Ready
             assertEquals(
                 originalTrialEnd,
@@ -219,7 +219,7 @@ class CloudDeviceCommercialGatewayTest {
                 CommercialAccessRefreshResult.Failure(
                     CommercialFailure.ENTITLEMENT_REVOKED
                 ),
-                fixture.gateway.refreshAccess(fixture.now)
+                fixture.gateway.forceRefreshAccess(fixture.now)
             )
             assertEquals(
                 CommercialAccessDecision.Denied(
@@ -308,6 +308,51 @@ class CloudDeviceCommercialGatewayTest {
             )
             assertFalse(
                 freshOffline.store.read(SecureCommercialRecord.LICENSE) is SecureStoreReadResult.Value
+            )
+        }
+
+    @Test
+    fun `pro refresh is deferred until signed renewal and transient failures cool down for one day`() =
+        runBlocking {
+            val fixture = FixtureHarness()
+            val initial = fixture.gateway.queryEntitlement(fixture.now)
+                as EntitlementQueryResult.Ready
+            val payment = fixture.gateway.createPayment(
+                initial.snapshot.quote!!,
+                PaymentMethod.WECHAT,
+                fixture.now
+            ) as PaymentCreationResult.Ready
+            fixture.transport.paymentOutcome = DebugPaymentOutcome.PAID
+            assertEquals(
+                PaymentStatusResult.Paid,
+                fixture.gateway.refreshPayment(payment.session, fixture.now)
+            )
+
+            fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
+            fixture.now += 7L * 24 * 60 * 60 * 1000 - 1
+            assertEquals(
+                CommercialAccessRefreshResult.Ready(EntitlementState.Pro),
+                fixture.gateway.refreshAccess(fixture.now)
+            )
+
+            fixture.now += 1
+            fixture.transport.entitlementScenario = DebugEntitlementScenario.QUERY_ERROR
+            assertEquals(
+                CommercialAccessRefreshResult.Ready(EntitlementState.Pro),
+                fixture.gateway.refreshAccess(fixture.now)
+            )
+
+            fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
+            fixture.now += 60 * 60 * 1000L
+            assertEquals(
+                CommercialAccessRefreshResult.Ready(EntitlementState.Pro),
+                fixture.gateway.refreshAccess(fixture.now)
+            )
+
+            fixture.now += 23L * 60 * 60 * 1000
+            assertEquals(
+                CommercialAccessRefreshResult.Ready(EntitlementState.Expired),
+                fixture.gateway.refreshAccess(fixture.now)
             )
         }
 

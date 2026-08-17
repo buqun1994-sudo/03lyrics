@@ -17,6 +17,13 @@ object CommercialRuntimeFactory {
         }
 
     private fun create(context: Context): CommercialRuntime {
+        if (!AndroidOfficialPackageIntegrity.isTrusted(
+                context,
+                BuildConfig.DEVICE_COMMERCE_EXPECTED_SIGNING_CERT_SHA256
+            )
+        ) {
+            return CommercialRuntimeAssembler.unavailable()
+        }
         val configuration = DeviceCommerceConfiguration(
             environment = DeviceCommerceEnvironment.parse(
                 BuildConfig.DEVICE_COMMERCE_ENVIRONMENT

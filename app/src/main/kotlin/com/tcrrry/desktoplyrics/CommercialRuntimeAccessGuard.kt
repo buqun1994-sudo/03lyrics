@@ -7,9 +7,28 @@ internal class CommercialRuntimeAccessGuard(
     private val evaluateAccess: (Long) -> CommercialAccessDecision,
     private val scheduleExpiry: (Runnable, Long) -> Unit,
     private val cancelExpiry: (Runnable) -> Unit,
-    private val onDenied: (CommercialAccessDecision.Denied) -> Unit
+    private val onDenied: (CommercialAccessDecision.Denied) -> Unit,
+    private val onRefreshDue: () -> Unit = {}
 ) {
     private var allowedAccess: CommercialAccessDecision.Allowed? = null
+    private var triggeredRefreshBoundary: Long? = null
+
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            val currentAccess = allowedAccess ?: return
+            val boundary = currentAccess.refreshAfterEpochMs ?: return
+            val now = nowEpochMs()
+            if (now < boundary) {
+                scheduleExpiry(this, boundary - now)
+                return
+            }
+            if (!isCurrent(currentAccess, now) || triggeredRefreshBoundary == boundary) {
+                return
+            }
+            triggeredRefreshBoundary = boundary
+            onRefreshDue()
+        }
+    }
 
     private val expiryRunnable = Runnable {
         val currentAccess = allowedAccess ?: return@Runnable
@@ -23,6 +42,8 @@ internal class CommercialRuntimeAccessGuard(
 
     fun clear() {
         allowedAccess = null
+        triggeredRefreshBoundary = null
+        cancelExpiry(refreshRunnable)
         cancelExpiry(expiryRunnable)
     }
 
@@ -53,7 +74,13 @@ internal class CommercialRuntimeAccessGuard(
 
     private fun replaceAccess(access: CommercialAccessDecision.Allowed, now: Long) {
         allowedAccess = access
+        cancelExpiry(refreshRunnable)
         cancelExpiry(expiryRunnable)
+        access.refreshAfterEpochMs?.let { boundary ->
+            if (triggeredRefreshBoundary != boundary || boundary > now) {
+                scheduleExpiry(refreshRunnable, (boundary - now).coerceAtLeast(0L))
+            }
+        }
         access.expiresAtEpochMs?.let { boundary ->
             scheduleExpiry(expiryRunnable, (boundary - now).coerceAtLeast(0L))
         }

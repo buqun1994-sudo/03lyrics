@@ -2,8 +2,6 @@ package com.tcrrry.desktoplyrics.commercial
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -183,7 +181,9 @@ class AndroidDeviceIdentityManager(
     private fun identityForAlias(alias: String): DeviceCommercialIdentity {
         val publicKey = ensureKeyPair(alias).second
         val spki = publicKey.encoded
-        val signingCertSha256 = packageSignatureSha256()
+        val signingCertSha256 = AndroidPackageSignatures.currentSha256(appContext)
+            .sorted()
+            .first()
         return DeviceCommercialIdentity(
             publicKeySpkiBase64 = Base64.getEncoder().encodeToString(spki),
             publicKeySha256 = CommercialDigests.sha256Hex(spki),
@@ -268,31 +268,6 @@ class AndroidDeviceIdentityManager(
             initialize(builder.build())
             generateKeyPair()
         }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun packageSignatureSha256(): String {
-        val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            appContext.packageManager.getPackageInfo(
-                appContext.packageName,
-                PackageManager.GET_SIGNING_CERTIFICATES
-            )
-        } else {
-            appContext.packageManager.getPackageInfo(
-                appContext.packageName,
-                PackageManager.GET_SIGNATURES
-            )
-        }
-        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            requireNotNull(packageInfo.signingInfo).apkContentsSigners
-        } else {
-            @Suppress("DEPRECATION")
-            packageInfo.signatures
-        }
-        return signatures
-            .map { signature -> CommercialDigests.sha256Hex(signature.toByteArray()) }
-            .sorted()
-            .first()
     }
 
     private fun Int?.orZero(): Int = this ?: 0

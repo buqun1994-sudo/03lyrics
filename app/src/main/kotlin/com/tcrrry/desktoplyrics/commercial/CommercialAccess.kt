@@ -10,6 +10,7 @@ enum class SecureCommercialRecord(val storageKey: String) {
     PURCHASE_SESSION("purchase_session"),
     TRIAL_CLOCK("trial_clock"),
     LICENSE_CLOCK("license_clock"),
+    LICENSE_REFRESH_RETRY_AT("license_refresh_retry_at"),
     DEVICE_KEY_VERSION("device_key_version"),
     DEVICE_KEY_ALIAS("device_key_alias"),
     PENDING_DEVICE_KEY_ALIAS("pending_device_key_alias")
@@ -42,7 +43,8 @@ enum class CommercialAccessDenial {
 sealed interface CommercialAccessDecision {
     data class Allowed(
         val tier: CommercialTier,
-        val expiresAtEpochMs: Long?
+        val expiresAtEpochMs: Long?,
+        val refreshAfterEpochMs: Long? = null
     ) : CommercialAccessDecision
 
     data class Denied(val reason: CommercialAccessDenial) : CommercialAccessDecision
@@ -108,7 +110,10 @@ class VerifiedLicenseAccessGate(
         val claims = (verified as LicenseVerificationResult.Valid).claims
         return CommercialAccessDecision.Allowed(
             tier = claims.tier,
-            expiresAtEpochMs = claims.offlineGraceUntilEpochMs
+            expiresAtEpochMs = claims.offlineGraceUntilEpochMs,
+            refreshAfterEpochMs = claims.expiresAtEpochMs.takeIf {
+                it < claims.offlineGraceUntilEpochMs
+            }
         )
     }
 

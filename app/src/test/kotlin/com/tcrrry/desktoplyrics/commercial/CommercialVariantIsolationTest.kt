@@ -54,4 +54,19 @@ class CommercialVariantIsolationTest {
                 .any { file -> file.readText().contains("fixture.03lyrics.invalid") }
         )
     }
+
+    @Test
+    fun `release build enables r8 optimization and resource shrinking`() {
+        var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
+        while (!File(appDirectory, "src/main").isDirectory) {
+            appDirectory = requireNotNull(appDirectory.parentFile)
+        }
+        val buildScript = File(appDirectory, "build.gradle.kts").readText()
+
+        assertTrue(buildScript.contains("isDebuggable = false"))
+        assertTrue(buildScript.contains("isJniDebuggable = false"))
+        assertTrue(buildScript.contains("isMinifyEnabled = true"))
+        assertTrue(buildScript.contains("isShrinkResources = true"))
+        assertTrue(buildScript.contains("proguard-android-optimize.txt"))
+    }
 }

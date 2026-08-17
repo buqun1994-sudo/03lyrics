@@ -34,7 +34,7 @@ class CommercialController(
     val state: CommercialUiState
         get() = stateMachine.state
 
-    fun start() = reloadEntitlement()
+    fun start() = reloadEntitlement(forceRemote = false)
 
     fun close() {
         operation?.cancel()
@@ -42,13 +42,20 @@ class CommercialController(
         scope.cancel()
     }
 
-    fun reloadEntitlement() {
+    fun reloadEntitlement() = reloadEntitlement(forceRemote = true)
+
+    private fun reloadEntitlement(forceRemote: Boolean) {
         paymentPolling?.cancel()
         launchOperation(
             startingAction = CommercialAction.QueryStarted,
             failureAction = CommercialAction.QueryFailed(CommercialFailure.UNKNOWN)
         ) {
-            when (val result = gateway.queryEntitlement(nowEpochMs())) {
+            val result = if (forceRemote) {
+                gateway.forceQueryEntitlement(nowEpochMs())
+            } else {
+                gateway.queryEntitlement(nowEpochMs())
+            }
+            when (result) {
                 is EntitlementQueryResult.Ready -> {
                     publishFromOperation(CommercialAction.QueryCompleted(result.snapshot))
                     notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)

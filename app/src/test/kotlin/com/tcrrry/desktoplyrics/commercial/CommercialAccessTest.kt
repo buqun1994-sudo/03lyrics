@@ -73,7 +73,11 @@ class CommercialAccessTest {
         val result = VerifiedLicenseAccessGate(store, verifier).evaluate(NOW)
 
         assertEquals(
-            CommercialAccessDecision.Allowed(CommercialTier.PRO, NOW + 20_000),
+            CommercialAccessDecision.Allowed(
+                tier = CommercialTier.PRO,
+                expiresAtEpochMs = NOW + 20_000,
+                refreshAfterEpochMs = NOW + 10_000
+            ),
             result
         )
         assertTrue(store.values.containsKey(SecureCommercialRecord.LICENSE_CLOCK))

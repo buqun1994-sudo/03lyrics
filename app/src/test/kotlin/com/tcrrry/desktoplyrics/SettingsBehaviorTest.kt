@@ -207,6 +207,43 @@ class SettingsBehaviorTest {
     }
 
     @Test
+    fun `commercial access guard triggers one renewal callback before final expiry`() {
+        var now = 10_000L
+        var refreshes = 0
+        val scheduled = linkedMapOf<Runnable, Long>()
+        val guard = CommercialRuntimeAccessGuard(
+            nowEpochMs = { now },
+            evaluateAccess = {
+                CommercialAccessDecision.Allowed(
+                    CommercialTier.PRO,
+                    expiresAtEpochMs = 30_000L,
+                    refreshAfterEpochMs = 15_000L
+                )
+            },
+            scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
+            cancelExpiry = { scheduled.remove(it) },
+            onDenied = {},
+            onRefreshDue = { refreshes += 1 }
+        )
+
+        guard.authorize(
+            CommercialAccessDecision.Allowed(
+                CommercialTier.PRO,
+                expiresAtEpochMs = 30_000L,
+                refreshAfterEpochMs = 15_000L
+            )
+        )
+        val renewal = scheduled.entries.single { it.value == 5_000L }.key
+        scheduled.remove(renewal)
+        now = 15_000L
+        renewal.run()
+        renewal.run()
+
+        assertEquals(1, refreshes)
+        assertTrue(guard.hasCurrentAccess())
+    }
+
+    @Test
     fun `commercial access guard evaluates the authoritative gate at its boundary`() {
         val harness = CommercialRuntimeAccessHarness(now = 10_000L)
         harness.guard.authorize(

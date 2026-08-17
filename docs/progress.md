@@ -1,5 +1,17 @@
 # 项目进度
 
+## 2026-08-18 轻量抗重打包与低频权益续签
+
+1. 用户明确不购买商业加固，并要求车机不增加常驻检测或高频商业网络负担。本轮采用构建期 R8、一次性 APK signer 门禁和签名许可证时间窗，不引入加固壳、原生反调试、Root / Hook 轮询、APK 全量哈希、Play Integrity 依赖或新增后台任务。
+2. Release 已固定启用 R8 优化、混淆和资源收缩，并显式关闭调试与 JNI 调试；应用整体关闭 Android 备份。实际 `assembleRelease` 已执行 `minifyReleaseWithR8 / shrinkReleaseRes / optimizeReleaseResources` 并生成内部 mapping，未对签名后的 APK 做二次处理。当前无 production 签名配置的验证产物为未签名 Release，只用于本机结构验证，不安装车机或对外发布。
+3. 新增 APK signer 单一 owner，设备指纹与非 fixture 商业装配复用同一读取结果。staging / production 必须从构建入口注入预期 signer SHA-256，运行包 signer 不匹配或商业配置缺失时 fail closed；Debug fixture 保持本地测试边界，不冒充正式包完整性。
+4. 自动权益复核改为读取签名许可证时间窗：`expiresAt` 前只返回本地验签权益，本地缺失或到点后才进入既有进程级单飞请求；连续运行的歌词服务复用主线程 Handler 安排一个续签点回调，不创建轮询、新线程或 WorkManager。瞬时失败且本地仍有效时，以 AES-GCM 记录下一次自动尝试不得早于 `24h`，运行守卫按新边界只重排一次且不改变 `offlineGraceUntil`。用户主动重试使用强制复核入口，绕过冷却但继续共享已开始的云端请求；退款撤销、原试用原子恢复和运行时最终门禁保持不变。
+5. Debug HTTP / JSON fixture 现模拟试用许可证一次覆盖原七天截止、Pro 第 `7` 天进入续签且签发后第 `90` 天为最终离线终点；production 仍只接受服务端签名时间。新增纯规则与协议用例覆盖 signer 格式 / 匹配 / 重签不匹配、续签点前零权益请求、到点请求、失败冷却、本地缺失不受冷却、冷却结束后的权威撤销，以及 Release R8 配置不回退。
+6. 本机完整验证通过：Debug JVM 共 `216` 项、`0` 失败，`lintDebug`、`assembleDebug`、`assembleRelease` 全部成功；新增用例证明连续服务的同一续签回调只触发一次。Debug APK 为约 `5.9 MiB`，R8 后未签名 Release APK 为约 `2.1 MiB`，mapping 已生成并确认正式包身份检查仍存在于混淆产物。未运行商业 instrumentation，因为本轮没有修改其隔离设施且 JVM / 构建已经覆盖直接规则。
+7. 用户指出仓库外测试环境目录后，已定位 staging 公开信任配置、长期 signing properties 及其 keystore，并把前两个稳定文件指针补入被 Git 忽略的本机上下文；可提交示例与运维规则只保留占位符和键名。强制关闭 Kotlin 增量并重跑 `assembleDebug` 成功，实际 APK 为 staging 配置、单 signer、APK v2 有效，证书同时匹配构建注入摘要、仓库外 keystore 和车机原安装包；签名口令、keystore 路径/文件名及私钥载荷标记扫描无命中，没有应用源码晚于产物。
+8. 当前 staging Debug APK SHA-256 为 `4963ba7b92cc8e96ccf3da8b03652a13512236e5eb9a912e79fb2fa4e5e3f0fe`。标准脚本已保留数据覆盖安装 `1.14-icar03`（versionCode `114`），并通过设置页启动、版本/进程、表面占用租约、窗口避让无障碍实际绑定、通知监听、致命日志和歌词服务恢复检查；从车机只读拉取的已安装 APK 与工作区产物哈希一致。
+9. 安装后专项 smoke 保持同一 PID 观察 `20s`：始终只有 `1` 个 `LyricsOverlayService` 和 `1` 个有 Surface 的 `APPLICATION_OVERLAY`，商业恢复通知、商业拒绝日志、续签点回调、重复刷新完成和致命日志均为 `0`；临时启用的应用专属 INFO 日志已恢复系统默认。未安装 Release、未运行商业 instrumentation、未清数据、未卸载、未重启车机、未提交、未推送或发布。
+
 ## 2026-08-17 权益唯一门禁、运行期访问守卫与退款试用原子恢复
 
 1. 用户观察到“权益已撤销”后未点击重新确认、关闭设置页却重新出现歌词，要求确认权益是否为歌词显影唯一真值。代码审计确认设置页实例会自动查询权益，关闭动作本身不授权；所有歌词资源只由 `LyricsOverlayService` 创建且每个服务命令都先经过 `CommercialAccessGate`。同时发现两个需要补齐的严格边界：已有运行资源在本地门禁变为 denied 且云端复核仍进行时不能继续等待，以及服务连续运行跨过签名许可证最终有效时间时不能等下一次命令才退出。
