@@ -23,6 +23,8 @@
       --desktop-line-padding:14px;
       --desktop-edge-fade:64px;
       --desktop-visible-bottom:100%;
+      --desktop-motion-duration:220ms;
+      --desktop-motion-easing:cubic-bezier(.22,.75,.18,1);
       --overlay-background:#111217;
       --surface-background:rgba(9,10,14,.64);
       --surface-background-high:rgba(5,6,9,.86);
@@ -312,13 +314,29 @@
     }
     body.surface-desktop .lyrics-viewport::before,
     body.surface-desktop .lyrics-viewport::after { display:none; }
-    body.surface-desktop #lyrics { padding:42% 0; }
+    body.surface-desktop #lyrics {
+      padding:42% 0;
+      transition-duration:var(--desktop-motion-duration);
+      transition-timing-function:var(--desktop-motion-easing);
+    }
     body.surface-desktop .line {
       padding:var(--desktop-line-padding) 0; color:var(--desktop-lyric); font-size:var(--desktop-lyric-size);
       line-height:1.3; font-weight:620; text-align:right; opacity:.92;
       filter:none; text-shadow:none;
-      transition:color .22s ease,opacity .22s ease,font-size .22s ease,filter .22s ease;
+      transition:none;
     }
+    body.surface-desktop .line-original { transform-origin:100% 0; }
+    body.surface-desktop .line.desktop-motion {
+      transition:transform var(--desktop-motion-duration) var(--desktop-motion-easing),
+        opacity var(--desktop-motion-duration) ease;
+      will-change:transform,opacity;
+    }
+    body.surface-desktop .line-original.desktop-motion,
+    body.surface-desktop .line-translation.desktop-motion {
+      transition:transform var(--desktop-motion-duration) var(--desktop-motion-easing);
+      will-change:transform;
+    }
+    body.surface-desktop .desktop-motion.desktop-motion-preparing { transition:none; }
     body.surface-desktop .line-translation {
       margin-top:2px; color:var(--desktop-translation); font-size:var(--desktop-translation-size);
       line-height:1.22; font-weight:560; opacity:.88;
@@ -430,6 +448,9 @@
     let manualLyricsScroll=false,lyricsTranslateY=0,manualReturnTimer=0;
     let lyricTouchActive=false,lyricTouchMoved=false,lyricTouchStartY=0,lyricTouchStartTranslate=0;
     let lyricTouchLastY=0,lyricTouchLastAt=0,lyricVelocity=0,lyricMomentumFrame=0;
+    const DESKTOP_LINE_MOTION_MS=220;
+    let desktopLineMotionFrame=0,desktopLineMotionTimer=0,desktopLineMotionGeneration=0;
+    let desktopLineMotionNodes=[];
 
     const escapeHtml = value => String(value || '').replace(/[&<>"']/g, ch => ({
       '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
@@ -785,7 +806,164 @@
       return document.body.classList.contains('surface-desktop') ? desktopFocusRatio : .48;
     }
 
+    function finishDesktopLineMotion() {
+      desktopLineMotionGeneration++;
+      if(desktopLineMotionFrame)cancelAnimationFrame(desktopLineMotionFrame);
+      clearTimeout(desktopLineMotionTimer);
+      desktopLineMotionFrame=0;
+      desktopLineMotionTimer=0;
+      desktopLineMotionNodes.forEach(item=>{
+        item.line.classList.remove('desktop-motion','desktop-motion-preparing');
+        item.line.style.removeProperty('transform');
+        item.line.style.removeProperty('opacity');
+        if(item.original){
+          item.original.classList.remove('desktop-motion','desktop-motion-preparing');
+          item.original.style.removeProperty('transform');
+        }
+        if(item.translation){
+          item.translation.classList.remove('desktop-motion','desktop-motion-preparing');
+          item.translation.style.removeProperty('transform');
+        }
+      });
+      desktopLineMotionNodes=[];
+    }
+
+    function lineStateIndices(previousIndex,index,length) {
+      const indices=new Set();
+      [previousIndex,index].forEach(center=>{
+        for(let offset=-1;offset<=1;offset++){
+          const candidate=center+offset;
+          if(candidate>=0&&candidate<length)indices.add(candidate);
+        }
+      });
+      return Array.from(indices).sort((a,b)=>a-b);
+    }
+
+    function desktopMotionIndices(nodes,previousIndex,index) {
+      const viewport=ui.viewport.getBoundingClientRect();
+      const previous=nodes[previousIndex],active=nodes[index];
+      if(!previous||!active||viewport.height<=0)return lineStateIndices(previousIndex,index,nodes.length);
+      const overscan=viewport.height+Math.max(
+        previous.getBoundingClientRect().height,
+        active.getBoundingClientRect().height
+      );
+      const upperBound=viewport.top-overscan;
+      const lowerBound=viewport.bottom+overscan;
+      let first=Math.min(previousIndex,index);
+      let last=Math.max(previousIndex,index);
+      while(first>0){
+        const candidate=nodes[first-1].getBoundingClientRect();
+        if(candidate.bottom<upperBound)break;
+        first--;
+      }
+      while(last<nodes.length-1){
+        const candidate=nodes[last+1].getBoundingClientRect();
+        if(candidate.top>lowerBound)break;
+        last++;
+      }
+      const indices=[];
+      for(let candidate=first;candidate<=last;candidate++)indices.push(candidate);
+      return indices;
+    }
+
+    function applyLineState(node,nodeIndex,activeIndex) {
+      node.classList.toggle('active',nodeIndex===activeIndex);
+      node.classList.toggle('near',Math.abs(nodeIndex-activeIndex)===1);
+      node.classList.toggle('past',nodeIndex<activeIndex);
+    }
+
+    function reconcileLineStates(nodes,previousIndex,index,full) {
+      if(full||previousIndex<0||Math.abs(index-previousIndex)>1){
+        for(let i=0;i<nodes.length;i++)applyLineState(nodes[i],i,index);
+        return;
+      }
+      lineStateIndices(previousIndex,index,nodes.length)
+        .forEach(i=>applyLineState(nodes[i],i,index));
+    }
+
+    function captureDesktopLineState(nodes,indices) {
+      const state=new Map();
+      indices.forEach(index=>{
+        const line=nodes[index];
+        const original=line&&line.querySelector('.line-original');
+        const translation=line&&line.querySelector('.line-translation');
+        if(!line||!original)return;
+        const lineStyle=getComputedStyle(line);
+        const originalStyle=getComputedStyle(original);
+        const translationRect=translation&&getComputedStyle(translation).display!=='none'
+          ?translation.getBoundingClientRect()
+          :null;
+        state.set(index,{
+          top:line.getBoundingClientRect().top,
+          opacity:Number(lineStyle.opacity)||0,
+          fontSize:Math.max(.01,Number.parseFloat(originalStyle.fontSize)||0),
+          translationTop:translationRect?translationRect.top:null
+        });
+      });
+      return state;
+    }
+
+    // Commit final typography once, then animate only compositor properties.
+    function prepareDesktopLineMotion(nodes,indices,first,last,target) {
+      const generation=++desktopLineMotionGeneration;
+      const prepared=[];
+      indices.forEach(index=>{
+        const before=first.get(index),after=last.get(index),line=nodes[index];
+        const original=line&&line.querySelector('.line-original');
+        const translation=line&&line.querySelector('.line-translation');
+        if(!before||!after||!line||!original)return;
+        const translateY=before.top-after.top;
+        const scale=Math.max(.01,before.fontSize/after.fontSize);
+        const translationY=before.translationTop===null||after.translationTop===null
+          ?0
+          :before.translationTop-after.translationTop-translateY;
+        const originalMotion=Math.abs(scale-1)>.001?original:null;
+        const translationMotion=translation&&Math.abs(translationY)>.001?translation:null;
+        const translateMotion=Math.abs(translateY)>.001;
+        const opacityMotion=Math.abs(before.opacity-after.opacity)>.001;
+        if(!translateMotion&&!opacityMotion&&!originalMotion&&!translationMotion)return;
+        line.classList.add('desktop-motion','desktop-motion-preparing');
+        if(translateMotion)line.style.transform='translate3d(0,'+translateY.toFixed(3)+'px,0)';
+        if(opacityMotion)line.style.opacity=String(before.opacity);
+        if(originalMotion){
+          originalMotion.classList.add('desktop-motion','desktop-motion-preparing');
+          originalMotion.style.transform='scale('+scale.toFixed(6)+')';
+        }
+        if(translationMotion){
+          translationMotion.classList.add('desktop-motion','desktop-motion-preparing');
+          translationMotion.style.transform='translate3d(0,'+translationY.toFixed(3)+'px,0)';
+        }
+        prepared.push({line,original:originalMotion,translation:translationMotion});
+      });
+      desktopLineMotionNodes=prepared;
+      if(!prepared.length){setLyricsTranslate(target);return;}
+
+      ui.lyrics.offsetHeight;
+      desktopLineMotionFrame=requestAnimationFrame(()=>{
+        desktopLineMotionFrame=0;
+        if(generation!==desktopLineMotionGeneration)return;
+        prepared.forEach(item=>{
+          item.line.classList.remove('desktop-motion-preparing');
+          item.line.style.removeProperty('transform');
+          item.line.style.removeProperty('opacity');
+          if(item.original){
+            item.original.classList.remove('desktop-motion-preparing');
+            item.original.style.removeProperty('transform');
+          }
+          if(item.translation){
+            item.translation.classList.remove('desktop-motion-preparing');
+            item.translation.style.removeProperty('transform');
+          }
+        });
+        setLyricsTranslate(target);
+        desktopLineMotionTimer=setTimeout(()=>{
+          if(generation===desktopLineMotionGeneration)finishDesktopLineMotion();
+        },DESKTOP_LINE_MOTION_MS+64);
+      });
+    }
+
     function resetManualLyricsScroll() {
+      finishDesktopLineMotion();
       clearTimeout(manualReturnTimer);
       if(lyricMomentumFrame)cancelAnimationFrame(lyricMomentumFrame);
       manualReturnTimer=0;
@@ -846,6 +1024,7 @@
 
     ui.viewport.addEventListener('touchstart',event=>{
       if(document.body.classList.contains('compact')||!playback.lyrics.length||event.touches.length!==1)return;
+      finishDesktopLineMotion();
       clearTimeout(manualReturnTimer);
       if(lyricMomentumFrame)cancelAnimationFrame(lyricMomentumFrame);
       lyricMomentumFrame=0;
@@ -911,18 +1090,30 @@
       }
       const activeStarted = !!lines[index].plain || lines[index].t <= position;
       if (!force && index === playback.active && activeStarted === playback.activeStarted) return;
+      const previousIndex=playback.active;
+      const indexChanged=index!==previousIndex;
+      const animateDesktop=indexChanged&&!force&&!manualLyricsScroll&&previousIndex>=0&&
+        Math.abs(index-previousIndex)===1&&
+        document.body.classList.contains('surface-desktop')&&
+        !ui.lyrics.classList.contains('initial-positioning');
+      if(force||indexChanged)finishDesktopLineMotion();
+      const nodes=ui.lyrics.children;
+      const motionIndices=animateDesktop
+        ?desktopMotionIndices(nodes,previousIndex,index)
+        :[];
+      const first=animateDesktop?captureDesktopLineState(nodes,motionIndices):null;
       playback.active = index;
       playback.activeStarted = activeStarted;
-      const nodes = ui.lyrics.children;
-      for (let i = 0; i < nodes.length; i++) {
-        nodes[i].classList.toggle('active', i === index);
-        nodes[i].classList.toggle('near', Math.abs(i - index) === 1);
-        nodes[i].classList.toggle('past', i < index);
-      }
+      reconcileLineStates(nodes,previousIndex,index,force||!indexChanged);
       const active = nodes[index];
       if (active) {
         const target = ui.viewport.clientHeight * lyricsFocusRatio() - active.offsetTop - active.offsetHeight * .5;
-        if(!manualLyricsScroll)setLyricsTranslate(target);
+        if(!manualLyricsScroll){
+          if(animateDesktop){
+            const last=captureDesktopLineState(nodes,motionIndices);
+            prepareDesktopLineMotion(nodes,motionIndices,first,last,target);
+          }else setLyricsTranslate(target);
+        }
         const playbackRate = playback.state === 'playing' && playback.speed > 0 ? playback.speed : 1;
         const lineEnd = lines[index + 1]
           ? lines[index + 1].t
@@ -1289,6 +1480,7 @@
     }
 
     function setDisplayPreferences(value) {
+      finishDesktopLineMotion();
       const settings=value||{};
       const topbarPercent=Math.max(75,Math.min(150,Number(settings.topbarFontScale)||100));
       const wallpaperPercent=Math.max(75,Math.min(150,Number(settings.wallpaperFontScale)||100));
@@ -1331,6 +1523,7 @@
       resolveTrack(playback.track,playback.artist,playback.key,playback.requestId);
     }
     addEventListener('resize', () => {
+      finishDesktopLineMotion();
       updateCompactLayout();
       recenterAfterLayout();
     });
@@ -1344,11 +1537,13 @@
       setDisplayPreferences,
       setDesktopVisibleRatio,
       setTheme(value) {
+        finishDesktopLineMotion();
         const light=value==='light';
         document.body.classList.toggle('theme-light',light);
         document.body.classList.toggle('theme-dark',!light);
       },
       setSurfaceMode(value) {
+        finishDesktopLineMotion();
         const desktop=value==='desktop';
         if(desktop)resumeRealtimeLyrics(false);
         document.body.classList.toggle('compact',!desktop);
@@ -1367,6 +1562,7 @@
         recenterAfterLayout();
       },
       setLyricsTranslationEnabled(value) {
+        finishDesktopLineMotion();
         lyricsTranslationEnabled=!!value;
         document.body.classList.toggle('translations-enabled',lyricsTranslationEnabled);
         updateCompactLayout();

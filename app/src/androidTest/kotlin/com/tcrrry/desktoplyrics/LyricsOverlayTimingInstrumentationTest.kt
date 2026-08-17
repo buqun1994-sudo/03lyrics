@@ -175,6 +175,122 @@ class LyricsOverlayTimingInstrumentationTest {
         )
     }
 
+    @Test
+    fun desktopLineMotionCommitsFinalTypographyAndCleansUpCompositorStyles() {
+        resizeWebView(1230, 810)
+        val lyrics = """
+            [00:00.00]This deliberately long opening lyric wraps across the wallpaper surface so layout changes are exercised during the transition
+            [00:10.00]Second lyric line
+            [00:20.00]Third lyric line
+            [00:21.00]Fourth lyric line
+            [00:22.00]Fifth lyric line
+            [00:23.00]Sixth lyric line
+        """.trimIndent()
+        val translations = """
+            [00:00.00]Opening translation
+            [00:10.00]Second translation
+            [00:20.00]Third translation
+            [00:21.00]Fourth translation
+            [00:22.00]Fifth translation
+            [00:23.00]Sixth translation
+        """.trimIndent()
+        evaluate(
+            """
+            window.LobstaOverlay.setSurfaceMode('desktop');
+            window.LobstaOverlay.setLyricsTranslationEnabled(true);
+            window.LobstaOverlay.setDisplayPreferences({
+              topbarFontScale:100, wallpaperFontScale:100,
+              wallpaperBlur:true, wallpaperShadow:true,
+              wallpaperSpacing:'standard', wallpaperFocus:'top'
+            });
+            window.LobstaOverlay.updatePlayback({
+              hasSession:true, track:'Desktop Motion Test', artist:'Test Artist', album:'',
+              state:'playing', positionMs:0, durationMs:30000, speed:1, timelineReady:true
+            });
+            window.LobstaOverlay.receiveLyrics(1, {
+              lyrics:${JSONObject.quote(lyrics)},
+              translatedLyrics:${JSONObject.quote(translations)},
+              duration:30000
+            });
+            true
+            """.trimIndent()
+        )
+        SystemClock.sleep(320)
+
+        val initial = desktopLineMotionSnapshot(
+            activeIndex = 0,
+            outgoingIndex = 1,
+            watchedIndex = 4
+        )
+        assertEquals(58.0, initial.getDouble("activeFontSize"), 0.1)
+        assertEquals(28.0, initial.getDouble("translationFontSize"), 0.1)
+        assertEquals(0, initial.getInt("motionNodeCount"))
+
+        val prepared = desktopLineMotionSnapshot(
+            activeIndex = 1,
+            outgoingIndex = 0,
+            positionMs = 10_000,
+            watchedIndex = 4
+        )
+        assertEquals("the active line must already own its final layout size", 58.0, prepared.getDouble("activeFontSize"), 0.1)
+        assertEquals("the outgoing line must already own its final layout size", 42.0, prepared.getDouble("outgoingFontSize"), 0.1)
+        assertEquals("translation typography must not be scaled as the active line grows", 28.0, prepared.getDouble("translationFontSize"), 0.1)
+        assertTrue("the active row should start from an inverse compositor transform", prepared.getString("activeLineTransform") != "none")
+        assertTrue("the active original text should start from an inverse scale", prepared.getString("activeOriginalTransform") != "none")
+        assertEquals(
+            "the incoming translation must keep its pre-layout visual position",
+            initial.getDouble("outgoingTranslationTop"),
+            prepared.getDouble("activeTranslationTop"),
+            0.5
+        )
+        assertEquals(
+            "the outgoing translation must keep its pre-layout visual position",
+            initial.getDouble("activeTranslationTop"),
+            prepared.getDouble("outgoingTranslationTop"),
+            0.5
+        )
+        assertEquals(
+            "visible downstream rows must not jump when a wrapped active line changes layout",
+            initial.getDouble("watchedTop"),
+            prepared.getDouble("watchedTop"),
+            0.5
+        )
+
+        val during = waitForDesktopLineMotion(activeIndex = 1, outgoingIndex = 0)
+        assertEquals(58.0, during.getDouble("activeFontSize"), 0.1)
+        assertEquals(42.0, during.getDouble("outgoingFontSize"), 0.1)
+        assertEquals(28.0, during.getDouble("translationFontSize"), 0.1)
+        assertEquals("transform, opacity", during.getString("lineTransitionProperty"))
+        assertEquals("transform", during.getString("originalTransitionProperty"))
+        assertEquals("transform", during.getString("translationTransitionProperty"))
+        assertEquals("none", during.getString("activeFilter"))
+        assertTrue("the outgoing row should keep the configured static blur", during.getString("outgoingFilter").contains("blur"))
+        assertTrue("the active row should keep the configured static shadow", during.getString("activeShadow") != "none")
+        assertTrue("the outgoing row should keep the configured static shadow", during.getString("outgoingShadow") != "none")
+
+        SystemClock.sleep(320)
+        val settled = desktopLineMotionSnapshot(activeIndex = 1, outgoingIndex = 0)
+        assertEquals(0, settled.getInt("motionNodeCount"))
+        assertTrue("temporary compositor styles must be removed after the transition", !settled.getBoolean("hasInlineMotion"))
+        assertEquals("none", settled.getString("activeLineTransform"))
+        assertEquals("none", settled.getString("activeOriginalTransform"))
+        assertEquals("none", settled.getString("activeTranslationTransform"))
+        assertEquals(58.0, settled.getDouble("activeFontSize"), 0.1)
+        assertEquals(42.0, settled.getDouble("outgoingFontSize"), 0.1)
+
+        updatePosition(20_000)
+        updatePosition(0)
+        val afterSeek = desktopLineMotionSnapshot(activeIndex = 0, outgoingIndex = 2)
+        assertEquals("a non-adjacent seek must cancel temporary motion owners", 0, afterSeek.getInt("motionNodeCount"))
+        assertTrue("a seek must not leave inline transforms or opacity", !afterSeek.getBoolean("hasInlineMotion"))
+
+        updatePosition(10_000)
+        evaluate("window.LobstaOverlay.setSurfaceMode('topbar'); true")
+        val afterSurfaceChange = desktopLineMotionSnapshot(activeIndex = 1, outgoingIndex = 0)
+        assertEquals("a surface change must cancel temporary motion owners", 0, afterSurfaceChange.getInt("motionNodeCount"))
+        assertTrue("a surface change must not leave inline transforms or opacity", !afterSurfaceChange.getBoolean("hasInlineMotion"))
+    }
+
     private fun updatePosition(positionMs: Long, speed: Double = 1.0) {
         evaluate(
             """
@@ -185,6 +301,94 @@ class LyricsOverlayTimingInstrumentationTest {
             true
             """.trimIndent()
         )
+    }
+
+    private fun resizeWebView(width: Int, height: Int) {
+        instrumentation.runOnMainSync {
+            webView.layoutParams = ViewGroup.LayoutParams(width, height)
+            webView.measure(
+                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+            )
+            webView.layout(0, 0, width, height)
+        }
+    }
+
+    private fun desktopLineMotionSnapshot(
+        activeIndex: Int,
+        outgoingIndex: Int,
+        positionMs: Long? = null,
+        watchedIndex: Int = activeIndex
+    ): JSONObject = JSONObject(
+        evaluate(
+            """
+            (() => {
+              ${positionMs?.let {
+                  """
+                  window.LobstaOverlay.updatePlayback({
+                    hasSession:true, track:'Desktop Motion Test', artist:'Test Artist', album:'',
+                    state:'playing', positionMs:$it, durationMs:30000, speed:1, timelineReady:true
+                  });
+                  """.trimIndent()
+              }.orEmpty()}
+              const active = document.querySelector('.line[data-i="$activeIndex"]');
+              const outgoing = document.querySelector('.line[data-i="$outgoingIndex"]');
+              const watched = document.querySelector('.line[data-i="$watchedIndex"]');
+              const activeOriginal = active && active.querySelector('.line-original');
+              const activeTranslation = active && active.querySelector('.line-translation');
+              const outgoingTranslation = outgoing && outgoing.querySelector('.line-translation');
+              const activeStyle = getComputedStyle(active);
+              const outgoingStyle = getComputedStyle(outgoing);
+              const originalStyle = getComputedStyle(activeOriginal);
+              const translationStyle = getComputedStyle(activeTranslation);
+              const motionNodes = Array.from(document.querySelectorAll('.desktop-motion'));
+              const hasInlineMotion = Array.from(document.querySelectorAll('.line')).some(line => {
+                const original = line.querySelector('.line-original');
+                const translation = line.querySelector('.line-translation');
+                return !!line.style.transform || !!line.style.opacity ||
+                  (!!original && !!original.style.transform) ||
+                  (!!translation && !!translation.style.transform);
+              });
+              return {
+                activeFontSize:parseFloat(originalStyle.fontSize),
+                outgoingFontSize:parseFloat(getComputedStyle(outgoing.querySelector('.line-original')).fontSize),
+                translationFontSize:parseFloat(getComputedStyle(activeTranslation).fontSize),
+                activeLineTransform:activeStyle.transform,
+                activeOriginalTransform:originalStyle.transform,
+                activeTranslationTransform:translationStyle.transform,
+                activeTranslationTop:activeTranslation.getBoundingClientRect().top,
+                outgoingTranslationTop:outgoingTranslation.getBoundingClientRect().top,
+                lineTransitionProperty:activeStyle.transitionProperty,
+                originalTransitionProperty:originalStyle.transitionProperty,
+                translationTransitionProperty:translationStyle.transitionProperty,
+                activeFilter:activeStyle.filter,
+                outgoingFilter:outgoingStyle.filter,
+                activeShadow:activeStyle.textShadow,
+                outgoingShadow:outgoingStyle.textShadow,
+                watchedTop:watched.getBoundingClientRect().top,
+                motionNodeCount:motionNodes.length,
+                hasInlineMotion
+              };
+            })()
+            """.trimIndent()
+        )
+    )
+
+    private fun waitForDesktopLineMotion(activeIndex: Int, outgoingIndex: Int): JSONObject {
+        val deadline = SystemClock.uptimeMillis() + 250
+        var snapshot: JSONObject
+        do {
+            snapshot = desktopLineMotionSnapshot(activeIndex, outgoingIndex)
+            if (snapshot.getString("lineTransitionProperty") == "transform, opacity" &&
+                snapshot.getString("originalTransitionProperty") == "transform"
+            ) {
+                return snapshot
+            }
+            SystemClock.sleep(8)
+        } while (SystemClock.uptimeMillis() < deadline)
+        assertEquals("desktop row transition properties", "transform, opacity", snapshot.getString("lineTransitionProperty"))
+        assertEquals("desktop original transition properties", "transform", snapshot.getString("originalTransitionProperty"))
+        return snapshot
     }
 
     private fun waitForLineTransition(expectedCurrentText: String): JSONObject {
