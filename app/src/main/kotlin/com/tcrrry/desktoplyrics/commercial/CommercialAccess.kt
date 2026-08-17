@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 
 enum class SecureCommercialRecord(val storageKey: String) {
     LICENSE("license"),
+    ACCESS_REVOCATION("access_revocation"),
     DEVICE_TOKEN("device_token"),
     POLL_TOKEN("poll_token"),
     PURCHASE_SESSION("purchase_session"),
@@ -29,6 +30,7 @@ interface SecureCommercialStore {
 enum class CommercialAccessDenial {
     CONFIGURATION_MISSING,
     NO_LICENSE,
+    ENTITLEMENT_REVOKED,
     LICENSE_EXPIRED,
     INVALID_LICENSE,
     DEVICE_MISMATCH,
@@ -62,6 +64,15 @@ class VerifiedLicenseAccessGate(
     private val verifier: LicenseVerifier
 ) : CommercialAccessGate {
     override fun evaluate(nowEpochMs: Long): CommercialAccessDecision {
+        when (store.read(SecureCommercialRecord.ACCESS_REVOCATION)) {
+            is SecureStoreReadResult.Value -> {
+                return denied(CommercialAccessDenial.ENTITLEMENT_REVOKED)
+            }
+            SecureStoreReadResult.Missing -> Unit
+            SecureStoreReadResult.Failure -> {
+                return denied(CommercialAccessDenial.STORAGE_FAILURE)
+            }
+        }
         val lastObserved = when (val clock = store.read(SecureCommercialRecord.LICENSE_CLOCK)) {
             is SecureStoreReadResult.Value -> decodeLong(clock.bytes)
                 ?: return denied(CommercialAccessDenial.STORAGE_FAILURE)

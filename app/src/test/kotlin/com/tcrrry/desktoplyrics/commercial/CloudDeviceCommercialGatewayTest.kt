@@ -141,6 +141,91 @@ class CloudDeviceCommercialGatewayTest {
     }
 
     @Test
+    fun `refund revocation closes local gate before retry restores original trial end`() =
+        runBlocking {
+            val fixture = FixtureHarness()
+            val initial = fixture.gateway.queryEntitlement(fixture.now)
+                as EntitlementQueryResult.Ready
+            val originalTrialEnd = (initial.snapshot.entitlement as EntitlementState.Trial)
+                .expiresAtEpochMs
+            val payment = fixture.gateway.createPayment(
+                initial.snapshot.quote!!,
+                PaymentMethod.WECHAT,
+                fixture.now
+            ) as PaymentCreationResult.Ready
+            fixture.transport.paymentOutcome = DebugPaymentOutcome.PAID
+            assertEquals(
+                PaymentStatusResult.Paid,
+                fixture.gateway.refreshPayment(payment.session, fixture.now)
+            )
+
+            fixture.store.failedDeletes += SecureCommercialRecord.LICENSE
+            fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
+            assertEquals(
+                CommercialAccessRefreshResult.Failure(CommercialFailure.ENTITLEMENT_REVOKED),
+                fixture.gateway.refreshAccess(fixture.now)
+            )
+            assertTrue(
+                fixture.store.read(SecureCommercialRecord.LICENSE) is SecureStoreReadResult.Value
+            )
+            assertTrue(
+                fixture.store.read(SecureCommercialRecord.ACCESS_REVOCATION) is
+                    SecureStoreReadResult.Value
+            )
+            assertEquals(
+                CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED),
+                fixture.licenseRepository.accessDecision(fixture.now)
+            )
+
+            val restored = fixture.gateway.queryEntitlement(fixture.now)
+                as EntitlementQueryResult.Ready
+            assertEquals(
+                originalTrialEnd,
+                (restored.snapshot.entitlement as EntitlementState.Trial).expiresAtEpochMs
+            )
+            assertEquals(
+                SecureStoreReadResult.Missing,
+                fixture.store.read(SecureCommercialRecord.ACCESS_REVOCATION)
+            )
+            assertTrue(
+                fixture.licenseRepository.accessDecision(fixture.now) is
+                    CommercialAccessDecision.Allowed
+            )
+        }
+
+    @Test
+    fun `refund after the original seven day window cannot restore trial access`() = runBlocking {
+        val fixture = FixtureHarness()
+        val initial = fixture.gateway.queryEntitlement(fixture.now)
+            as EntitlementQueryResult.Ready
+        val payment = fixture.gateway.createPayment(
+            initial.snapshot.quote!!,
+            PaymentMethod.WECHAT,
+            fixture.now
+        ) as PaymentCreationResult.Ready
+        fixture.transport.paymentOutcome = DebugPaymentOutcome.PAID
+        assertEquals(
+            PaymentStatusResult.Paid,
+            fixture.gateway.refreshPayment(payment.session, fixture.now)
+        )
+
+        fixture.now += TRIAL_DURATION_MS + 1
+        fixture.transport.entitlementScenario = DebugEntitlementScenario.REVOKED
+        assertEquals(
+            EntitlementQueryResult.Failure(CommercialFailure.ENTITLEMENT_REVOKED),
+            fixture.gateway.queryEntitlement(fixture.now)
+        )
+        val retried = fixture.gateway.queryEntitlement(fixture.now)
+            as EntitlementQueryResult.Ready
+
+        assertEquals(EntitlementState.Expired, retried.snapshot.entitlement)
+        assertTrue(
+            fixture.licenseRepository.accessDecision(fixture.now) is
+                CommercialAccessDecision.Denied
+        )
+    }
+
+    @Test
     fun `same fingerprint reinstall automatically recovers pro during entitlement query`() =
         runBlocking {
             val fixture = FixtureHarness()
@@ -177,15 +262,16 @@ class CloudDeviceCommercialGatewayTest {
             assertTrue(initial.snapshot.entitlement is EntitlementState.Trial)
 
             fixture.transport.entitlementScenario = DebugEntitlementScenario.QUERY_ERROR
-            val offline = fixture.gateway.queryEntitlement(fixture.now) as EntitlementQueryResult.Ready
-            assertTrue(offline.snapshot.entitlement is EntitlementState.Trial)
+            val offline = fixture.gateway.refreshAccess(fixture.now)
+                as CommercialAccessRefreshResult.Ready
+            assertTrue(offline.entitlement is EntitlementState.Trial)
 
             val freshOffline = FixtureHarness().apply {
                 transport.entitlementScenario = DebugEntitlementScenario.QUERY_ERROR
             }
-            val firstStart = freshOffline.gateway.queryEntitlement(freshOffline.now)
+            val firstStart = freshOffline.gateway.refreshAccess(freshOffline.now)
             assertEquals(
-                EntitlementQueryResult.Failure(CommercialFailure.NETWORK),
+                CommercialAccessRefreshResult.Failure(CommercialFailure.NETWORK),
                 firstStart
             )
             assertFalse(
@@ -435,6 +521,7 @@ class CloudDeviceCommercialGatewayTest {
 
     private class MapSecureStore : SecureCommercialStore {
         private val values = mutableMapOf<SecureCommercialRecord, ByteArray>()
+        val failedDeletes = mutableSetOf<SecureCommercialRecord>()
 
         override fun read(record: SecureCommercialRecord): SecureStoreReadResult =
             values[record]?.copyOf()?.let(SecureStoreReadResult::Value)
@@ -446,6 +533,7 @@ class CloudDeviceCommercialGatewayTest {
         }
 
         override fun delete(record: SecureCommercialRecord): Boolean {
+            if (record in failedDeletes) return false
             values.remove(record)
             return true
         }

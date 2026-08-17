@@ -18,6 +18,7 @@ internal enum class DebugEntitlementScenario {
     TRIAL,
     EXPIRED,
     QUERY_ERROR,
+    REVOKED,
     PRO
 }
 
@@ -236,6 +237,9 @@ internal class FixtureDeviceCommerceTransport(
         val identityResult = ensureIdentity(challenge)
         if (identityResult is IdentityResult.Failure) return identityResult.response
         val identity = (identityResult as IdentityResult.Success).identity
+        if (entitlementScenario == DebugEntitlementScenario.REVOKED) {
+            identity.pro = false
+        }
         if (identity.pro || entitlementScenario == DebugEntitlementScenario.PRO) {
             identity.pro = true
             return accessSuccess("licensed", identity, CommercialTier.PRO)
@@ -271,6 +275,10 @@ internal class FixtureDeviceCommerceTransport(
         if (identity.publicKeyBase64 != challenge.publicKeyBase64) {
             return failure(409, "device_key_mismatch")
         }
+        if (entitlementScenario == DebugEntitlementScenario.REVOKED) {
+            identity.pro = false
+            return failure(403, "entitlement_revoked", JSONObject().put("status", "revoked"))
+        }
         if (identity.pro) return accessSuccess("licensed", identity, CommercialTier.PRO)
         return when (entitlementScenario) {
             DebugEntitlementScenario.QUERY_ERROR -> throw IOException("fixture network unavailable")
@@ -287,6 +295,9 @@ internal class FixtureDeviceCommerceTransport(
                     JSONObject().put("status", "expired")
                         .put("trialEndsAt", utc(requireNotNull(identity.trialEndsAtEpochMs)))
                 )
+            }
+            DebugEntitlementScenario.REVOKED -> {
+                failure(403, "entitlement_revoked", JSONObject().put("status", "revoked"))
             }
             DebugEntitlementScenario.TRIAL -> {
                 identity.pro = false
@@ -431,7 +442,13 @@ internal class FixtureDeviceCommerceTransport(
             existing.publicKey = challenge.publicKey
             existing.keyVersion += 1
         }
-        val tier = if (recoveryGrantsPro) CommercialTier.PRO else CommercialTier.TRIAL
+        val tier = if (entitlementScenario == DebugEntitlementScenario.REVOKED) {
+            CommercialTier.TRIAL
+        } else if (recoveryGrantsPro) {
+            CommercialTier.PRO
+        } else {
+            CommercialTier.TRIAL
+        }
         existing.pro = tier == CommercialTier.PRO
         val response = JSONObject()
             .put("status", if (tier == CommercialTier.PRO) "licensed" else "trial_active")

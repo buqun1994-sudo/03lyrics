@@ -51,12 +51,17 @@ internal class DebugCommercialRuntime private constructor(
         }
 
     fun selectEntitlementScenario(scenario: DebugEntitlementScenario) {
+        if (scenario == DebugEntitlementScenario.REVOKED) {
+            fixtureTransport?.entitlementScenario = scenario
+            return
+        }
         fixtureTransport?.resetIdentityState()
         fixtureTransport?.entitlementScenario = scenario
         fixtureTransport?.paymentOutcome = DebugPaymentOutcome.PENDING
         store.delete(SecureCommercialRecord.POLL_TOKEN)
         store.delete(SecureCommercialRecord.PURCHASE_SESSION)
         store.delete(SecureCommercialRecord.LICENSE)
+        store.delete(SecureCommercialRecord.ACCESS_REVOCATION)
         store.delete(SecureCommercialRecord.LICENSE_CLOCK)
         store.delete(SecureCommercialRecord.DEVICE_TOKEN)
         store.delete(SecureCommercialRecord.DEVICE_KEY_VERSION)

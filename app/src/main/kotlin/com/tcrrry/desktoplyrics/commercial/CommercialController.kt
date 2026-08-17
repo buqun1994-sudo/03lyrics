@@ -1,6 +1,7 @@
 package com.tcrrry.desktoplyrics.commercial
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -12,13 +13,20 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+enum class CommercialAccessUpdate {
+    RECHECK,
+    REVOKED
+}
+
 class CommercialController(
     private val gateway: DeviceCommercialGateway,
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
     private val onStateChanged: (CommercialUiState) -> Unit,
-    private val onAccessMayHaveChanged: () -> Unit
+    private val onAccessMayHaveChanged: (CommercialAccessUpdate) -> Unit,
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val workDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
     private val stateMachine = CommercialStateMachine()
     private var operation: Job? = null
     private var paymentPolling: Job? = null
@@ -43,14 +51,24 @@ class CommercialController(
             when (val result = gateway.queryEntitlement(nowEpochMs())) {
                 is EntitlementQueryResult.Ready -> {
                     publishFromOperation(CommercialAction.QueryCompleted(result.snapshot))
-                    notifyAccessChangedFromOperation()
+                    notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                     result.snapshot.pendingPayment?.let { session ->
-                        withContext(Dispatchers.Main.immediate) { startPaymentPolling(session) }
+                        withContext(mainDispatcher) { startPaymentPolling(session) }
                     }
                 }
                 is EntitlementQueryResult.Failure -> {
+                    val update = if (result.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
+                        CommercialAccessUpdate.REVOKED
+                    } else {
+                        CommercialAccessUpdate.RECHECK
+                    }
+                    if (update == CommercialAccessUpdate.REVOKED) {
+                        notifyAccessChangedFromOperation(update)
+                    }
                     publishFromOperation(CommercialAction.QueryFailed(result.reason))
-                    notifyAccessChangedFromOperation()
+                    if (update != CommercialAccessUpdate.REVOKED) {
+                        notifyAccessChangedFromOperation(update)
+                    }
                 }
             }
         }
@@ -87,7 +105,7 @@ class CommercialController(
             when (val result = gateway.createPayment(quote, method, nowEpochMs())) {
                 is PaymentCreationResult.Ready -> {
                     publishFromOperation(CommercialAction.PaymentCreated(result.session))
-                    withContext(Dispatchers.Main.immediate) {
+                    withContext(mainDispatcher) {
                         startPaymentPolling(result.session)
                     }
                 }
@@ -95,7 +113,7 @@ class CommercialController(
                     publishFromOperation(
                         CommercialAction.PaymentAlreadyOwned(quote.finalPrice)
                     )
-                    notifyAccessChangedFromOperation()
+                    notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                 }
                 is PaymentCreationResult.QuoteChanged -> {
                     publishFromOperation(
@@ -127,7 +145,7 @@ class CommercialController(
             when (val result = gateway.restorePurchase(nowEpochMs())) {
                 is PurchaseRecoveryResult.Success -> {
                     publishFromOperation(CommercialAction.RecoverySucceeded(result.entitlement))
-                    notifyAccessChangedFromOperation()
+                    notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                 }
                 PurchaseRecoveryResult.NotFound -> {
                     publishFromOperation(CommercialAction.RecoveryNotFound)
@@ -136,6 +154,9 @@ class CommercialController(
                     publishFromOperation(CommercialAction.RecoveryNetworkFailed)
                 }
                 is PurchaseRecoveryResult.Failure -> {
+                    if (result.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
+                        notifyAccessChangedFromOperation(CommercialAccessUpdate.REVOKED)
+                    }
                     publishFromOperation(CommercialAction.RecoveryFailed(result.reason))
                 }
             }
@@ -195,7 +216,7 @@ class CommercialController(
     }
 
     private suspend fun pollOnce(session: PaymentSession): Boolean {
-        return when (val result = withContext(Dispatchers.IO) {
+        return when (val result = withContext(workDispatcher) {
             gateway.refreshPayment(session, nowEpochMs())
         }) {
             PaymentStatusResult.Pending -> {
@@ -204,7 +225,7 @@ class CommercialController(
             }
             PaymentStatusResult.Paid -> {
                 publish(CommercialAction.PaymentPaid)
-                onAccessMayHaveChanged()
+                onAccessMayHaveChanged(CommercialAccessUpdate.RECHECK)
                 false
             }
             PaymentStatusResult.Expired -> {
@@ -212,6 +233,9 @@ class CommercialController(
                 false
             }
             is PaymentStatusResult.Failure -> {
+                if (result.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
+                    onAccessMayHaveChanged(CommercialAccessUpdate.REVOKED)
+                }
                 publish(CommercialAction.PaymentRefreshFailed(result.reason))
                 result.reason == CommercialFailure.NETWORK ||
                     result.reason == CommercialFailure.RATE_LIMITED
@@ -228,7 +252,7 @@ class CommercialController(
         startingAction?.let(::publish)
         operation = scope.launch {
             try {
-                withContext(Dispatchers.IO) { block() }
+                withContext(workDispatcher) { block() }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -243,10 +267,10 @@ class CommercialController(
     }
 
     private suspend fun publishFromOperation(action: CommercialAction) {
-        withContext(Dispatchers.Main.immediate) { publish(action) }
+        withContext(mainDispatcher) { publish(action) }
     }
 
-    private suspend fun notifyAccessChangedFromOperation() {
-        withContext(Dispatchers.Main.immediate) { onAccessMayHaveChanged() }
+    private suspend fun notifyAccessChangedFromOperation(update: CommercialAccessUpdate) {
+        withContext(mainDispatcher) { onAccessMayHaveChanged(update) }
     }
 }

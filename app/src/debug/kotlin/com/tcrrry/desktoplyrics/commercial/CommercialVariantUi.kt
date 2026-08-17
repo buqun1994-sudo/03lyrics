@@ -21,6 +21,7 @@ object CommercialVariantUi {
                 "trial" -> DebugEntitlementScenario.TRIAL
                 "expired" -> DebugEntitlementScenario.EXPIRED
                 "error" -> DebugEntitlementScenario.QUERY_ERROR
+                "revoked" -> DebugEntitlementScenario.REVOKED
                 "pro" -> DebugEntitlementScenario.PRO
                 else -> null
             }

@@ -2,7 +2,10 @@ package com.tcrrry.desktoplyrics
 
 import com.tcrrry.desktoplyrics.commercial.CommercialAccessDecision
 import com.tcrrry.desktoplyrics.commercial.CommercialAccessDenial
+import com.tcrrry.desktoplyrics.commercial.CommercialAccessRefreshResult
+import com.tcrrry.desktoplyrics.commercial.CommercialFailure
 import com.tcrrry.desktoplyrics.commercial.CommercialTier
+import com.tcrrry.desktoplyrics.commercial.EntitlementState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -85,6 +88,87 @@ class SettingsBehaviorTest {
 
         assertEquals(LyricsStartupOutcome.USER_STOPPED, decision)
         assertTrue(decision.clearsAutoStart)
+    }
+
+    @Test
+    fun `explicit commercial revocation always enters recovery without clearing auto start`() {
+        val decision = LyricsStartupPolicy.decide(
+            action = LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_REVOKED,
+            overlayAccess = true,
+            notificationAccess = true
+        )
+
+        assertEquals(LyricsStartupOutcome.COMMERCIAL_RECOVERY, decision)
+        assertFalse(decision.clearsAutoStart)
+    }
+
+    @Test
+    fun `commercial cloud refresh runs once for a new service lifecycle`() {
+        assertTrue(
+            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+                LyricsOverlayService.ACTION_START,
+                alreadyStarted = false
+            )
+        )
+        assertTrue(
+            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+                LyricsOverlayService.ACTION_SETTINGS_OPENED,
+                alreadyStarted = false
+            )
+        )
+        assertFalse(
+            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+                LyricsOverlayService.ACTION_START,
+                alreadyStarted = true
+            )
+        )
+        assertFalse(
+            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+                LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_CHANGED,
+                alreadyStarted = false
+            )
+        )
+        assertFalse(
+            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+                LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_REVOKED,
+                alreadyStarted = false
+            )
+        )
+        assertFalse(
+            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+                LyricsOverlayService.ACTION_STOP,
+                alreadyStarted = false
+            )
+        )
+    }
+
+    @Test
+    fun `startup cloud refresh only overrides local access for authoritative denial`() {
+        val localPro = CommercialAccessDecision.Allowed(CommercialTier.PRO, 20_000L)
+
+        assertEquals(
+            localPro,
+            LyricsCommercialStartupRefreshPolicy.reconcile(
+                CommercialAccessRefreshResult.Failure(CommercialFailure.NETWORK),
+                localPro
+            )
+        )
+        assertEquals(
+            CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED),
+            LyricsCommercialStartupRefreshPolicy.reconcile(
+                CommercialAccessRefreshResult.Failure(
+                    CommercialFailure.ENTITLEMENT_REVOKED
+                ),
+                localPro
+            )
+        )
+        assertEquals(
+            CommercialAccessDecision.Denied(CommercialAccessDenial.LICENSE_EXPIRED),
+            LyricsCommercialStartupRefreshPolicy.reconcile(
+                CommercialAccessRefreshResult.Ready(EntitlementState.Expired),
+                localPro
+            )
+        )
     }
 
     @Test

@@ -19,6 +19,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.tcrrry.desktoplyrics.commercial.CommercialAccessUpdate
 import com.tcrrry.desktoplyrics.commercial.CommercialController
 import com.tcrrry.desktoplyrics.commercial.CommercialRuntimeFactory
 import com.tcrrry.desktoplyrics.commercial.CommercialSettingsRenderer
@@ -487,7 +488,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshCommercialAccess() {
+    private fun refreshCommercialAccess(update: CommercialAccessUpdate) {
+        if (update == CommercialAccessUpdate.REVOKED) {
+            val intent = Intent(this, LyricsOverlayService::class.java).apply {
+                action = LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_REVOKED
+            }
+            if (LyricsOverlayService.isRunning) {
+                startService(intent)
+            } else {
+                ContextCompat.startForegroundService(this, intent)
+            }
+            return
+        }
         if (!LyricsStartupPolicy.hasRequiredAccess(
                 overlayAccess = Settings.canDrawOverlays(this),
                 notificationAccess = hasNotificationListenerAccess()

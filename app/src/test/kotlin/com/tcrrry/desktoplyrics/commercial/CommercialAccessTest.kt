@@ -22,6 +22,21 @@ class CommercialAccessTest {
     }
 
     @Test
+    fun `revocation marker takes precedence over any stored license`() {
+        val store = FakeStore().apply {
+            values[SecureCommercialRecord.ACCESS_REVOCATION] = byteArrayOf(1)
+            values[SecureCommercialRecord.LICENSE] = byteArrayOf(1)
+        }
+
+        val result = VerifiedLicenseAccessGate(store, verifier()).evaluate(NOW)
+
+        assertEquals(
+            CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED),
+            result
+        )
+    }
+
+    @Test
     fun `license clock rollback fails closed`() {
         val store = FakeStore().apply {
             values[SecureCommercialRecord.LICENSE_CLOCK] =

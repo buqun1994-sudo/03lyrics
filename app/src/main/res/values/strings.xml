@@ -94,6 +94,7 @@
     <string name="notification_recovery_missing_notification_access">播放状态授权已失效，点按打开设置</string>
     <string name="notification_commercial_title">03歌词权益需要确认</string>
     <string name="notification_commercial_expired">试用已到期，点按查看权益</string>
+    <string name="notification_commercial_revoked">Pro 权益已撤销，点按重新确认</string>
     <string name="notification_commercial_configuration_missing">正式商业服务尚未配置，歌词运行资源未启动</string>
     <string name="notification_commercial_unavailable">当前无法确认权益，点按查看详情</string>
     <string name="accessibility_restart_lyrics">重启悬浮歌词，歌词显示异常时手动恢复</string>

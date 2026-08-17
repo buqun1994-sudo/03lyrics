@@ -204,6 +204,11 @@ sealed interface EntitlementQueryResult {
     data class Failure(val reason: CommercialFailure) : EntitlementQueryResult
 }
 
+sealed interface CommercialAccessRefreshResult {
+    data class Ready(val entitlement: EntitlementState) : CommercialAccessRefreshResult
+    data class Failure(val reason: CommercialFailure) : CommercialAccessRefreshResult
+}
+
 sealed interface QuoteRequestResult {
     data class Ready(val quote: ProductQuote) : QuoteRequestResult
     data class Failure(val reason: CommercialFailure) : QuoteRequestResult
@@ -232,6 +237,15 @@ sealed interface PurchaseRecoveryResult {
 }
 
 interface DeviceCommercialGateway {
+    suspend fun refreshAccess(nowEpochMs: Long): CommercialAccessRefreshResult = when (
+        val result = queryEntitlement(nowEpochMs)
+    ) {
+        is EntitlementQueryResult.Ready -> {
+            CommercialAccessRefreshResult.Ready(result.snapshot.entitlement)
+        }
+        is EntitlementQueryResult.Failure -> CommercialAccessRefreshResult.Failure(result.reason)
+    }
+
     suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult
 
     suspend fun requestQuote(discountCode: String, nowEpochMs: Long): QuoteRequestResult

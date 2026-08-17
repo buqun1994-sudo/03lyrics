@@ -1,5 +1,6 @@
 package com.tcrrry.desktoplyrics.commercial
 
+import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -8,6 +9,47 @@ import org.junit.Test
 
 class CommercialStateMachineTest {
     private val discountedQuote = quote()
+
+    @Test
+    fun `revoked access is signaled before the revoked state is rendered`() {
+        val events = mutableListOf<String>()
+        val controller = CommercialController(
+            gateway = object : DeviceCommercialGateway {
+                override suspend fun queryEntitlement(nowEpochMs: Long) =
+                    EntitlementQueryResult.Failure(CommercialFailure.ENTITLEMENT_REVOKED)
+
+                override suspend fun requestQuote(discountCode: String, nowEpochMs: Long) =
+                    error("unused")
+
+                override suspend fun createPayment(
+                    quote: ProductQuote,
+                    method: PaymentMethod,
+                    nowEpochMs: Long
+                ) = error("unused")
+
+                override suspend fun refreshPayment(
+                    session: PaymentSession,
+                    nowEpochMs: Long
+                ) = error("unused")
+
+                override suspend fun restorePurchase(nowEpochMs: Long) = error("unused")
+            },
+            onStateChanged = { state ->
+                val error = state.entitlement as? EntitlementState.Error
+                if (error?.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
+                    events += "render_revoked"
+                }
+            },
+            onAccessMayHaveChanged = { update -> events += "access_$update" },
+            mainDispatcher = Dispatchers.Unconfined,
+            workDispatcher = Dispatchers.Unconfined
+        )
+
+        controller.reloadEntitlement()
+        controller.close()
+
+        assertEquals(listOf("access_REVOKED", "render_revoked"), events)
+    }
 
     @Test
     fun `trial binds gateway quote without calculating price`() {
