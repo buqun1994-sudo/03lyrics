@@ -41,11 +41,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cacheNavigationItem: NavigationItem
     private lateinit var searchNavigationItem: NavigationItem
     private lateinit var commercialNavigationItem: NavigationItem
+    private lateinit var aboutNavigationItem: NavigationItem
     private lateinit var displayContent: View
     private lateinit var systemContent: View
     private lateinit var cacheContent: View
     private lateinit var searchContent: View
     private lateinit var commercialContent: View
+    private lateinit var aboutContent: View
+    private lateinit var aboutTermsQr: ImageView
     private lateinit var contentScroll: ScrollView
     private lateinit var lyricsSettingsRenderer: LyricsSettingsRenderer
     private lateinit var commercialRenderer: CommercialSettingsRenderer
@@ -112,11 +115,19 @@ class MainActivity : AppCompatActivity() {
             R.id.settings_navigation_entitlement_icon,
             R.id.settings_navigation_entitlement_label
         )
+        aboutNavigationItem = navigationItem(
+            R.id.settings_navigation_about,
+            R.id.settings_navigation_about_icon,
+            R.id.settings_navigation_about_label
+        )
         displayContent = findViewById(R.id.settings_display_content)
         systemContent = findViewById(R.id.settings_system_content)
         cacheContent = findViewById(R.id.settings_cache_content)
         searchContent = findViewById(R.id.settings_search_content)
         commercialContent = findViewById(R.id.settings_commercial_content)
+        aboutContent = findViewById(R.id.settings_about_content)
+        aboutTermsQr = findViewById(R.id.about_terms_qr)
+        renderAboutContent()
         contentScroll = findViewById(R.id.settings_content_scroll)
 
         lyricsSettingsRenderer = LyricsSettingsRenderer(
@@ -161,6 +172,7 @@ class MainActivity : AppCompatActivity() {
             commercialController.showEntitlementPage()
             showSection(SettingsSection.COMMERCIAL)
         }
+        aboutNavigationItem.container.setOnClickListener { showSection(SettingsSection.ABOUT) }
 
         commercialRenderer = CommercialSettingsRenderer(
             root = findViewById(android.R.id.content),
@@ -187,6 +199,7 @@ class MainActivity : AppCompatActivity() {
         )
         commercialController = CommercialController(
             gateway = CommercialRuntimeFactory.gateway(this),
+            coordinator = CommercialRuntimeFactory.entitlementCoordinator(this),
             onStateChanged = ::renderCommercialState,
             onAccessMayHaveChanged = ::refreshCommercialAccess
         )
@@ -209,6 +222,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        CommercialVariantUi.handleDiagnosticResume(this, intent)
         if (renderedNightMode != isNightMode()) {
             recreate()
             return
@@ -461,7 +475,8 @@ class MainActivity : AppCompatActivity() {
             systemNavigationItem,
             cacheNavigationItem,
             searchNavigationItem,
-            commercialNavigationItem
+            commercialNavigationItem,
+            aboutNavigationItem
         ).filterNot { it === selectedItem }.forEach(::setNavigationUnselected)
         setNavigationSelected(selectedItem)
         selectedItem.container.isSelected = true
@@ -483,6 +498,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             View.GONE
         }
+        aboutContent.visibility = if (section == SettingsSection.ABOUT) View.VISIBLE else View.GONE
         renderNavigation()
         contentScroll.post { contentScroll.scrollTo(0, 0) }
     }
@@ -493,6 +509,17 @@ class MainActivity : AppCompatActivity() {
         SettingsSection.CACHE -> cacheNavigationItem
         SettingsSection.SEARCH -> searchNavigationItem
         SettingsSection.COMMERCIAL -> commercialNavigationItem
+        SettingsSection.ABOUT -> aboutNavigationItem
+    }
+
+    private fun renderAboutContent() {
+        aboutTermsQr.setImageBitmap(
+            TermsQrCodeGenerator.createBitmap(
+                BuildConfig.USER_AGREEMENT_URL,
+                resources.getDimensionPixelSize(R.dimen.about_terms_qr_size)
+            )
+        )
+        aboutTermsQr.contentDescription = getString(R.string.accessibility_about_terms_qr)
     }
 
     private fun navigationItem(containerId: Int, iconId: Int, labelId: Int) = NavigationItem(
@@ -726,7 +753,8 @@ class MainActivity : AppCompatActivity() {
         SERVICE,
         CACHE,
         SEARCH,
-        COMMERCIAL;
+        COMMERCIAL,
+        ABOUT;
 
         companion object {
             fun from(value: String?): SettingsSection = entries.firstOrNull { it.name == value }

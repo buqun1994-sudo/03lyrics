@@ -44,10 +44,20 @@ sealed interface CommercialAccessDecision {
     data class Allowed(
         val tier: CommercialTier,
         val expiresAtEpochMs: Long?,
-        val refreshAfterEpochMs: Long? = null
+        val refreshAfterEpochMs: Long? = null,
+        /** Signed trial boundary, when the tier is TRIAL. */
+        val trialEndsAtEpochMs: Long? = null,
+        /** Raw signed Pro offline boundary, retained for diagnostics. */
+        val offlineGraceUntilEpochMs: Long? = null
     ) : CommercialAccessDecision
 
-    data class Denied(val reason: CommercialAccessDenial) : CommercialAccessDecision
+    data class Denied(
+        val reason: CommercialAccessDenial,
+        /** Retained only for a locally verified expired license diagnostic. */
+        val trialEndsAtEpochMs: Long? = null,
+        val expiresAtEpochMs: Long? = null,
+        val offlineGraceUntilEpochMs: Long? = null
+    ) : CommercialAccessDecision
 }
 
 fun interface CommercialAccessGate {
@@ -94,12 +104,22 @@ class VerifiedLicenseAccessGate(
             .getOrElse { return denied(CommercialAccessDenial.INVALID_LICENSE) }
         val verified = verifier.verify(envelope, nowEpochMs)
         if (verified is LicenseVerificationResult.Invalid) {
+            val expiredClaims = if (
+                verified.reason == LicenseVerificationFailure.EXPIRED
+            ) {
+                verifier.readSignedClaims(envelope)
+            } else {
+                null
+            }
             return denied(
                 when (verified.reason) {
                     LicenseVerificationFailure.EXPIRED -> CommercialAccessDenial.LICENSE_EXPIRED
                     LicenseVerificationFailure.DEVICE -> CommercialAccessDenial.DEVICE_MISMATCH
                     else -> CommercialAccessDenial.INVALID_LICENSE
-                }
+                },
+                trialEndsAtEpochMs = expiredClaims?.trialEndsAtEpochMs,
+                expiresAtEpochMs = expiredClaims?.expiresAtEpochMs,
+                offlineGraceUntilEpochMs = expiredClaims?.offlineGraceUntilEpochMs
             )
         }
 
@@ -110,14 +130,26 @@ class VerifiedLicenseAccessGate(
         val claims = (verified as LicenseVerificationResult.Valid).claims
         return CommercialAccessDecision.Allowed(
             tier = claims.tier,
-            expiresAtEpochMs = claims.offlineGraceUntilEpochMs,
+            expiresAtEpochMs = claims.finalAccessUntilEpochMs(),
             refreshAfterEpochMs = claims.expiresAtEpochMs.takeIf {
-                it < claims.offlineGraceUntilEpochMs
-            }
+                it < claims.finalAccessUntilEpochMs()
+            },
+            trialEndsAtEpochMs = claims.trialEndsAtEpochMs,
+            offlineGraceUntilEpochMs = claims.offlineGraceUntilEpochMs
         )
     }
 
-    private fun denied(reason: CommercialAccessDenial) = CommercialAccessDecision.Denied(reason)
+    private fun denied(
+        reason: CommercialAccessDenial,
+        trialEndsAtEpochMs: Long? = null,
+        expiresAtEpochMs: Long? = null,
+        offlineGraceUntilEpochMs: Long? = null
+    ) = CommercialAccessDecision.Denied(
+        reason = reason,
+        trialEndsAtEpochMs = trialEndsAtEpochMs,
+        expiresAtEpochMs = expiresAtEpochMs,
+        offlineGraceUntilEpochMs = offlineGraceUntilEpochMs
+    )
 }
 
 class FirstOpenTrialRepository(

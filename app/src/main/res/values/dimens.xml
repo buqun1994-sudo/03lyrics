@@ -47,6 +47,11 @@
     <dimen name="settings_compact_text_primary">23sp</dimen>
     <dimen name="settings_compact_text_secondary">18sp</dimen>
 
+    <dimen name="about_terms_card_min_height">500dp</dimen>
+    <dimen name="about_terms_card_padding">36dp</dimen>
+    <dimen name="about_terms_qr_size">360dp</dimen>
+    <dimen name="about_terms_qr_spacing">24dp</dimen>
+
     <dimen name="settings_window_radius">20dp</dimen>
     <dimen name="settings_control_radius">20dp</dimen>
     <dimen name="settings_selected_radius">14dp</dimen>
@@ -90,6 +95,7 @@
     <dimen name="commercial_order_apply_width">110dp</dimen>
     <dimen name="commercial_order_final_price_text">40sp</dimen>
     <dimen name="commercial_page_edge_margin">64dp</dimen>
+    <dimen name="commercial_status_action_gap">24dp</dimen>
     <dimen name="commercial_marketing_vertical_offset">-18dp</dimen>
     <dimen name="commercial_pro_icon_size">72dp</dimen>
     <dimen name="commercial_pro_title_spacing">18dp</dimen>

@@ -107,6 +107,16 @@ internal enum class LyricsOverlayVisibility {
     HIDDEN
 }
 
+/**
+ * Leases from cooperating applications describe which part of the display they
+ * occupy. A full-display lease has higher visibility priority than a desktop
+ * region lease, while the policy remains the sole owner of the final result.
+ */
+internal data class IcarExternalSurfaceOccupancy(
+    val desktopRegionOccupied: Boolean = false,
+    val fullDisplayOccupied: Boolean = false,
+)
+
 internal data class IcarLyricsPresentation(
     val surfaceMode: LyricsSurfaceMode,
     val visibility: LyricsOverlayVisibility,
@@ -142,15 +152,21 @@ internal object IcarLyricsPresentationPolicy {
         displayState: IcarDisplayState?,
         wallpaperLyricsEnabled: Boolean,
         localSettingsOpen: Boolean,
-        desktopSurfaceOccupied: Boolean,
+        externalSurfaceOccupancy: IcarExternalSurfaceOccupancy,
         rightDockState: IcarRightDockWindowState
     ): IcarLyricsPresentation {
         val baseSurface = IcarLyricsSurfacePolicy.effectiveSurfaceMode(
             displayState = displayState,
             wallpaperLyricsEnabled = wallpaperLyricsEnabled,
             localSettingsOpen = localSettingsOpen,
-            desktopSurfaceOccupied = desktopSurfaceOccupied
+            desktopSurfaceOccupied = externalSurfaceOccupancy.desktopRegionOccupied
         )
+        if (externalSurfaceOccupancy.fullDisplayOccupied) {
+            return IcarLyricsPresentation(
+                surfaceMode = baseSurface,
+                visibility = LyricsOverlayVisibility.HIDDEN
+            )
+        }
         if (displayState?.climatePageOccupancy != IcarClimatePageOccupancy.CLEAR) {
             return IcarLyricsPresentation(
                 surfaceMode = baseSurface,

@@ -37,6 +37,21 @@ val debugCommerceEnvironment = providers.gradleProperty("deviceCommerceEnvironme
     .get()
     .trim()
     .lowercase()
+val userAgreementEnvironment = providers.gradleProperty("userAgreementEnvironment")
+    .orElse("staging")
+    .get()
+    .trim()
+    .lowercase()
+require(userAgreementEnvironment in setOf("staging", "production")) {
+    "User agreement environment must be staging or production"
+}
+val stagingUserAgreementUrl = "https://staging.9studio.fun/icar03/terms"
+val productionUserAgreementUrl = "https://9.9studio.fun/icar03/terms"
+val debugUserAgreementUrl = when (userAgreementEnvironment) {
+    "staging" -> stagingUserAgreementUrl
+    "production" -> productionUserAgreementUrl
+    else -> error("Unsupported user agreement environment: $userAgreementEnvironment")
+}
 val stagingCommerceApiBaseUrl = providers.gradleProperty("deviceCommerceStagingApiBaseUrl")
     .orElse("")
     .get()
@@ -192,6 +207,16 @@ android {
                 "DEVICE_COMMERCE_EXPECTED_SIGNING_CERT_SHA256",
                 stagingSigningCertSha256.asBuildConfigString()
             )
+            buildConfigField(
+                "String",
+                "USER_AGREEMENT_ENVIRONMENT",
+                userAgreementEnvironment.asBuildConfigString()
+            )
+            buildConfigField(
+                "String",
+                "USER_AGREEMENT_URL",
+                debugUserAgreementUrl.asBuildConfigString()
+            )
         }
         release {
             signingConfigs.findByName("release")?.let { signingConfig = it }
@@ -221,6 +246,12 @@ android {
                 "DEVICE_COMMERCE_EXPECTED_SIGNING_CERT_SHA256",
                 productionSigningCertSha256.asBuildConfigString()
             )
+            buildConfigField("String", "USER_AGREEMENT_ENVIRONMENT", "production".asBuildConfigString())
+            buildConfigField(
+                "String",
+                "USER_AGREEMENT_URL",
+                productionUserAgreementUrl.asBuildConfigString()
+            )
         }
     }
 
@@ -249,6 +280,7 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

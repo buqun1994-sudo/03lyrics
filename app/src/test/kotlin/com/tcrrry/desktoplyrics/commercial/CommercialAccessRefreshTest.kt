@@ -1,6 +1,7 @@
 package com.tcrrry.desktoplyrics.commercial
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class CommercialAccessRefreshTest {
@@ -118,5 +120,103 @@ class CommercialAccessRefreshTest {
         release.complete(Unit)
         assertEquals(100L, settings.await())
         requestScope.cancel()
+    }
+
+    @Test
+    fun `coordinator preserves local trial and exposes its signed remaining time on network failure`() =
+        runBlocking {
+            val now = 10_000L
+            val trialEndsAt = 20_000L
+            val snapshots = mutableListOf<EntitlementSnapshot>()
+            val coordinator = CommercialEntitlementCoordinator(
+                gateway = StubGateway(
+                    queryResult = EntitlementQueryResult.Failure(CommercialFailure.NETWORK)
+                ),
+                accessGate = CommercialAccessGate {
+                    CommercialAccessDecision.Allowed(
+                        tier = CommercialTier.TRIAL,
+                        expiresAtEpochMs = trialEndsAt,
+                        trialEndsAtEpochMs = trialEndsAt
+                    )
+                },
+                nowEpochMs = { now }
+            )
+            coordinator.addListener(snapshots::add)
+
+            val result = coordinator.queryEntitlement(forceRemote = true)
+
+            val ready = result as EntitlementQueryResult.Ready
+            assertEquals(EntitlementState.Trial(trialEndsAt, 10_000L), ready.snapshot.entitlement)
+            assertEquals(ready.snapshot, snapshots.single())
+            val diagnostic = coordinator.diagnostic()
+            assertEquals(CommercialTier.TRIAL, diagnostic.tier)
+            assertEquals(trialEndsAt, diagnostic.trialEndsAtEpochMs)
+            assertEquals(10_000L, diagnostic.remainingMillis)
+        }
+
+    @Test
+    fun `listener failure cannot turn a successful entitlement query into unknown`() = runBlocking {
+        val snapshot = EntitlementSnapshot(EntitlementState.Pro, quote = null)
+        val coordinator = CommercialEntitlementCoordinator(
+            gateway = StubGateway(queryResult = EntitlementQueryResult.Ready(snapshot)),
+            accessGate = CommercialAccessGate {
+                CommercialAccessDecision.Allowed(CommercialTier.PRO, expiresAtEpochMs = null)
+            },
+            nowEpochMs = { 1_000L }
+        )
+        coordinator.addListener { error("render failed") }
+
+        val result = coordinator.queryEntitlement()
+
+        assertEquals(EntitlementQueryResult.Ready(snapshot), result)
+        assertEquals(snapshot, coordinator.currentSnapshot())
+    }
+
+    @Test
+    fun `coordinator propagates cancellation instead of publishing unknown`() = runBlocking {
+        val coordinator = CommercialEntitlementCoordinator(
+            gateway = object : StubGateway(
+                EntitlementQueryResult.Failure(CommercialFailure.UNKNOWN)
+            ) {
+                override suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult {
+                    throw CancellationException("cancelled")
+                }
+            },
+            accessGate = CommercialAccessGate {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.NO_LICENSE)
+            }
+        )
+
+        try {
+            coordinator.queryEntitlement()
+            fail("query cancellation must propagate")
+        } catch (_: CancellationException) {
+            // Expected: a newer query or a closed controller owns cancellation.
+        }
+    }
+
+    private open class StubGateway(
+        var queryResult: EntitlementQueryResult
+    ) : DeviceCommercialGateway {
+        override suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult = queryResult
+
+        override suspend fun requestQuote(
+            discountCode: String,
+            nowEpochMs: Long
+        ): QuoteRequestResult = error("unused")
+
+        override suspend fun createPayment(
+            quote: ProductQuote,
+            method: PaymentMethod,
+            nowEpochMs: Long
+        ): PaymentCreationResult = error("unused")
+
+        override suspend fun refreshPayment(
+            session: PaymentSession,
+            nowEpochMs: Long
+        ): PaymentStatusResult = error("unused")
+
+        override suspend fun restorePurchase(nowEpochMs: Long): PurchaseRecoveryResult =
+            error("unused")
     }
 }

@@ -24,12 +24,22 @@ class CommercialController(
     private val onStateChanged: (CommercialUiState) -> Unit,
     private val onAccessMayHaveChanged: (CommercialAccessUpdate) -> Unit,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
-    private val workDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val workDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    coordinator: CommercialEntitlementCoordinator? = null
 ) {
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
     private val stateMachine = CommercialStateMachine()
+    private val entitlementCoordinator = coordinator ?: CommercialEntitlementCoordinator.forGateway(
+        gateway = gateway,
+        nowEpochMs = nowEpochMs
+    )
     private var operation: Job? = null
     private var paymentPolling: Job? = null
+    private val removeSnapshotListener: () -> Unit
+
+    init {
+        removeSnapshotListener = entitlementCoordinator.addListener(::onEntitlementSnapshot)
+    }
 
     val state: CommercialUiState
         get() = stateMachine.state
@@ -37,6 +47,7 @@ class CommercialController(
     fun start() = reloadEntitlement(forceRemote = false)
 
     fun close() {
+        removeSnapshotListener()
         operation?.cancel()
         paymentPolling?.cancel()
         scope.cancel()
@@ -50,14 +61,13 @@ class CommercialController(
             startingAction = CommercialAction.QueryStarted,
             failureAction = CommercialAction.QueryFailed(CommercialFailure.UNKNOWN)
         ) {
-            val result = if (forceRemote) {
-                gateway.forceQueryEntitlement(nowEpochMs())
-            } else {
-                gateway.queryEntitlement(nowEpochMs())
-            }
+            val result = entitlementCoordinator.queryEntitlement(
+                nowEpochMs = nowEpochMs(),
+                forceRemote = forceRemote
+            )
             when (result) {
                 is EntitlementQueryResult.Ready -> {
-                    publishFromOperation(CommercialAction.QueryCompleted(result.snapshot))
+                    applySnapshotFromOperation(result.snapshot)
                     notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                     result.snapshot.pendingPayment?.let { session ->
                         withContext(mainDispatcher) { startPaymentPolling(session) }
@@ -232,7 +242,7 @@ class CommercialController(
             }
             PaymentStatusResult.Paid -> {
                 publish(CommercialAction.PaymentPaid)
-                onAccessMayHaveChanged(CommercialAccessUpdate.RECHECK)
+                notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                 false
             }
             PaymentStatusResult.Expired -> {
@@ -241,7 +251,7 @@ class CommercialController(
             }
             is PaymentStatusResult.Failure -> {
                 if (result.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
-                    onAccessMayHaveChanged(CommercialAccessUpdate.REVOKED)
+                    notifyAccessChangedFromOperation(CommercialAccessUpdate.REVOKED)
                 }
                 publish(CommercialAction.PaymentRefreshFailed(result.reason))
                 result.reason == CommercialFailure.NETWORK ||
@@ -270,7 +280,7 @@ class CommercialController(
 
     private fun publish(action: CommercialAction) {
         val next = stateMachine.dispatch(action)
-        onStateChanged(next)
+        runCatching { onStateChanged(next) }
     }
 
     private suspend fun publishFromOperation(action: CommercialAction) {
@@ -278,6 +288,37 @@ class CommercialController(
     }
 
     private suspend fun notifyAccessChangedFromOperation(update: CommercialAccessUpdate) {
-        withContext(mainDispatcher) { onAccessMayHaveChanged(update) }
+        withContext(mainDispatcher) {
+            runCatching { onAccessMayHaveChanged(update) }
+        }
+    }
+
+    private fun onEntitlementSnapshot(snapshot: EntitlementSnapshot) {
+        scope.launch {
+            applySnapshotFromOperation(snapshot)
+            val pendingPayment = snapshot.pendingPayment
+            if (pendingPayment == null) {
+                // A service-side entitlement refresh can clear an old purchase
+                // session while this controller is still displaying the page.
+                // Stop that session's poller as soon as the shared snapshot
+                // says there is no pending payment left.
+                paymentPolling?.cancel()
+                paymentPolling = null
+            } else {
+                startPaymentPolling(pendingPayment)
+            }
+        }
+    }
+
+    private suspend fun applySnapshotFromOperation(snapshot: EntitlementSnapshot) {
+        withContext(mainDispatcher) {
+            val pending = (state.checkout as? CheckoutState.AwaitingPayment)?.session
+            if (state.entitlement != snapshot.entitlement ||
+                state.quote != snapshot.quote ||
+                pending != snapshot.pendingPayment
+            ) {
+                publish(CommercialAction.QueryCompleted(snapshot))
+            }
+        }
     }
 }

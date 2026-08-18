@@ -110,7 +110,7 @@ class LyricsOverlayService : Service() {
         CommercialRuntimeAccessGuard(
             nowEpochMs = System::currentTimeMillis,
             evaluateAccess = { now ->
-                CommercialRuntimeFactory.accessGate(this).evaluate(now)
+                CommercialRuntimeFactory.entitlementCoordinator(this).evaluate(now)
             },
             scheduleExpiry = { runnable, delayMillis ->
                 mainHandler.postDelayed(runnable, delayMillis)
@@ -144,7 +144,7 @@ class LyricsOverlayService : Service() {
     private var surfaceHandoffTarget: LyricsSurfaceMode? = null
     private var surfaceHandoffGeneration = 0L
     private var displayState: IcarDisplayState? = null
-    private var desktopSurfaceOccupied = false
+    private var externalSurfaceOccupancy = IcarExternalSurfaceOccupancy()
     private var rightDockState = IcarRightDockWindowState.UNKNOWN
     private var desktopVisibleRatioBasisPoints: Int? = null
     private var monitorStarted = false
@@ -208,10 +208,14 @@ class LyricsOverlayService : Service() {
             }
         }
     }
-    private val surfaceOccupancyListener: (Boolean) -> Unit = { occupied ->
-        if (desktopSurfaceOccupied != occupied) {
-            desktopSurfaceOccupied = occupied
-            Log.i(LOG_TAG, "External desktop surface occupancy=$occupied")
+    private val surfaceOccupancyListener: (IcarExternalSurfaceOccupancy) -> Unit = { occupancy ->
+        if (externalSurfaceOccupancy != occupancy) {
+            externalSurfaceOccupancy = occupancy
+            Log.i(
+                LOG_TAG,
+                "External surface occupancy desktop=${occupancy.desktopRegionOccupied} " +
+                    "fullDisplay=${occupancy.fullDisplayOccupied}"
+            )
             if (displayState != null || overlayRoot != null) applyCurrentSurface()
         }
     }
@@ -349,7 +353,7 @@ class LyricsOverlayService : Service() {
             return START_NOT_STICKY
         }
 
-        val commercialAccess = CommercialRuntimeFactory.accessGate(this)
+        val commercialAccess = CommercialRuntimeFactory.entitlementCoordinator(this)
             .evaluate(System.currentTimeMillis())
         val waitingForRefresh = beginCommercialStartupRefreshIfNeeded(intent, commercialAccess)
         if (systemDecision == LyricsStartupOutcome.RECOVERY) {
@@ -426,7 +430,7 @@ class LyricsOverlayService : Service() {
     private fun launchCommercialAccessRefresh() {
         commercialRefreshScope.launch {
             val result = try {
-                CommercialRuntimeFactory.gateway(this@LyricsOverlayService)
+                CommercialRuntimeFactory.entitlementCoordinator(this@LyricsOverlayService)
                     .refreshAccess(System.currentTimeMillis())
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -446,7 +450,7 @@ class LyricsOverlayService : Service() {
         resumeAfterCommercialStartupRefresh = false
         pendingCommercialStartupIntent = null
 
-        val localAccess = CommercialRuntimeFactory.accessGate(this)
+        val localAccess = CommercialRuntimeFactory.entitlementCoordinator(this)
             .evaluate(System.currentTimeMillis())
         val access = LyricsCommercialStartupRefreshPolicy.reconcile(result, localAccess)
         val resultLog = when (result) {
@@ -836,11 +840,11 @@ class LyricsOverlayService : Service() {
     }
 
     private fun restartRuntime() {
-        val preserveAutoStart = prefs.getBoolean(PREF_AUTO_START, false)
+        val preserveAutoStart = prefs.getBoolean(PREF_AUTO_START, AUTO_START_DEFAULT)
         releaseRuntimeResources()
         loadRuntimePreferences()
         startRuntime()
-        if (prefs.getBoolean(PREF_AUTO_START, false) != preserveAutoStart) {
+        if (prefs.getBoolean(PREF_AUTO_START, AUTO_START_DEFAULT) != preserveAutoStart) {
             prefs.edit().putBoolean(PREF_AUTO_START, preserveAutoStart).apply()
             Log.w(LOG_TAG, "Restored auto-start intent after runtime restart")
         }
@@ -1641,7 +1645,7 @@ class LyricsOverlayService : Service() {
             displayState = displayState,
             wallpaperLyricsEnabled = wallpaperLyricsEnabled,
             localSettingsOpen = localSettingsOpen,
-            desktopSurfaceOccupied = desktopSurfaceOccupied,
+            externalSurfaceOccupancy = externalSurfaceOccupancy,
             rightDockState = rightDockState
         )
 
@@ -2766,9 +2770,10 @@ class LyricsOverlayService : Service() {
         const val FONT_SCALE_MIN_PERCENT = 75
         const val FONT_SCALE_MAX_PERCENT = 150
         const val FONT_SCALE_DEFAULT_PERCENT = 100
+        const val AUTO_START_DEFAULT = true
         const val WALLPAPER_LYRICS_DEFAULT = true
         const val WALLPAPER_BLUR_DEFAULT = true
-        const val WALLPAPER_SHADOW_DEFAULT = false
+        const val WALLPAPER_SHADOW_DEFAULT = true
         const val LYRICS_TRANSLATION_DEFAULT = true
         const val START_SOURCE_BOOT_COMPLETED = "boot_completed"
         const val START_SOURCE_PACKAGE_REPLACED = "package_replaced"

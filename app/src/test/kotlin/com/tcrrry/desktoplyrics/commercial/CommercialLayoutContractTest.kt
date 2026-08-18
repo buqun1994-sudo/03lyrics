@@ -47,6 +47,35 @@ class CommercialLayoutContractTest {
     }
 
     @Test
+    fun `entitlement status and recovery feedback use the middle when no offer is present`() {
+        val content = File(
+            appDirectory,
+            "src/main/res/layout/content_settings_commercial.xml"
+        ).readText()
+        val renderer = File(
+            appDirectory,
+            "src/main/kotlin/com/tcrrry/desktoplyrics/commercial/CommercialSettingsRenderer.kt"
+        ).readText()
+        val statusStart = content.indexOf("@+id/commercial_entitlement_status_group")
+        val actionsStart = content.indexOf("@+id/commercial_entitlement_actions")
+        val recoveryFeedback = content.indexOf("@+id/commercial_restore_status")
+
+        assertTrue(content.contains("@+id/commercial_entitlement_status_slot"))
+        assertTrue(content.contains("android:layout_above=\"@id/commercial_entitlement_actions\""))
+        assertTrue(content.contains("android:layout_marginTop=\"@dimen/commercial_page_edge_margin\""))
+        assertTrue(content.contains("android:paddingBottom=\"@dimen/commercial_status_action_gap\""))
+        assertTrue(content.contains("android:layout_alignParentBottom=\"true\""))
+        assertTrue(content.contains("android:layout_gravity=\"center\""))
+        assertTrue(statusStart >= 0 && recoveryFeedback > statusStart)
+        assertTrue(actionsStart > recoveryFeedback)
+        assertTrue(renderer.contains("placeEntitlementStatusGroup(hasMarketingContent = canPurchase)"))
+        assertTrue(renderer.contains("Gravity.CENTER"))
+        assertTrue(renderer.contains("Gravity.TOP or Gravity.CENTER_HORIZONTAL"))
+        assertTrue(renderer.contains("ViewGroup.LayoutParams.MATCH_PARENT"))
+        assertTrue(renderer.contains("ViewGroup.LayoutParams.WRAP_CONTENT"))
+    }
+
+    @Test
     fun `commercial pages remove slogans and keep offer copy price focused`() {
         val content = File(
             appDirectory,
@@ -110,6 +139,7 @@ class CommercialLayoutContractTest {
         assertTrue(activity.contains("@+id/settings_navigation_cache_icon"))
         assertTrue(activity.contains("@+id/settings_navigation_search_icon"))
         assertTrue(activity.contains("@+id/settings_navigation_entitlement_icon"))
+        assertTrue(activity.contains("@+id/settings_navigation_about_icon"))
         assertTrue(activity.contains("android:layout_alignBottom=\"@id/settings_title_text\""))
         assertTrue(activity.contains("android:layout_toEndOf=\"@id/settings_title_text\""))
         assertTrue(activity.contains("android:layout_marginBottom=\"8dp\""))
@@ -118,6 +148,7 @@ class CommercialLayoutContractTest {
         assertTrue(strings.contains("<string name=\"settings_navigation_cache\">歌词缓存</string>"))
         assertTrue(strings.contains("<string name=\"settings_navigation_search\">歌词查找</string>"))
         assertTrue(strings.contains("<string name=\"settings_navigation_entitlement\">权益中心</string>"))
+        assertTrue(strings.contains("<string name=\"settings_navigation_about\">关于</string>"))
     }
 
     @Test
@@ -129,7 +160,7 @@ class CommercialLayoutContractTest {
         val dimens = File(appDirectory, "src/main/res/values/dimens.xml").readText()
 
         assertTrue(
-            Regex("@dimen/commercial_page_edge_margin").findAll(content).count() >= 4
+            Regex("@dimen/commercial_page_edge_margin").findAll(content).count() >= 3
         )
         assertTrue(content.contains("@dimen/commercial_marketing_vertical_offset"))
         assertTrue(content.contains("@dimen/commercial_order_total_padding_horizontal"))

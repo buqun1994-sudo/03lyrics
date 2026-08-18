@@ -12,6 +12,8 @@ internal sealed interface LocalLicenseState {
 
     data object Missing : LocalLicenseState
     data object Revoked : LocalLicenseState
+    /** The signed license is authentic, but its final offline window has ended. */
+    data class Expired(val claims: LicenseClaims?) : LocalLicenseState
     data class Invalid(val reason: CommercialAccessDenial) : LocalLicenseState
 }
 
@@ -71,6 +73,11 @@ class CommercialLicenseRepository(
         }
         val verified = verifier(identity, knownKeyVersion).verify(envelope, nowEpochMs)
         if (verified is LicenseVerificationResult.Invalid) {
+            if (verified.reason == LicenseVerificationFailure.EXPIRED) {
+                return LocalLicenseState.Expired(
+                    verifier(identity, knownKeyVersion).readSignedClaims(envelope)
+                )
+            }
             return LocalLicenseState.Invalid(verified.reason.toAccessDenial())
         }
         val claims = (verified as LicenseVerificationResult.Valid).claims
@@ -88,14 +95,24 @@ class CommercialLicenseRepository(
     ) {
         is LocalLicenseState.Valid -> CommercialAccessDecision.Allowed(
             tier = local.claims.tier,
-            expiresAtEpochMs = local.claims.offlineGraceUntilEpochMs,
-            refreshAfterEpochMs = automaticRefreshAfter(local.claims)
+            expiresAtEpochMs = local.claims.finalAccessUntilEpochMs(),
+            refreshAfterEpochMs = automaticRefreshAfter(local.claims),
+            trialEndsAtEpochMs = local.claims.trialEndsAtEpochMs,
+            offlineGraceUntilEpochMs = local.claims.offlineGraceUntilEpochMs
         )
         LocalLicenseState.Missing -> {
             CommercialAccessDecision.Denied(CommercialAccessDenial.NO_LICENSE)
         }
         LocalLicenseState.Revoked -> {
             CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED)
+        }
+        is LocalLicenseState.Expired -> {
+            CommercialAccessDecision.Denied(
+                reason = CommercialAccessDenial.LICENSE_EXPIRED,
+                trialEndsAtEpochMs = local.claims?.trialEndsAtEpochMs,
+                expiresAtEpochMs = local.claims?.expiresAtEpochMs,
+                offlineGraceUntilEpochMs = local.claims?.offlineGraceUntilEpochMs
+            )
         }
         is LocalLicenseState.Invalid -> CommercialAccessDecision.Denied(local.reason)
     }
@@ -188,7 +205,7 @@ class CommercialLicenseRepository(
     private fun automaticRefreshAfter(claims: LicenseClaims): Long? = maxOf(
         claims.expiresAtEpochMs,
         readRefreshRetryNotBefore() ?: claims.expiresAtEpochMs
-    ).takeIf { it < claims.offlineGraceUntilEpochMs }
+    ).takeIf { it < claims.finalAccessUntilEpochMs() }
 
     private fun readRefreshRetryNotBefore(): Long? {
         val persisted = when (val result = store.read(
@@ -348,7 +365,11 @@ class CloudDeviceCommercialGateway(
         val identity = runCatching { identityProvider.loadOrCreate() }.getOrElse {
             return AccessRefreshResult.Failure(CommercialFailure.STORAGE)
         }
-        val localValid = local as? LocalLicenseState.Valid
+        val localFallbackEntitlement = when (local) {
+            is LocalLicenseState.Valid -> local.entitlement
+            is LocalLicenseState.Expired -> EntitlementState.Expired
+            else -> null
+        }
         val hasStoredLicense = when (store.read(SecureCommercialRecord.LICENSE)) {
             is SecureStoreReadResult.Value -> true
             SecureStoreReadResult.Missing -> false
@@ -391,9 +412,9 @@ class CloudDeviceCommercialGateway(
                 return AccessRefreshResult.Failure(CommercialFailure.DEVICE_MISMATCH)
             }
             is RemoteEntitlement.Failure -> {
-                if (localValid != null && remote.allowLocalFallback) {
+                if (localFallbackEntitlement != null && remote.allowLocalFallback) {
                     licenseRepository.deferRefreshRetry(nowEpochMs)
-                    localValid.entitlement
+                    localFallbackEntitlement
                 } else {
                     return AccessRefreshResult.Failure(remote.reason)
                 }

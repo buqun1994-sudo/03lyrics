@@ -15,6 +15,9 @@ const packageName = "com.tcrrry.desktoplyrics";
 const activityName = `${packageName}/.MainActivity`;
 const occupancyLeaseAction = "com.tcrrry.icar.surface.action.ACQUIRE_OCCUPANCY_LEASE";
 const occupancyLeaseServiceName = "SurfaceOccupancyLeaseService";
+const fullDisplayOccupancyLeaseAction =
+  "com.tcrrry.icar.surface.action.ACQUIRE_FULL_DISPLAY_OCCUPANCY_LEASE";
+const fullDisplayOccupancyLeaseServiceName = "FullDisplayOccupancyLeaseService";
 const dockAccessibilityService = `${packageName}/${packageName}.IcarDockAccessibilityService`;
 const dockAccessibilityServiceShort = `${packageName}/.IcarDockAccessibilityService`;
 const notificationServiceRecord = `${packageName}/.MediaListenerService`;
@@ -296,6 +299,22 @@ if (!hasOccupancyLeaseProvider) {
   fail("已安装歌词 APK 未声明可发现的表面占用租约服务", occupancyLeaseProviders);
 }
 
+const fullDisplayOccupancyLeaseProviders = adbRun(
+  ["shell", "cmd", "package", "query-services", "--brief", "-a", fullDisplayOccupancyLeaseAction],
+  "无法查询全屏独占租约服务"
+).output;
+const hasFullDisplayOccupancyLeaseProvider = fullDisplayOccupancyLeaseProviders
+  .split(/\r?\n/)
+  .some((line) =>
+    line.includes(packageName) && line.includes(fullDisplayOccupancyLeaseServiceName)
+  );
+if (!hasFullDisplayOccupancyLeaseProvider) {
+  fail(
+    "已安装歌词 APK 未声明可发现的全屏独占租约服务",
+    fullDisplayOccupancyLeaseProviders
+  );
+}
+
 const activities = adbRun(
   ["shell", "dumpsys", "activity", "activities"],
   "无法读取前台页面"
@@ -338,6 +357,7 @@ console.log(`- 已安装：${packageName} ${versionName} (${versionCode})`);
 console.log(`- 进程：PID ${pid}`);
 console.log("- 设置页：已启动并位于前台");
 console.log("- 表面占用租约：已发现");
+console.log("- 全屏独占租约：已发现");
 console.log(
   `- 窗口避让无障碍：已绑定（保留 ${accessibilityAuthorization.preservedCount} 个既有组件，` +
     `${accessibilityAuthorization.added ? "本次已追加" : "原已启用"}）`

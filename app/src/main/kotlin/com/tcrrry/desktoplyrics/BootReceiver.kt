@@ -15,7 +15,10 @@ class BootReceiver : BroadcastReceiver() {
 
         val shouldStart = context
             .getSharedPreferences(LyricsOverlayService.PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(LyricsOverlayService.PREF_AUTO_START, false)
+            .getBoolean(
+                LyricsOverlayService.PREF_AUTO_START,
+                LyricsOverlayService.AUTO_START_DEFAULT
+            )
         if (!shouldStart) return
 
         ContextCompat.startForegroundService(

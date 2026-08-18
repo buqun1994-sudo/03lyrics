@@ -491,7 +491,11 @@ class DeviceCommerceJsonApi(
         val json = runCatching { JSONObject(response.body) }.getOrElse {
             return DeviceCommerceApiResult.Failure(
                 DeviceCommerceApiFailure(
-                    kind = DeviceCommerceApiFailureKind.PROTOCOL,
+                    kind = if (response.statusCode in 500..599) {
+                        DeviceCommerceApiFailureKind.NETWORK
+                    } else {
+                        DeviceCommerceApiFailureKind.PROTOCOL
+                    },
                     httpStatus = response.statusCode
                 )
             )

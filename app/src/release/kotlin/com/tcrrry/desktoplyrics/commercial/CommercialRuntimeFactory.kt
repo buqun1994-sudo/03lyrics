@@ -11,6 +11,9 @@ object CommercialRuntimeFactory {
 
     fun accessGate(context: Context): CommercialAccessGate = runtime(context).accessGate
 
+    fun entitlementCoordinator(context: Context): CommercialEntitlementCoordinator =
+        runtime(context).entitlementCoordinator
+
     private fun runtime(context: Context): CommercialRuntime = runtime
         ?: synchronized(this) {
             runtime ?: create(context.applicationContext).also { runtime = it }

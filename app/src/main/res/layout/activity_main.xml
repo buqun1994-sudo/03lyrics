@@ -199,6 +199,41 @@
                     android:importantForAccessibility="no"
                     android:text="@string/settings_navigation_entitlement" />
             </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <LinearLayout
+                android:id="@+id/settings_navigation_about"
+                android:layout_width="@dimen/settings_navigation_width"
+                android:layout_height="@dimen/settings_navigation_height"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="@dimen/settings_navigation_padding_start"
+                android:paddingEnd="@dimen/settings_navigation_padding_end">
+
+                <ImageView
+                    android:id="@+id/settings_navigation_about_icon"
+                    android:layout_width="@dimen/settings_navigation_icon_size"
+                    android:layout_height="@dimen/settings_navigation_icon_size"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_settings_navigation_about" />
+
+                <TextView
+                    android:id="@+id/settings_navigation_about_label"
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="@dimen/settings_navigation_label_spacing"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical|start"
+                    android:importantForAccessibility="no"
+                    android:text="@string/settings_navigation_about" />
+            </LinearLayout>
         </LinearLayout>
 
         <LinearLayout
@@ -228,6 +263,7 @@
                     <include layout="@layout/content_settings_cache" />
                     <include layout="@layout/content_settings_search" />
                     <include layout="@layout/content_settings_commercial" />
+                    <include layout="@layout/content_settings_about" />
                 </FrameLayout>
             </ScrollView>
         </LinearLayout>

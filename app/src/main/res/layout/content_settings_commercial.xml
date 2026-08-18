@@ -6,47 +6,67 @@
     android:minHeight="@dimen/commercial_page_min_height"
     android:visibility="gone">
 
-    <FrameLayout
+    <RelativeLayout
         android:id="@+id/commercial_entitlement_page"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:paddingStart="@dimen/commercial_page_horizontal_padding"
         android:paddingEnd="@dimen/commercial_page_horizontal_padding">
 
-        <LinearLayout
-            android:id="@+id/commercial_entitlement_status_group"
+        <FrameLayout
+            android:id="@+id/commercial_entitlement_status_slot"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_gravity="top"
+            android:layout_height="match_parent"
+            android:layout_alignParentTop="true"
+            android:layout_above="@id/commercial_entitlement_actions"
             android:layout_marginTop="@dimen/commercial_page_edge_margin"
-            android:gravity="center_horizontal"
-            android:orientation="vertical">
+            android:paddingBottom="@dimen/commercial_status_action_gap">
 
-            <TextView
-                android:id="@+id/commercial_entitlement_title"
-                style="@style/SettingsText.Title"
+            <LinearLayout
+                android:id="@+id/commercial_entitlement_status_group"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_gravity="center"
                 android:gravity="center"
-                android:textAlignment="center"
-                android:text="@string/commercial_checking" />
+                android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/commercial_large_status"
-                style="@style/SettingsText.Body2"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:gravity="center"
-                android:textAlignment="center"
-                android:text="@string/commercial_trial_remaining" />
-        </LinearLayout>
+                <TextView
+                    android:id="@+id/commercial_entitlement_title"
+                    style="@style/SettingsText.Title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:textAlignment="center"
+                    android:text="@string/commercial_checking" />
+
+                <TextView
+                    android:id="@+id/commercial_large_status"
+                    style="@style/SettingsText.Body2"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center"
+                    android:textAlignment="center"
+                    android:text="@string/commercial_trial_remaining" />
+
+                <TextView
+                    android:id="@+id/commercial_restore_status"
+                    style="@style/SettingsText.Caption2"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center"
+                    android:textAlignment="center"
+                    android:textColor="@color/settings_text_secondary"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </FrameLayout>
 
         <LinearLayout
             android:id="@+id/commercial_large_price_area"
             android:layout_width="match_parent"
             android:layout_height="240dp"
-            android:layout_gravity="center"
+            android:layout_centerInParent="true"
             android:translationY="@dimen/commercial_marketing_vertical_offset"
             android:baselineAligned="false"
             android:gravity="center"
@@ -153,7 +173,7 @@
             android:id="@+id/commercial_pro_state"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="center"
+            android:layout_centerInParent="true"
             android:gravity="center_horizontal"
             android:orientation="vertical"
             android:visibility="gone">
@@ -188,7 +208,8 @@
             android:id="@+id/commercial_entitlement_actions"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom"
+            android:layout_alignParentBottom="true"
+            android:layout_centerHorizontal="true"
             android:layout_marginBottom="@dimen/commercial_page_edge_margin"
             android:gravity="center_horizontal"
             android:orientation="vertical">
@@ -221,17 +242,8 @@
                 android:paddingEnd="20dp"
                 android:text="@string/commercial_restore_purchase" />
 
-            <TextView
-                android:id="@+id/commercial_restore_status"
-                style="@style/SettingsText.Caption2"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center_horizontal"
-                android:layout_marginTop="4dp"
-                android:gravity="center"
-                android:visibility="gone" />
         </LinearLayout>
-    </FrameLayout>
+    </RelativeLayout>
 
     <FrameLayout
         android:id="@+id/commercial_order_page"

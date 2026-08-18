@@ -76,7 +76,8 @@ class CommercialAccessTest {
             CommercialAccessDecision.Allowed(
                 tier = CommercialTier.PRO,
                 expiresAtEpochMs = NOW + 20_000,
-                refreshAfterEpochMs = NOW + 10_000
+                refreshAfterEpochMs = NOW + 10_000,
+                offlineGraceUntilEpochMs = NOW + 20_000
             ),
             result
         )

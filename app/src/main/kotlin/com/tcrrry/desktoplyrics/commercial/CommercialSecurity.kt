@@ -65,7 +65,13 @@ data class LicenseClaims(
     val expiresAtEpochMs: Long,
     val offlineGraceUntilEpochMs: Long,
     val trialEndsAtEpochMs: Long?
-)
+) {
+    /** The signed terminal boundary for the tier, never a client-derived value. */
+    fun finalAccessUntilEpochMs(): Long = when (tier) {
+        CommercialTier.TRIAL -> requireNotNull(trialEndsAtEpochMs)
+        CommercialTier.PRO -> offlineGraceUntilEpochMs
+    }
+}
 
 fun interface LicenseClaimsParser {
     fun parse(rawPayload: ByteArray): LicenseClaims
@@ -92,6 +98,7 @@ enum class LicenseVerificationFailure {
 
 enum class LicenseValidityWindow {
     ACTIVE,
+    TRIAL,
     OFFLINE_GRACE
 }
 
@@ -112,18 +119,23 @@ class LicenseVerifier(
     private val expectedDeviceKeyVersion: Int?,
     private val parser: LicenseClaimsParser
 ) {
+    /**
+     * Returns claims after only the cryptographic envelope and payload checks.
+     *
+     * This is intentionally narrower than [verify] and is used only after a
+     * full verification has classified a license as expired, so the signed
+     * boundary can be reported without treating an expired license as valid.
+     */
+    internal fun readSignedClaims(envelope: SignedLicenseEnvelope): LicenseClaims? {
+        if (!hasValidSignature(envelope)) return null
+        return runCatching { parser.parse(envelope.rawPayload) }.getOrNull()
+    }
+
     fun verify(
         envelope: SignedLicenseEnvelope,
         nowEpochMs: Long
     ): LicenseVerificationResult {
-        val signatureValid = runCatching {
-            Signature.getInstance("SHA256withECDSA").run {
-                initVerify(trustedPublicKey)
-                update(envelope.rawPayload)
-                verify(envelope.signature)
-            }
-        }.getOrDefault(false)
-        if (!signatureValid) {
+        if (!hasValidSignature(envelope)) {
             return LicenseVerificationResult.Invalid(LicenseVerificationFailure.SIGNATURE)
         }
 
@@ -173,18 +185,27 @@ class LicenseVerifier(
         if (!trialBoundaryValid) {
             return LicenseVerificationResult.Invalid(LicenseVerificationFailure.TIME_BOUNDARY)
         }
-        if (nowEpochMs >= claims.offlineGraceUntilEpochMs) {
+        val finalAccessUntil = claims.finalAccessUntilEpochMs()
+        if (nowEpochMs >= finalAccessUntil) {
             return LicenseVerificationResult.Invalid(LicenseVerificationFailure.EXPIRED)
         }
         return LicenseVerificationResult.Valid(
             claims = claims,
-            window = if (nowEpochMs < claims.expiresAtEpochMs) {
-                LicenseValidityWindow.ACTIVE
-            } else {
-                LicenseValidityWindow.OFFLINE_GRACE
+            window = when {
+                nowEpochMs < claims.expiresAtEpochMs -> LicenseValidityWindow.ACTIVE
+                claims.tier == CommercialTier.TRIAL -> LicenseValidityWindow.TRIAL
+                else -> LicenseValidityWindow.OFFLINE_GRACE
             }
         )
     }
+
+    private fun hasValidSignature(envelope: SignedLicenseEnvelope): Boolean = runCatching {
+        Signature.getInstance("SHA256withECDSA").run {
+            initVerify(trustedPublicKey)
+            update(envelope.rawPayload)
+            verify(envelope.signature)
+        }
+    }.getOrDefault(false)
 
     private fun constantTimeHexEquals(first: String, second: String): Boolean {
         val firstBytes = first.lowercase().toByteArray(StandardCharsets.US_ASCII)

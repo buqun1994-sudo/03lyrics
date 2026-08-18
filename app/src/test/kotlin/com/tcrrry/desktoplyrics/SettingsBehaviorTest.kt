@@ -374,9 +374,10 @@ class SettingsBehaviorTest {
     }
 
     @Test
-    fun `wallpaper presentation defaults preserve the current visual behavior`() {
+    fun `wallpaper presentation and boot recovery default to enabled`() {
+        assertTrue(LyricsOverlayService.AUTO_START_DEFAULT)
         assertTrue(LyricsOverlayService.WALLPAPER_BLUR_DEFAULT)
-        assertFalse(LyricsOverlayService.WALLPAPER_SHADOW_DEFAULT)
+        assertTrue(LyricsOverlayService.WALLPAPER_SHADOW_DEFAULT)
         assertNotEquals(
             LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT,
             LyricsOverlayService.PREF_WALLPAPER_FONT_SCALE_PERCENT
@@ -388,7 +389,7 @@ class SettingsBehaviorTest {
     }
 
     @Test
-    fun `settings layout exposes the confirmed five categories and display controls`() {
+    fun `settings layout exposes the confirmed categories and display controls`() {
         var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
         while (!File(appDirectory, "src/main").isDirectory) {
             appDirectory = requireNotNull(appDirectory.parentFile)
@@ -406,6 +407,10 @@ class SettingsBehaviorTest {
             appDirectory,
             "src/main/res/layout/content_settings_cache.xml"
         ).readText()
+        val about = File(
+            appDirectory,
+            "src/main/res/layout/content_settings_about.xml"
+        ).readText()
         val mainActivity = File(
             appDirectory,
             "src/main/kotlin/com/tcrrry/desktoplyrics/MainActivity.kt"
@@ -413,6 +418,8 @@ class SettingsBehaviorTest {
 
         assertTrue(activity.contains("@+id/settings_navigation_cache"))
         assertTrue(activity.contains("@+id/settings_navigation_search"))
+        assertTrue(activity.contains("@+id/settings_navigation_about"))
+        assertTrue(activity.contains("@layout/content_settings_about"))
         assertTrue(display.contains("@+id/topbar_font_size_small"))
         assertTrue(display.contains("@+id/wallpaper_font_size_small"))
         assertTrue(display.contains("@+id/wallpaper_blur_switch"))
@@ -426,6 +433,10 @@ class SettingsBehaviorTest {
         assertTrue(search.contains("@+id/search_action_label"))
         assertTrue(cache.contains("@+id/cache_remaining_estimate_text"))
         assertFalse(cache.contains("@+id/cache_clear_all_action"))
+        assertTrue(about.contains("@+id/about_terms_qr"))
+        assertTrue(about.contains("@string/settings_about_terms"))
+        assertFalse(about.contains("about_terms_url"))
+        assertFalse(about.contains("settings_about_terms_scan"))
         assertTrue(activity.contains("@+id/settings_message_dialog"))
         assertTrue(activity.contains("@+id/settings_message_dialog_button"))
         assertTrue(mainActivity.contains("lyricsSettingsRenderer.showMessageDialog("))

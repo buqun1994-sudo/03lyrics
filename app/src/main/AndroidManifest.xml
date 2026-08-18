@@ -76,6 +76,17 @@
                 android:value="1" />
         </service>
 
+        <service
+            android:name=".FullDisplayOccupancyLeaseService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.tcrrry.icar.surface.action.ACQUIRE_FULL_DISPLAY_OCCUPANCY_LEASE" />
+            </intent-filter>
+            <meta-data
+                android:name="com.tcrrry.icar.surface.FULL_DISPLAY_OCCUPANCY_PROTOCOL_VERSION"
+                android:value="1" />
+        </service>
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"

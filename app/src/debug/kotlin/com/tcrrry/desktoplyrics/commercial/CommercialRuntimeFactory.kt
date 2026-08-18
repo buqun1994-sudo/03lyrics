@@ -19,6 +19,9 @@ object CommercialRuntimeFactory {
 
     fun accessGate(context: Context): CommercialAccessGate = runtime(context).components.accessGate
 
+    fun entitlementCoordinator(context: Context): CommercialEntitlementCoordinator =
+        runtime(context).components.entitlementCoordinator
+
     internal fun debugRuntime(context: Context): DebugCommercialRuntime = runtime(context)
 
     internal fun createIsolatedFixtureRuntime(

@@ -140,6 +140,26 @@ class CommercialSecurityTest {
     }
 
     @Test
+    fun `trial license uses signed trial end instead of pro offline grace`() {
+        val trusted = generateKeyPair()
+        val payload = "signed-trial".toByteArray()
+        val envelope = SignedLicenseEnvelope(payload, sign(trusted, payload), KEY_ID)
+        val claims = validClaims().copy(
+            tier = CommercialTier.TRIAL,
+            issuedAtEpochMs = NOW - 20_000,
+            expiresAtEpochMs = NOW - 10_000,
+            offlineGraceUntilEpochMs = NOW - 1,
+            trialEndsAtEpochMs = NOW + 20_000
+        )
+
+        val result = verifier(trusted) { claims }.verify(envelope, NOW)
+
+        val valid = result as LicenseVerificationResult.Valid
+        assertEquals(LicenseValidityWindow.TRIAL, valid.window)
+        assertEquals(claims, valid.claims)
+    }
+
+    @Test
     fun `signed envelope round trips raw payload signature and key id`() {
         val envelope = SignedLicenseEnvelope(
             rawPayload = byteArrayOf(0, 1, 2, 0, 3),

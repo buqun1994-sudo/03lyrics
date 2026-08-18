@@ -7,6 +7,8 @@
     <string name="settings_navigation_cache">歌词缓存</string>
     <string name="settings_navigation_search">歌词查找</string>
     <string name="settings_navigation_entitlement">权益中心</string>
+    <string name="settings_navigation_about">关于</string>
+    <string name="settings_about_terms">用户协议</string>
     <string name="settings_topbar_display">顶栏歌词</string>
     <string name="settings_lyrics_lines">歌词行数</string>
     <string name="settings_topbar_one_line">一行</string>
@@ -92,8 +94,8 @@
     <string name="commercial_remaining_minutes">%1$d 分钟</string>
     <string name="commercial_expired">试用已到期</string>
     <string name="commercial_pro_active">权益生效中 · 永久</string>
-    <string name="commercial_checking">正在确认权益</string>
-    <string name="commercial_query_error_summary">当前无法确认权益，请稍后重试</string>
+    <string name="commercial_checking">确认权益中</string>
+    <string name="commercial_query_error_summary">当前无法确认权益，请稍后再试</string>
     <string name="commercial_configuration_missing">正式商业服务尚未配置</string>
     <string name="commercial_storage_error">安全存储暂时不可用</string>
     <string name="commercial_clock_error">设备时间异常，暂时无法确认权益</string>
@@ -158,6 +160,7 @@
     <string name="notification_commercial_unavailable">当前无法确认权益，点按查看详情</string>
     <string name="accessibility_restart_lyrics">重启悬浮歌词，歌词显示异常时手动恢复</string>
     <string name="accessibility_navigation_selected">%1$s，已选中</string>
+    <string name="accessibility_about_terms_qr">用户协议二维码</string>
     <string name="accessibility_switch_on">已开启</string>
     <string name="accessibility_switch_off">已关闭</string>
     <string name="accessibility_dock_service_name">歌词窗口避让</string>

@@ -6,8 +6,11 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.ScrollView
 import android.widget.TextView
@@ -259,6 +262,7 @@ class CommercialSettingsRenderer(
         val canPurchase = state.quote != null && entitlement !is EntitlementState.Pro &&
             entitlement !is EntitlementState.Checking && entitlement !is EntitlementState.Error
         largePriceArea.visibility = if (canPurchase) View.VISIBLE else View.GONE
+        placeEntitlementStatusGroup(hasMarketingContent = canPurchase)
         largeCheckoutAction.visibility = if (canPurchase || entitlement is EntitlementState.Error) {
             View.VISIBLE
         } else {
@@ -268,6 +272,27 @@ class CommercialSettingsRenderer(
             if (entitlement is EntitlementState.Error) R.string.commercial_retry
             else R.string.commercial_checkout
         )
+    }
+
+    private fun placeEntitlementStatusGroup(hasMarketingContent: Boolean) {
+        val params = entitlementStatusGroup.layoutParams as? FrameLayout.LayoutParams ?: return
+        val centered = !hasMarketingContent
+        val height = if (centered) {
+            ViewGroup.LayoutParams.MATCH_PARENT
+        } else {
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        }
+        val gravity = if (centered) {
+            Gravity.CENTER
+        } else {
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        }
+        if (params.gravity != gravity || params.height != height || params.topMargin != 0) {
+            params.gravity = gravity
+            params.height = height
+            params.topMargin = 0
+            entitlementStatusGroup.layoutParams = params
+        }
     }
 
     private fun renderQuote(state: CommercialUiState) {
@@ -323,10 +348,7 @@ class CommercialSettingsRenderer(
         restoreAction.visibility = if (pro) View.GONE else View.VISIBLE
         restoreAction.isEnabled = recovery !is RecoveryState.Restoring
         restoreAction.alpha = if (restoreAction.isEnabled) 1f else 0.55f
-        restoreAction.setText(
-            if (recovery is RecoveryState.Restoring) R.string.commercial_restore_running
-            else R.string.commercial_restore_purchase
-        )
+        restoreAction.setText(R.string.commercial_restore_purchase)
         val status = when (recovery) {
             RecoveryState.Idle -> null
             RecoveryState.Restoring -> R.string.commercial_restore_running

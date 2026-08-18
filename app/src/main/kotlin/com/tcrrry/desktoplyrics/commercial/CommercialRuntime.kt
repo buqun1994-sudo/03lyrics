@@ -4,7 +4,8 @@ import android.content.Context
 
 data class CommercialRuntime(
     val gateway: DeviceCommercialGateway,
-    val accessGate: CommercialAccessGate
+    val accessGate: CommercialAccessGate,
+    val entitlementCoordinator: CommercialEntitlementCoordinator
 )
 
 object CommercialRuntimeAssembler {
@@ -38,25 +39,36 @@ object CommercialRuntimeAssembler {
             identityProvider = identityProvider,
             trust = trust
         )
-        return CommercialRuntime(
-            gateway = CloudDeviceCommercialGateway(
+        val gateway = CloudDeviceCommercialGateway(
                 api = api,
                 identityProvider = identityProvider,
                 store = store,
                 trialRepository = FirstOpenTrialRepository(store),
                 licenseRepository = licenseRepository,
                 clientVersion = clientVersion
-            ),
-            accessGate = CommercialAccessGate(licenseRepository::accessDecision)
+            )
+        val accessGate = CommercialAccessGate(licenseRepository::accessDecision)
+        return CommercialRuntime(
+            gateway = gateway,
+            accessGate = accessGate,
+            entitlementCoordinator = CommercialEntitlementCoordinator(
+                gateway = gateway,
+                accessGate = accessGate
+            )
         )
     }
 
-    fun unavailable(): CommercialRuntime = CommercialRuntime(
-        gateway = UnavailableDeviceCommercialGateway,
-        accessGate = FailClosedCommercialAccessGate(
+    fun unavailable(): CommercialRuntime {
+        val gateway = UnavailableDeviceCommercialGateway
+        val accessGate = FailClosedCommercialAccessGate(
             CommercialAccessDenial.CONFIGURATION_MISSING
         )
-    )
+        return CommercialRuntime(
+            gateway = gateway,
+            accessGate = accessGate,
+            entitlementCoordinator = CommercialEntitlementCoordinator(gateway, accessGate)
+        )
+    }
 }
 
 private object UnavailableDeviceCommercialGateway : DeviceCommercialGateway {

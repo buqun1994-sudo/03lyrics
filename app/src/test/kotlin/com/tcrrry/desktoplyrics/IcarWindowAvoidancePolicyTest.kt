@@ -139,6 +139,24 @@ class IcarWindowAvoidancePolicyTest {
     }
 
     @Test
+    fun `full display lease hides lyrics without changing ordinary window policy`() {
+        val fullscreen = presentation(
+            displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
+            dockState = IcarRightDockWindowState.COLLAPSED,
+            externalSurfaceOccupancy = IcarExternalSurfaceOccupancy(fullDisplayOccupied = true)
+        )
+        val released = presentation(
+            displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
+            dockState = IcarRightDockWindowState.COLLAPSED
+        )
+
+        assertEquals(LyricsOverlayVisibility.HIDDEN, fullscreen.visibility)
+        assertEquals(LyricsSurfaceMode.DESKTOP, fullscreen.surfaceMode)
+        assertEquals(LyricsOverlayVisibility.VISIBLE, released.visibility)
+        assertEquals(LyricsSurfaceMode.DESKTOP, released.surfaceMode)
+    }
+
+    @Test
     fun `expanded right Dock clips only wallpaper lyrics`() {
         val desktop = presentation(
             displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
@@ -286,12 +304,13 @@ class IcarWindowAvoidancePolicyTest {
 
     private fun presentation(
         displayState: IcarDisplayState,
-        dockState: IcarRightDockWindowState
+        dockState: IcarRightDockWindowState,
+        externalSurfaceOccupancy: IcarExternalSurfaceOccupancy = IcarExternalSurfaceOccupancy(),
     ): IcarLyricsPresentation = IcarLyricsPresentationPolicy.resolve(
         displayState = displayState,
         wallpaperLyricsEnabled = true,
         localSettingsOpen = false,
-        desktopSurfaceOccupied = false,
+        externalSurfaceOccupancy = externalSurfaceOccupancy,
         rightDockState = dockState
     )
 

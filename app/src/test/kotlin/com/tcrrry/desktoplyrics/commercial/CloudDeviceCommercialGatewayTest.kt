@@ -13,6 +13,24 @@ import java.security.spec.ECGenParameterSpec
 
 class CloudDeviceCommercialGatewayTest {
     @Test
+    fun `plain text upstream 5xx is treated as a transient network failure`() {
+        val api = DeviceCommerceJsonApi(
+            DeviceCommerceTransport {
+                DeviceCommerceHttpResponse(
+                    statusCode = 530,
+                    body = "error code: 1033"
+                )
+            }
+        )
+
+        val result = api.readCurrentCampaign()
+        val failure = (result as DeviceCommerceApiResult.Failure).failure
+
+        assertEquals(DeviceCommerceApiFailureKind.NETWORK, failure.kind)
+        assertEquals(530, failure.httpStatus)
+    }
+
+    @Test
     fun `fixture starts online trial and automatically binds staging campaign quote`() = runBlocking {
         val fixture = FixtureHarness()
 
@@ -308,6 +326,43 @@ class CloudDeviceCommercialGatewayTest {
             )
             assertFalse(
                 freshOffline.store.read(SecureCommercialRecord.LICENSE) is SecureStoreReadResult.Value
+            )
+        }
+
+    @Test
+    fun `manual entitlement query preserves a valid local trial when upstream returns 530`() =
+        runBlocking {
+            val fixture = FixtureHarness()
+            val initial = fixture.gateway.queryEntitlement(fixture.now)
+                as EntitlementQueryResult.Ready
+            assertTrue(initial.snapshot.entitlement is EntitlementState.Trial)
+
+            fixture.transport.entitlementScenario = DebugEntitlementScenario.QUERY_ERROR
+
+            val offline = fixture.gateway.forceQueryEntitlement(fixture.now)
+                as EntitlementQueryResult.Ready
+            assertTrue(offline.snapshot.entitlement is EntitlementState.Trial)
+        }
+
+    @Test
+    fun `manual entitlement query reports a locally verified expiry when upstream is unavailable`() =
+        runBlocking {
+            val fixture = FixtureHarness()
+            fixture.gateway.queryEntitlement(fixture.now)
+            fixture.now += TRIAL_DURATION_MS + 1
+            fixture.transport.entitlementScenario = DebugEntitlementScenario.QUERY_ERROR
+
+            val offline = fixture.gateway.forceQueryEntitlement(fixture.now)
+                as EntitlementQueryResult.Ready
+            assertEquals(EntitlementState.Expired, offline.snapshot.entitlement)
+            assertEquals(
+                CommercialAccessDecision.Denied(
+                    reason = CommercialAccessDenial.LICENSE_EXPIRED,
+                    trialEndsAtEpochMs = fixture.now - 1,
+                    expiresAtEpochMs = fixture.now - 1,
+                    offlineGraceUntilEpochMs = fixture.now - 1
+                ),
+                fixture.licenseRepository.accessDecision(fixture.now)
             )
         }
 
