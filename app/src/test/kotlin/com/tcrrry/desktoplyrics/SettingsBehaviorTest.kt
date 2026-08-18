@@ -406,6 +406,10 @@ class SettingsBehaviorTest {
             appDirectory,
             "src/main/res/layout/content_settings_cache.xml"
         ).readText()
+        val mainActivity = File(
+            appDirectory,
+            "src/main/kotlin/com/tcrrry/desktoplyrics/MainActivity.kt"
+        ).readText()
 
         assertTrue(activity.contains("@+id/settings_navigation_cache"))
         assertTrue(activity.contains("@+id/settings_navigation_search"))
@@ -422,6 +426,10 @@ class SettingsBehaviorTest {
         assertTrue(search.contains("@+id/search_action_label"))
         assertTrue(cache.contains("@+id/cache_remaining_estimate_text"))
         assertFalse(cache.contains("@+id/cache_clear_all_action"))
+        assertTrue(activity.contains("@+id/settings_message_dialog"))
+        assertTrue(activity.contains("@+id/settings_message_dialog_button"))
+        assertTrue(mainActivity.contains("lyricsSettingsRenderer.showMessageDialog("))
+        assertFalse(mainActivity.contains("Toast.makeText("))
     }
 
     @Test

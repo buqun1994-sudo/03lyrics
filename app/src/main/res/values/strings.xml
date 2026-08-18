@@ -39,6 +39,8 @@
     <string name="settings_service_running_summary">控制当前歌词显示服务的运行状态</string>
     <string name="settings_restart_lyrics">重启悬浮歌词</string>
     <string name="settings_restart_lyrics_summary">歌词显示异常时手动恢复</string>
+    <string name="settings_authorization_dialog_title">系统授权未完成</string>
+    <string name="settings_dialog_acknowledge">知道了</string>
     <string name="settings_restart_requires_authorization">系统授权未完成，暂时无法重启悬浮歌词</string>
     <string name="settings_service_requires_authorization">系统授权未完成，暂时无法启动悬浮歌词服务</string>
     <string name="settings_cache_overview">缓存概览</string>

@@ -232,4 +232,59 @@
             </ScrollView>
         </LinearLayout>
     </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/settings_message_dialog"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/settings_dialog_scrim"
+        android:clickable="true"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:importantForAccessibility="yes"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="@dimen/settings_dialog_width"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_settings_dialog"
+            android:clickable="true"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:padding="@dimen/settings_dialog_padding">
+
+            <TextView
+                android:id="@+id/settings_message_dialog_title"
+                style="@style/SettingsText.Title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="@string/settings_authorization_dialog_title" />
+
+            <TextView
+                android:id="@+id/settings_message_dialog_message"
+                style="@style/SettingsText.Caption2"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/settings_dialog_message_spacing"
+                android:gravity="center"
+                android:text="@string/settings_service_requires_authorization" />
+
+            <Button
+                android:id="@+id/settings_message_dialog_button"
+                android:layout_width="@dimen/settings_dialog_button_width"
+                android:layout_height="@dimen/settings_dialog_button_height"
+                android:layout_marginTop="@dimen/settings_dialog_button_spacing"
+                android:background="@drawable/bg_settings_dialog_button"
+                android:gravity="center"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:padding="0dp"
+                android:text="@string/settings_dialog_acknowledge"
+                android:textAllCaps="false"
+                android:textColor="@color/commercial_action_text"
+                android:textSize="@dimen/settings_text_body2" />
+        </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

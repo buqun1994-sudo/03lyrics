@@ -12,6 +12,8 @@
     <color name="settings_accent">#1A8CFF</color>
     <color name="settings_switch_thumb_color">#FFFFFFFF</color>
     <color name="settings_switch_track_off">#33A5ABAF</color>
+    <color name="settings_dialog_scrim">#B3000000</color>
+    <color name="settings_dialog_background">#FFF5F6FA</color>
     <color name="commercial_action">@color/settings_accent</color>
     <color name="commercial_action_text">#FFFFFFFF</color>
     <color name="commercial_trial_badge">#FFD9EDFF</color>

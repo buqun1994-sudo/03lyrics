@@ -56,6 +56,13 @@
     <dimen name="settings_text_body2">27.25sp</dimen>
     <dimen name="settings_text_caption2">22.75sp</dimen>
 
+    <dimen name="settings_dialog_width">860dp</dimen>
+    <dimen name="settings_dialog_padding">48dp</dimen>
+    <dimen name="settings_dialog_message_spacing">20dp</dimen>
+    <dimen name="settings_dialog_button_width">300dp</dimen>
+    <dimen name="settings_dialog_button_height">95dp</dimen>
+    <dimen name="settings_dialog_button_spacing">32dp</dimen>
+
     <dimen name="commercial_badge_width">52dp</dimen>
     <dimen name="commercial_badge_height">26dp</dimen>
     <dimen name="commercial_badge_text">16sp</dimen>

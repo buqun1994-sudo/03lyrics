@@ -10,6 +10,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -102,6 +103,10 @@ internal class LyricsSettingsRenderer(
     private val searchActionLabel: TextView = root.findViewById(R.id.search_action_label)
     private val searchStatus: TextView = root.findViewById(R.id.search_status)
     private val searchResults: LinearLayout = root.findViewById(R.id.search_results)
+    private val messageDialog: View = root.findViewById(R.id.settings_message_dialog)
+    private val messageDialogTitle: TextView = root.findViewById(R.id.settings_message_dialog_title)
+    private val messageDialogMessage: TextView = root.findViewById(R.id.settings_message_dialog_message)
+    private val messageDialogButton: TextView = root.findViewById(R.id.settings_message_dialog_button)
 
     private var accentColor = ContextCompat.getColor(context, R.color.settings_accent)
     private var accentTextColor = android.graphics.Color.WHITE
@@ -177,6 +182,7 @@ internal class LyricsSettingsRenderer(
         searchTrack.imeOptions = EditorInfo.IME_ACTION_NEXT
         searchArtist.imeOptions = EditorInfo.IME_ACTION_NEXT
         searchAlbum.imeOptions = EditorInfo.IME_ACTION_SEARCH
+        messageDialogButton.setOnClickListener { dismissMessageDialog() }
     }
 
     fun renderPreferences(value: LyricsSettingsPreferences) {
@@ -231,8 +237,24 @@ internal class LyricsSettingsRenderer(
         searchAction.backgroundTintList = ColorStateList.valueOf(color)
         searchActionIcon.imageTintList = ColorStateList.valueOf(textColor)
         searchActionLabel.setTextColor(textColor)
+        messageDialogButton.backgroundTintList = ColorStateList.valueOf(color)
+        messageDialogButton.setTextColor(textColor)
         preferences?.let(::renderPreferences)
         renderServiceRunning(serviceRunning)
+    }
+
+    fun showMessageDialog(@StringRes titleResId: Int, @StringRes messageResId: Int) {
+        messageDialogTitle.setText(titleResId)
+        messageDialogMessage.setText(messageResId)
+        messageDialog.visibility = View.VISIBLE
+        messageDialog.bringToFront()
+        messageDialogButton.post { messageDialogButton.requestFocus() }
+    }
+
+    fun dismissMessageDialog(): Boolean {
+        if (messageDialog.visibility != View.VISIBLE) return false
+        messageDialog.visibility = View.GONE
+        return true
     }
 
     private fun bindSwitch(card: View, control: IcarSwitch, onChanged: (Boolean) -> Unit) {

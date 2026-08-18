@@ -16,7 +16,7 @@ import android.view.View
 import android.widget.ImageView
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -140,6 +140,13 @@ class MainActivity : AppCompatActivity() {
                 onRestoreAutomatic = ::restoreAutomaticLyrics
             )
         )
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (lyricsSettingsRenderer.dismissMessageDialog()) return
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+            }
+        })
 
         selectedSection = SettingsSection.from(
             savedInstanceState?.getString(STATE_SELECTED_SECTION)
@@ -409,7 +416,7 @@ class MainActivity : AppCompatActivity() {
                 ),
                 autoStart = overlayPrefs.getBoolean(
                     LyricsOverlayService.PREF_AUTO_START,
-                    false
+                    LyricsOverlayService.AUTO_START_DEFAULT
                 ),
                 translationEnabled = overlayPrefs.getBoolean(
                     LyricsOverlayService.PREF_LYRICS_TRANSLATION_ENABLED,
@@ -510,11 +517,10 @@ class MainActivity : AppCompatActivity() {
         }
         if (!hasRequiredLyricsAccess()) {
             lyricsSettingsRenderer.renderServiceRunning(false)
-            Toast.makeText(
-                this,
+            lyricsSettingsRenderer.showMessageDialog(
+                R.string.settings_authorization_dialog_title,
                 R.string.settings_service_requires_authorization,
-                Toast.LENGTH_SHORT
-            ).show()
+            )
             return
         }
         ContextCompat.startForegroundService(
@@ -575,11 +581,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun restartLyricsOverlay() {
         if (!hasRequiredLyricsAccess()) {
-            Toast.makeText(
-                this,
+            lyricsSettingsRenderer.showMessageDialog(
+                R.string.settings_authorization_dialog_title,
                 R.string.settings_restart_requires_authorization,
-                Toast.LENGTH_SHORT
-            ).show()
+            )
             return
         }
         val intent = Intent(this, LyricsOverlayService::class.java).apply {
