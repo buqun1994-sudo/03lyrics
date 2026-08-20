@@ -5,7 +5,7 @@
 ## 1. 项目身份
 
 1. 本仓库是 `03lyrics`，面向 iCAR 03 车机的轻量悬浮歌词应用。
-2. Android 应用当前显示名称为“03歌词”，包名为 `com.tcrrry.desktoplyrics`；未经迁移方案确认，不改包名、签名身份或现有升级链。
+2. Android 应用当前显示名称为“03歌词”，包名为 `com.ninepointnine.desktoplyrics`；包名迁移已在开发阶段完成，后续未经迁移方案确认不再变更应用身份或升级链。
 3. 本项目已是正式 Android 工程，不处于模板初始化状态；禁止运行 `project-bootstrap` 或写入 `INIT_REQUIRED`。
 4. `03桌面` 是独立产品，不是本项目模块。应用抽屉、APK 安装、应用卸载、快捷控制和右侧抽屉属于 `03桌面`，不得混入本仓库。
 5. 本仓库保留上游 `tcrrry/desktop-lyrics` 的历史作为来源追溯；默认远端 `origin` 必须指向 `buqun1994-sudo/03lyrics`。
@@ -23,7 +23,7 @@
 
 ## 3. 物理边界
 
-1. `app/src/main/kotlin/com/tcrrry/desktoplyrics/`：Android 业务、车机适配和基础设施主链。
+1. `app/src/main/kotlin/com/ninepointnine/desktoplyrics/`：Android 业务、车机适配和基础设施主链。
 2. `app/src/main/assets/lyrics_overlay.html`：歌词悬浮层的 WebView 呈现与交互。
 3. `app/src/main/res/`：原生设置页、图标、主题与 Android 资源。
 4. `app/src/test/`：不依赖车机的 JVM 单元测试。

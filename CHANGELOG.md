@@ -13,4 +13,4 @@
 - 字号调节及动态最小高度
 - 透明、低负载、高负载动态背景
 - 音量与蓝牙、有线、USB 输出设备显示
-- 独立包名 `com.tcrrry.desktoplyrics`
+- 独立包名 `com.ninepointnine.desktoplyrics`

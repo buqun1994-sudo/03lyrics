@@ -23,7 +23,7 @@
         android:paddingStart="@dimen/settings_switch_card_padding_start"
         android:paddingEnd="@dimen/settings_switch_card_padding_start">
 
-        <com.tcrrry.desktoplyrics.IcarSwitch
+        <com.ninepointnine.desktoplyrics.IcarSwitch
             android:id="@+id/service_running_switch"
             android:layout_width="@dimen/settings_switch_width"
             android:layout_height="@dimen/settings_switch_height"

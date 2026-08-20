@@ -1,5 +1,14 @@
 # 项目进度
 
+## 2026-08-20 包名迁移与签名身份准备
+
+1. 已将 Android 应用身份从 `com.tcrrry.desktoplyrics` 迁移为 `com.ninepointnine.desktoplyrics`，同步更新源码命名空间、Manifest 组件入口、跨应用 Action、自定义控件、测试包和本机安装脚本；旧包名仅保留在历史记录中用于追溯。
+2. 开发阶段继续复用现有 staging keystore，证书 SHA-256 为 `1eb136fffd3f1e4c204d0933cab66c51ee4536a29e949b9c080925c01563b51d`。
+3. 已在仓库外生成独立 production RSA-4096 签名身份，证书 SHA-256 为 `934b9151fe62b39a3474a11f00c2114c7f392b18fec85f39f8d71b9596860e03`；私钥、keystore 和口令未进入仓库。
+4. 云端在接收新包前必须把 `03lyrics` 的 `expectedPackageName` 更新为 `com.ninepointnine.desktoplyrics`，并分别注入 staging / production 的证书摘要。由于当前尚无用户使用旧身份，本次无需迁移已有许可证；以后若旧身份产生购买，必须由云端按设备恢复规则重新签发新包许可证，不能把旧包名直接视为同一应用。
+5. 本轮不执行 Cloud 部署、数据库迁移、真实支付或 production 发布；客户端 staging 构建与签名核对已完成，production APK 等待 Cloud production trust bundle 后再构建。
+6. 已将 staging Debug APK（`com.ninepointnine.desktoplyrics`，`1.14-icar03` / `114`）保留数据安装到车机并启动设置页；新包的窗口避让无障碍已绑定，但最简 smoke 在播放状态通知监听处停止。车机当前仍只授权旧包 `com.tcrrry.desktoplyrics` 的通知监听，包名迁移不会自动继承该系统授权；未卸载旧包、清数据或重启车机。
+
 ## 2026-08-19 统一权益快照与试用最终边界修正
 
 1. 通过 Debug 诊断主链读取车机加密许可证的签名时间：`trialEndsAt = 2026-08-23 08:06:26`（车机本地时间）；在 `2026-08-19 06:06:04` 读取时剩余 `352821554ms`，即约 `4天2小时0分21秒`。诊断只输出层级和时间边界，不输出许可证正文、设备指纹或密钥。
@@ -498,7 +507,7 @@
 ## 当前工程事实
 
 1. 当前版本：`1.14-icar03`（versionCode `114`）。
-2. 当前包名：`com.tcrrry.desktoplyrics`。
+2. 当前包名：`com.ninepointnine.desktoplyrics`。
 3. 目标车机：Android 9、`1920 x 1080`、`S56_HQX`、高通 8155。
 4. 最近业务提交：`022fcea feat: refine lyrics settings, matching, and branding`；该提交尚未推送。
 

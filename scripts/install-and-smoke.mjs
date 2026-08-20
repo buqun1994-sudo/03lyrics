@@ -11,7 +11,7 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = join(root, ".codex", "local-context.properties");
-const packageName = "com.tcrrry.desktoplyrics";
+const packageName = "com.ninepointnine.desktoplyrics";
 const activityName = `${packageName}/.MainActivity`;
 const occupancyLeaseAction = "com.tcrrry.icar.surface.action.ACQUIRE_OCCUPANCY_LEASE";
 const occupancyLeaseServiceName = "SurfaceOccupancyLeaseService";
@@ -248,7 +248,7 @@ const launch = adbRun(
   ["shell", "am", "start", "-W", "-n", activityName],
   "设置页启动失败"
 ).output;
-if (!/Status:\s*ok/i.test(launch) && !/Activity:\s*com\.tcrrry\.desktoplyrics/i.test(launch)) {
+if (!/Status:\s*ok/i.test(launch) && !/Activity:\s*com\.ninepointnine\.desktoplyrics/i.test(launch)) {
   fail("设置页未报告成功启动", launch);
 }
 
@@ -330,7 +330,7 @@ const processErrors = adbRun(
   true
 );
 if (processErrors.status !== 0) fail("当前 ADB 不支持按应用进程读取日志", processErrors.output);
-const fatalPattern = /FATAL EXCEPTION|AndroidRuntime|Process:\s*com\.tcrrry\.desktoplyrics|WebView .*\bERROR\b/;
+const fatalPattern = /FATAL EXCEPTION|AndroidRuntime|Process:\s*com\.ninepointnine\.desktoplyrics|WebView .*\bERROR\b/;
 if (fatalPattern.test(processErrors.output)) fail("应用进程存在致命错误", processErrors.output);
 
 const serviceAfter = adbRun(

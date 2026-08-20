@@ -85,7 +85,7 @@ To build a signed APK, copy `keystore.properties.example` to `keystore.propertie
 ## Project information
 
 - Current release: `1.00` (versionCode 100)
-- Android package: `com.tcrrry.desktoplyrics`
+- Android package: `com.ninepointnine.desktoplyrics`
 - Author: Bilibili `@Tcrrrry`
 
 If Desktop Lyrics is useful to you, consider giving the repository a **Star** so more Android users can discover it.

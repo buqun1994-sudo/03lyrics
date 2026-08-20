@@ -105,7 +105,7 @@ Android floating lyrics overlay with MediaSession playback detection, synchroniz
 ## 项目信息
 
 - 当前正式版：`1.00`（versionCode 100）
-- Android 包名：`com.tcrrry.desktoplyrics`
+- Android 包名：`com.ninepointnine.desktoplyrics`
 - 作者：B站 `@Tcrrrry`
 
 如果这个项目对你有帮助，欢迎点亮右上角的 **Star**，让更多需要 Android 桌面歌词的人看到它。

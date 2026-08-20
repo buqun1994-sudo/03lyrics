@@ -18,12 +18,12 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = join(root, ".codex", "local-context.properties");
-const formalPackage = "com.tcrrry.desktoplyrics";
-const testPackage = "com.tcrrry.desktoplyrics.test";
+const formalPackage = "com.ninepointnine.desktoplyrics";
+const testPackage = "com.ninepointnine.desktoplyrics.test";
 const instrumentationComponent =
   `${testPackage}/androidx.test.runner.AndroidJUnitRunner`;
 const instrumentationClass =
-  "com.tcrrry.desktoplyrics.CommercialSecurityInstrumentationTest";
+  "com.ninepointnine.desktoplyrics.CommercialSecurityInstrumentationTest";
 const cleanupMethod = "cleanupContractLeavesNoTestArtifacts";
 const formalRecordPrefix = "commercial_secure_v1_";
 const testRecordPrefix = "commercial_test_secure_v1_";

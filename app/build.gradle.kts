@@ -20,6 +20,10 @@ fun Properties.requiredValue(name: String): String =
     getProperty(name)?.trim()?.takeIf(String::isNotEmpty)
         ?: error("Staging APK signing property '$name' is required")
 
+fun Properties.loadUtf8(file: File) {
+    file.reader(Charsets.UTF_8).use(::load)
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -28,7 +32,7 @@ plugins {
 val signingPropertiesFile = rootProject.file("keystore.properties")
 val signingProperties = Properties().apply {
     if (signingPropertiesFile.exists()) {
-        signingPropertiesFile.inputStream().use(::load)
+        loadUtf8(signingPropertiesFile)
     }
 }
 
@@ -133,7 +137,7 @@ val stagingSigningStoreFile = if (debugCommerceEnvironment == "staging") {
     require(propertiesFile.isFile) {
         "Staging APK signing properties file does not exist"
     }
-    propertiesFile.inputStream().use(stagingSigningProperties::load)
+    stagingSigningProperties.loadUtf8(propertiesFile)
     val configuredStoreFile = stagingSigningProperties.requiredValue("storeFile")
     val candidate = File(configuredStoreFile)
     val resolved = if (candidate.isAbsolute) {
@@ -148,11 +152,11 @@ val stagingSigningStoreFile = if (debugCommerceEnvironment == "staging") {
 }
 
 android {
-    namespace = "com.tcrrry.desktoplyrics"
+    namespace = "com.ninepointnine.desktoplyrics"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.tcrrry.desktoplyrics"
+        applicationId = "com.ninepointnine.desktoplyrics"
         minSdk = 26
         targetSdk = 34
         versionCode = 114

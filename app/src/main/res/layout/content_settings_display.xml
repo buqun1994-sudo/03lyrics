@@ -130,7 +130,7 @@
         android:paddingStart="@dimen/settings_switch_card_padding_start"
         android:paddingEnd="@dimen/settings_switch_card_padding_start">
 
-        <com.tcrrry.desktoplyrics.IcarSwitch
+        <com.ninepointnine.desktoplyrics.IcarSwitch
             android:id="@+id/wallpaper_lyrics_switch"
             android:layout_width="@dimen/settings_switch_width"
             android:layout_height="@dimen/settings_switch_height"
@@ -228,7 +228,7 @@
             android:paddingStart="@dimen/settings_switch_card_padding_start"
             android:paddingEnd="@dimen/settings_switch_card_padding_start">
 
-            <com.tcrrry.desktoplyrics.IcarSwitch
+            <com.ninepointnine.desktoplyrics.IcarSwitch
                 android:id="@+id/wallpaper_blur_switch"
                 android:layout_width="@dimen/settings_switch_width"
                 android:layout_height="@dimen/settings_switch_height"
@@ -272,7 +272,7 @@
             android:paddingStart="@dimen/settings_switch_card_padding_start"
             android:paddingEnd="@dimen/settings_switch_card_padding_start">
 
-            <com.tcrrry.desktoplyrics.IcarSwitch
+            <com.ninepointnine.desktoplyrics.IcarSwitch
                 android:id="@+id/wallpaper_shadow_switch"
                 android:layout_width="@dimen/settings_switch_width"
                 android:layout_height="@dimen/settings_switch_height"
@@ -416,7 +416,7 @@
             android:paddingStart="@dimen/settings_switch_card_padding_start"
             android:paddingEnd="@dimen/settings_switch_card_padding_start">
 
-            <com.tcrrry.desktoplyrics.IcarSwitch
+            <com.ninepointnine.desktoplyrics.IcarSwitch
                 android:id="@+id/auto_start_switch"
                 android:layout_width="@dimen/settings_switch_width"
                 android:layout_height="@dimen/settings_switch_height"
@@ -460,7 +460,7 @@
             android:paddingStart="@dimen/settings_switch_card_padding_start"
             android:paddingEnd="@dimen/settings_switch_card_padding_start">
 
-            <com.tcrrry.desktoplyrics.IcarSwitch
+            <com.ninepointnine.desktoplyrics.IcarSwitch
                 android:id="@+id/lyrics_translation_switch"
                 android:layout_width="@dimen/settings_switch_width"
                 android:layout_height="@dimen/settings_switch_height"
