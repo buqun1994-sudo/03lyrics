@@ -171,13 +171,15 @@ internal data class LyricsSettingsRuntimeState(
     val playback: LyricsPlaybackIdentity?,
     val cache: LyricsCacheSnapshot,
     val searchState: LyricsManualSearchState,
-    val searchCandidates: List<LyricsManualSearchCandidate>
+    val searchCandidates: List<LyricsManualSearchCandidate>,
+    val recordingGeneration: Long = 0L
 ) {
     fun encode(): String = JSONObject()
         .put("playback", playback?.toJson())
         .put("cache", cache.toJson())
         .put("searchState", searchState.name)
         .put("searchCandidates", LyricsManualSearchCandidate.encodeList(searchCandidates))
+        .put("recordingGeneration", recordingGeneration)
         .toString()
 
     companion object {
@@ -193,7 +195,8 @@ internal data class LyricsSettingsRuntimeState(
                 searchState = searchState,
                 searchCandidates = LyricsManualSearchCandidate.decodeList(
                     value.optString("searchCandidates")
-                )
+                ),
+                recordingGeneration = value.optLong("recordingGeneration", 0L)
             )
         }
     }

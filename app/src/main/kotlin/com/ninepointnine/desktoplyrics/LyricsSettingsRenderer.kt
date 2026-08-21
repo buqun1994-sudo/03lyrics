@@ -114,7 +114,7 @@ internal class LyricsSettingsRenderer(
     private var serviceRunning = false
     private var preferences: LyricsSettingsPreferences? = null
     private var runtimeState: LyricsSettingsRuntimeState? = null
-    private var populatedPlaybackKey: String? = null
+    private var populatedRecordingGeneration: Long? = null
 
     init {
         currentLineOption.setOnClickListener { actions.onTopbarLinesChanged(1) }
@@ -225,7 +225,7 @@ internal class LyricsSettingsRenderer(
 
     fun renderRuntimeState(state: LyricsSettingsRuntimeState) {
         runtimeState = state
-        populateSearchInputs(state.playback)
+        populateSearchInputs(state.playback, state.recordingGeneration)
         renderCache(state)
         renderSearch(state)
     }
@@ -449,12 +449,12 @@ internal class LyricsSettingsRenderer(
         }
     }
 
-    private fun populateSearchInputs(playback: LyricsPlaybackIdentity?) {
-        val key = playback?.let {
-            "${it.track}\u0000${it.artist}\u0000${it.album}\u0000${it.durationMs}"
-        }
-        if (key == populatedPlaybackKey) return
-        populatedPlaybackKey = key
+    private fun populateSearchInputs(
+        playback: LyricsPlaybackIdentity?,
+        recordingGeneration: Long
+    ) {
+        if (recordingGeneration == populatedRecordingGeneration) return
+        populatedRecordingGeneration = recordingGeneration
         searchTrack.setText(playback?.track.orEmpty())
         searchArtist.setText(playback?.artist.orEmpty())
         searchAlbum.setText(playback?.album.orEmpty())

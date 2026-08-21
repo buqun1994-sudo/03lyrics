@@ -1,5 +1,16 @@
 # 项目进度
 
+## 2026-08-21 全媒体 MediaSession 归一、选源与设置状态刷新
+
+1. 用户实测发现：切到爱趣听后顶栏没有歌词，设置页“歌词查找”的歌名输入框会出现歌词正文或“制作人”等动态文本。只读取证确认爱趣听已经公开标准 MediaSession，控制器描述能给出真实歌名和歌手；根因是旧实现直接优先使用播放器会动态改写的原始 `TITLE`，并把该文本同时当成设置字段、查词参数和切歌身份，造成连续取消 / 重查与错误展示。另一个切换窗口来自车机活动会话变化通知不稳定，设置命令曾直接读取服务内存中的旧控制器。
+2. 新增 `MediaSessionMetadataPolicy` 与 `MediaRecordingStateTracker`：控制器标准描述优先，原始标题 / 歌手 / 专辑只作字段缺失兜底；当前会话 Token 与归一字段共同生成稳定录音代际。动态原始标题不再推进切歌，字段补齐或已知时长相对上次查询累计变化超过 `2000ms` 只生成查询修订。设置页、缓存、人工查找、自动查词、播放时间线和 WebView 共用这一份规范化状态；WebView 只回传录音代际、查询修订和请求号，不再回传媒体文本。
+3. `LyricsOverlayService` 以公开 `MediaSessionManager` / `MediaController` 为唯一播放入口，全部候选按媒体语义、播放状态和系统会话顺序选择，并为每个候选注册元数据、播放状态、音频信息和销毁回调。`AudioManager.AudioPlaybackCallback` 只作重读唤醒；候选变化以 `80ms` 合并，来源变化后以 `250ms / 1000ms` 两次有界复核收敛，另保留 `5s` 兜底。设置打开、状态请求、人工搜索 / 点选、恢复自动和清理缓存均先同步重读活动会话；停止或消失后不回接无关暂停会话。
+4. 标准媒体会话进度统一由 `MediaSessionTimelineTracker` 处理零值、未来时间戳、未知位置、暂停冻结、seek 和时长封顶；蓝牙保留 AVRCP 专用补偿。WebView 在首次 `timelineReady=false` 时只保留已解析歌词，不猜测第一行，收到可信位置后才开始同步呈现。旧歌词返回必须同时通过运行代际、录音代际、查询修订和请求号校验，不能覆盖新录音。
+5. 自动验证已通过 `MediaSessionMetadataPolicyTest`、`MediaSessionSelectionPolicyTest`、`MediaSessionTimelineTrackerTest`、`LyricsSettingsModelsTest`、`SettingsBehaviorTest` 和全量 `testDebugUnitTest`；默认 Debug 与同签名 staging Debug 均完成 `assembleDebug`。staging APK 为单 signer、APK v2，证书摘要与目标车机既有安装一致。默认 Debug 首次覆盖被 Android 正确拒绝，随后没有卸载或清数据，改用既有 staging 构建入口保留数据覆盖安装 `1.14-icar03`（versionCode `114`），基础安装 smoke 全部通过。
+6. 爱趣听专项 smoke 与用户主测均通过：无需重启应用即可从蓝牙切入爱趣听，服务选中公开 `com.tencent.wecarflow/MusicService` 会话，顶栏按进度显示同步歌词；设置页三个输入框分别显示当前歌名、歌手和专辑，不再显示歌词正文或制作信息。当前曲目持续播放的 `32s` 日志窗口内没有来源重选、录音代际变化、重复查词或致命异常。用户确认“切换后表现正常，设置页面表现也正常”。
+7. 只读会话矩阵已观察到蓝牙 `A2dpMediaBrowserService`、本机音乐 `HddPlayerService`、U 盘 `UsbPlayerService`、爱趣听 `MusicService` 及其它公开媒体会话；本轮受当前测试条件限制，U 盘和本机音乐仍只有会话发现证据，没有完成播放级歌词验收，不得表述为已通过。
+8. 用户主测通过后明确授权提交本组全媒体接入与设置修复；提交范围包含上述实现、回归测试和同步文档，未授权推送或发布。
+
 ## 2026-08-20 包名迁移与签名身份准备
 
 1. 已将 Android 应用身份从 `com.tcrrry.desktoplyrics` 迁移为 `com.ninepointnine.desktoplyrics`，同步更新源码命名空间、Manifest 组件入口、跨应用 Action、自定义控件、测试包和本机安装脚本；旧包名仅保留在历史记录中用于追溯。

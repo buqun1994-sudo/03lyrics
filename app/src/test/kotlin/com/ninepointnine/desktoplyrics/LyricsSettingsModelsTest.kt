@@ -29,7 +29,8 @@ class LyricsSettingsModelsTest {
             searchState = LyricsManualSearchState.READY,
             searchCandidates = listOf(
                 LyricsManualSearchCandidate("candidate-token", result.candidateSnapshot())
-            )
+            ),
+            recordingGeneration = 42L
         )
 
         val payload = state.encode()
@@ -41,6 +42,7 @@ class LyricsSettingsModelsTest {
         assertEquals(LyricsCacheSelection.MANUAL, decoded.cache.current?.selection)
         assertTrue(decoded.cache.current?.result?.translatedLyrics?.isNotBlank() == true)
         assertEquals("candidate-token", decoded.searchCandidates.single().token)
+        assertEquals(42L, decoded.recordingGeneration)
     }
 
     @Test

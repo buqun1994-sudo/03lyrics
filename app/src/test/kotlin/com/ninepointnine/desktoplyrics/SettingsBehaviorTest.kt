@@ -470,6 +470,46 @@ class SettingsBehaviorTest {
     }
 
     @Test
+    fun `media recording identity remains native owned across settings and web consumers`() {
+        var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
+        while (!File(appDirectory, "src/main").isDirectory) {
+            appDirectory = requireNotNull(appDirectory.parentFile)
+        }
+        val overlay = File(
+            appDirectory,
+            "src/main/assets/lyrics_overlay.html"
+        ).readText()
+        val service = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/LyricsOverlayService.kt"
+        ).readText()
+        val renderer = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/LyricsSettingsRenderer.kt"
+        ).readText()
+
+        assertTrue(service.contains("metadata.description"))
+        assertTrue(service.contains(".put(\"recordingGeneration\", recordingGeneration)"))
+        assertTrue(service.contains(".put(\"queryRevision\", queryRevision)"))
+        assertFalse(service.contains("private fun mediaTitle("))
+        assertFalse(overlay.contains("function normalizedKey("))
+        assertTrue(overlay.contains("String(recordingGeneration),String(queryRevision)"))
+        assertFalse(overlay.contains("track,artist,playback.album"))
+        assertTrue(
+            overlay.contains(
+                "if (playback.state !== 'playing' || !playback.timelineReady ||"
+            )
+        )
+        assertTrue(
+            overlay.contains(
+                "if (!playback.timelineReady || renderedLyricsKey !== playback.key ||"
+            )
+        )
+        assertTrue(renderer.contains("recordingGeneration == populatedRecordingGeneration"))
+        assertFalse(renderer.contains("populatedPlaybackKey"))
+    }
+
+    @Test
     fun `commercial recovery releases all lyrics runtime owners before a later rebuild`() {
         var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
         while (!File(appDirectory, "src/main").isDirectory) {
