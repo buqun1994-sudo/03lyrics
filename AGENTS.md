@@ -83,3 +83,9 @@
 5. 收尾必须说明改动、实际验证、Git 状态、未执行项的客观原因和剩余最小实机确认。
 6. 敏捷模式只缩短验证链路，不允许以此引入临时 Hack、复制状态机、降低架构质量或跳过编译/打包、自动安装和最简 smoke；安全、签名、数据迁移和发布变更仍按高风险边界单独验证。
 7. “高风险边界单独验证”不等于自动授权实机 instrumentation；测试层级必须先证明与本次改动直接相关，并遵守第 6 节的设备隔离门禁。
+
+## 9. Release 版本约束
+
+1. `release-version.properties` 是 Release 的唯一版本真值；Release 输出固定使用其中的 `releaseVersionName`，当前为 `1.0.0-icar03`。Debug 与 Staging 继续使用 `app/build.gradle.kts` 的 `defaultConfig` 版本，不因 Release 版本变化而改动。
+2. 用户未指定版本时，正式发布准备必须执行 `node scripts/bump-release-version.mjs`，只递增 `major.minor.patch-icar03` 的最后一位并同步递增 `releaseVersionCode`；用户明确指定版本时使用 `--version <major.minor.patch-icar03>`，不得擅自改写用户指定值。
+3. 构建本身不得修改版本文件；发布前先运行 `node scripts/bump-release-version.mjs --check`，再构建 Release 并核对 APK 元数据、签名和 `versionCode` 单调递增。该规则只约束 Release，不适用于 Debug / Staging。

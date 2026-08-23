@@ -24,12 +24,40 @@ fun Properties.loadUtf8(file: File) {
     file.reader(Charsets.UTF_8).use(::load)
 }
 
+fun Properties.requiredReleaseValue(name: String): String =
+    getProperty(name)?.trim()?.takeIf(String::isNotEmpty)
+        ?: error("Release version property '$name' is required")
+
+val releaseVersionPropertiesFile = rootProject.file("release-version.properties")
+val releaseVersionProperties = Properties().apply {
+    require(releaseVersionPropertiesFile.isFile) {
+        "Release version properties file does not exist: $releaseVersionPropertiesFile"
+    }
+    loadUtf8(releaseVersionPropertiesFile)
+}
+val releaseVersionName = releaseVersionProperties.requiredReleaseValue("releaseVersionName")
+val releaseVersionCode = releaseVersionProperties.requiredReleaseValue("releaseVersionCode").toIntOrNull()
+    ?: error("Release version property 'releaseVersionCode' must be a positive integer")
+require(releaseVersionCode > 0) {
+    "Release version property 'releaseVersionCode' must be a positive integer"
+}
+require(Regex("\\d+\\.\\d+\\.\\d+-icar03").matches(releaseVersionName)) {
+    "Release version name must match <major>.<minor>.<patch>-icar03"
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
-val signingPropertiesFile = rootProject.file("keystore.properties")
+val configuredProductionSigningPropertiesFile = providers
+    .gradleProperty("deviceCommerceProductionSigningPropertiesFile")
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+    ?.let(rootProject::file)
+val signingPropertiesFile = configuredProductionSigningPropertiesFile
+    ?: rootProject.file("keystore.properties")
 val signingProperties = Properties().apply {
     if (signingPropertiesFile.exists()) {
         loadUtf8(signingPropertiesFile)
@@ -270,6 +298,26 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.outputs.forEach { output ->
+            output.versionName.set(releaseVersionName)
+            output.versionCode.set(releaseVersionCode)
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "preReleaseBuild" || name == "validateSigningRelease") {
+        doFirst {
+            require(signingPropertiesFile.isFile) {
+                "Production APK signing properties file is required. " +
+                    "Pass -PdeviceCommerceProductionSigningPropertiesFile=<path-to-signing.properties>."
+            }
+        }
     }
 }
 
