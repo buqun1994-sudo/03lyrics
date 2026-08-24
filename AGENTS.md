@@ -70,6 +70,7 @@
 3. 创建、更新或审查项目级 Skill 时，使用 `.agents/skills/skill-authoring/SKILL.md`。
 4. 将已验证的通用能力去专有化并回流 `NewProject` 时，使用 `.agents/skills/template-feedback/SKILL.md`。
 5. 简单机械检查优先写脚本或测试，不为一次性事实创建 Skill。
+6. 涉及本产品包名、namespace、版本、签名、许可证、远端仓库或发布产物时，必须先使用 `.agents/skills/03-app-repository/SKILL.md` 路由到共享 `03-app-manager`；不得在本仓库维护第二份 03 APP 身份表。
 
 ## 8. 验证与收尾
 
