@@ -237,6 +237,18 @@ sealed interface PurchaseRecoveryResult {
 }
 
 interface DeviceCommercialGateway {
+    /**
+     * Read-only lifecycle entitlement check. Implementations may update local
+     * credentials only when a separate purchase, trial-start, or recovery
+     * flow explicitly returns a signed license.
+     */
+    suspend fun checkEntitlement(nowEpochMs: Long): CommercialAccessRefreshResult =
+        refreshAccess(nowEpochMs)
+
+    /**
+     * Compatibility entry retained for callers compiled against the original
+     * access-refresh API. New lifecycle code must call [checkEntitlement].
+     */
     suspend fun refreshAccess(nowEpochMs: Long): CommercialAccessRefreshResult = when (
         val result = queryEntitlement(nowEpochMs)
     ) {
@@ -247,7 +259,7 @@ interface DeviceCommercialGateway {
     }
 
     suspend fun forceRefreshAccess(nowEpochMs: Long): CommercialAccessRefreshResult =
-        refreshAccess(nowEpochMs)
+        checkEntitlement(nowEpochMs)
 
     suspend fun queryEntitlement(nowEpochMs: Long): EntitlementQueryResult
 

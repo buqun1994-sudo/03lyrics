@@ -44,7 +44,9 @@ class CommercialController(
     val state: CommercialUiState
         get() = stateMachine.state
 
-    fun start() = reloadEntitlement(forceRemote = false)
+    /** Settings entry is an entitlement lifecycle boundary, so it always
+     * starts an asynchronous online recheck alongside the local read. */
+    fun start() = reloadEntitlement(forceRemote = true)
 
     fun close() {
         removeSnapshotListener()

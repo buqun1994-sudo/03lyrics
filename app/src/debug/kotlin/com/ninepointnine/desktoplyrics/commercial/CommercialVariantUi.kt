@@ -74,9 +74,6 @@ object CommercialVariantUi {
                 "offlineGraceUntil=" +
                     diagnostic.offlineGraceUntilEpochMs?.let(Instant::ofEpochMilli)
             )
-            appendLine(
-                "refreshAfter=" + diagnostic.refreshAfterEpochMs?.let(Instant::ofEpochMilli)
-            )
         }
         runCatching {
             context.openFileOutput(DIAGNOSTIC_FILE, Context.MODE_PRIVATE).use { output ->

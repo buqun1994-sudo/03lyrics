@@ -1,6 +1,7 @@
 package com.ninepointnine.desktoplyrics
 
 import com.ninepointnine.desktoplyrics.commercial.CommercialAccessDecision
+import com.ninepointnine.desktoplyrics.commercial.CommercialTier
 
 internal class CommercialRuntimeAccessGuard(
     private val nowEpochMs: () -> Long,
@@ -8,25 +9,23 @@ internal class CommercialRuntimeAccessGuard(
     private val scheduleExpiry: (Runnable, Long) -> Unit,
     private val cancelExpiry: (Runnable) -> Unit,
     private val onDenied: (CommercialAccessDecision.Denied) -> Unit,
-    private val onRefreshDue: () -> Unit = {}
+    private val onTrialLeaseDue: () -> Unit = {}
 ) {
     private var allowedAccess: CommercialAccessDecision.Allowed? = null
-    private var triggeredRefreshBoundary: Long? = null
+    private var trialLeaseRenewalPending = false
+    private var trialLeaseBoundaryTriggered: Long? = null
 
-    private val refreshRunnable = object : Runnable {
+    /**
+     * A trial license is a short lease inside the signed seven-day trial.
+     * Crossing the lease boundary must ask the cloud for the next signed
+     * lease; it must not be treated as the end of the trial entitlement.
+     */
+    private val trialLeaseRunnable = object : Runnable {
         override fun run() {
             val currentAccess = allowedAccess ?: return
-            val boundary = currentAccess.refreshAfterEpochMs ?: return
             val now = nowEpochMs()
-            if (now < boundary) {
-                scheduleExpiry(this, boundary - now)
-                return
-            }
-            if (!isCurrent(currentAccess, now) || triggeredRefreshBoundary == boundary) {
-                return
-            }
-            triggeredRefreshBoundary = boundary
-            onRefreshDue()
+            if (!needsTrialLeaseRenewal(currentAccess, now)) return
+            triggerTrialLeaseRenewal(currentAccess)
         }
     }
 
@@ -42,23 +41,36 @@ internal class CommercialRuntimeAccessGuard(
 
     fun clear() {
         allowedAccess = null
-        triggeredRefreshBoundary = null
-        cancelExpiry(refreshRunnable)
+        trialLeaseRenewalPending = false
+        trialLeaseBoundaryTriggered = null
+        cancelExpiry(trialLeaseRunnable)
         cancelExpiry(expiryRunnable)
     }
 
     fun hasCurrentAccess(): Boolean {
         val currentAccess = allowedAccess ?: return false
         val now = nowEpochMs()
-        if (isCurrent(currentAccess, now)) return true
+        if (isCurrent(currentAccess, now)) {
+            if (needsTrialLeaseRenewal(currentAccess, now)) {
+                triggerTrialLeaseRenewal(currentAccess)
+            }
+            return true
+        }
 
         revalidateAt(now)
         return allowedAccess?.let { isCurrent(it, nowEpochMs()) } == true
     }
 
     fun revalidate() {
-        if (allowedAccess == null) return
-        revalidateAt(nowEpochMs())
+        val currentAccess = allowedAccess ?: return
+        val now = nowEpochMs()
+        if (isCurrent(currentAccess, now) &&
+            needsTrialLeaseRenewal(currentAccess, now)
+        ) {
+            triggerTrialLeaseRenewal(currentAccess)
+            return
+        }
+        revalidateAt(now)
     }
 
     private fun revalidateAt(now: Long) {
@@ -74,20 +86,57 @@ internal class CommercialRuntimeAccessGuard(
 
     private fun replaceAccess(access: CommercialAccessDecision.Allowed, now: Long) {
         allowedAccess = access
-        cancelExpiry(refreshRunnable)
+        trialLeaseRenewalPending = false
+        trialLeaseBoundaryTriggered = null
+        cancelExpiry(trialLeaseRunnable)
         cancelExpiry(expiryRunnable)
-        access.refreshAfterEpochMs?.let { boundary ->
-            if (triggeredRefreshBoundary != boundary || boundary > now) {
-                scheduleExpiry(refreshRunnable, (boundary - now).coerceAtLeast(0L))
+        val finalBoundary = finalBoundary(access)
+        if (access.tier == CommercialTier.TRIAL) {
+            val leaseBoundary = access.expiresAtEpochMs
+            if (leaseBoundary != null &&
+                access.trialEndsAtEpochMs?.let { leaseBoundary < it } == true
+            ) {
+                scheduleExpiry(
+                    trialLeaseRunnable,
+                    (leaseBoundary - now).coerceAtLeast(0L)
+                )
             }
         }
-        access.expiresAtEpochMs?.let { boundary ->
+        finalBoundary?.let { boundary ->
             scheduleExpiry(expiryRunnable, (boundary - now).coerceAtLeast(0L))
         }
     }
 
+    private fun triggerTrialLeaseRenewal(
+        access: CommercialAccessDecision.Allowed
+    ) {
+        val boundary = access.expiresAtEpochMs ?: return
+        if (trialLeaseRenewalPending && trialLeaseBoundaryTriggered == boundary) return
+        trialLeaseRenewalPending = true
+        trialLeaseBoundaryTriggered = boundary
+        cancelExpiry(trialLeaseRunnable)
+        onTrialLeaseDue()
+    }
+
+    private fun needsTrialLeaseRenewal(
+        access: CommercialAccessDecision.Allowed,
+        now: Long
+    ): Boolean {
+        if (access.tier != CommercialTier.TRIAL) return false
+        val leaseBoundary = access.expiresAtEpochMs ?: return false
+        val finalBoundary = access.trialEndsAtEpochMs ?: return false
+        return leaseBoundary < finalBoundary && now >= leaseBoundary && now < finalBoundary
+    }
+
+    private fun finalBoundary(access: CommercialAccessDecision.Allowed): Long? =
+        if (access.tier == CommercialTier.TRIAL) {
+            access.trialEndsAtEpochMs ?: access.expiresAtEpochMs
+        } else {
+            access.expiresAtEpochMs
+        }
+
     private fun isCurrent(
         access: CommercialAccessDecision.Allowed,
         now: Long
-    ): Boolean = access.expiresAtEpochMs?.let { now < it } ?: true
+    ): Boolean = finalBoundary(access)?.let { now < it } ?: true
 }

@@ -113,42 +113,36 @@ class CommercialSecurityTest {
         }
         assertInvalid(trusted, envelope, LicenseVerificationFailure.NOT_YET_VALID) {
             validClaims().copy(
-                issuedAtEpochMs = NOW + LicenseVerifier.LICENSE_CLOCK_SKEW_MS + 1,
-                expiresAtEpochMs = NOW + LicenseVerifier.LICENSE_CLOCK_SKEW_MS + 2,
-                offlineGraceUntilEpochMs = NOW + LicenseVerifier.LICENSE_CLOCK_SKEW_MS + 3
+                issuedAtEpochMs = NOW + LicenseVerifier.LICENSE_CLOCK_SKEW_MS + 1
             )
         }
     }
 
     @Test
-    fun `permanent license remains valid in signed offline grace then expires`() {
+    fun `permanent license requires explicit null boundaries and never expires`() {
         val trusted = generateKeyPair()
         val payload = "signed".toByteArray()
         val envelope = SignedLicenseEnvelope(payload, sign(trusted, payload), KEY_ID)
-        val claims = validClaims().copy(
-            expiresAtEpochMs = NOW - 1,
-            offlineGraceUntilEpochMs = NOW + 1
-        )
+        val claims = validClaims()
         val verifier = verifier(trusted) { claims }
 
-        val inGrace = verifier.verify(envelope, NOW) as LicenseVerificationResult.Valid
-        assertEquals(LicenseValidityWindow.OFFLINE_GRACE, inGrace.window)
-        assertEquals(
-            LicenseVerificationResult.Invalid(LicenseVerificationFailure.EXPIRED),
-            verifier.verify(envelope, NOW + 1)
-        )
+        val active = verifier.verify(envelope, NOW) as LicenseVerificationResult.Valid
+        assertEquals(LicenseValidityWindow.ACTIVE, active.window)
+        assertEquals(null, active.claims.finalAccessUntilEpochMs())
+        assertTrue(verifier.verify(envelope, Long.MAX_VALUE) is LicenseVerificationResult.Valid)
     }
 
     @Test
-    fun `trial license uses signed trial end instead of pro offline grace`() {
+    fun `trial license uses its 24 hour lease while retaining the seven day entitlement end`() {
         val trusted = generateKeyPair()
         val payload = "signed-trial".toByteArray()
         val envelope = SignedLicenseEnvelope(payload, sign(trusted, payload), KEY_ID)
         val claims = validClaims().copy(
             tier = CommercialTier.TRIAL,
+            validity = LicenseValidity.TRIAL,
             issuedAtEpochMs = NOW - 20_000,
-            expiresAtEpochMs = NOW - 10_000,
-            offlineGraceUntilEpochMs = NOW - 1,
+            expiresAtEpochMs = NOW + 10_000,
+            offlineGraceUntilEpochMs = NOW + 10_000,
             trialEndsAtEpochMs = NOW + 20_000
         )
 
@@ -157,6 +151,30 @@ class CommercialSecurityTest {
         val valid = result as LicenseVerificationResult.Valid
         assertEquals(LicenseValidityWindow.TRIAL, valid.window)
         assertEquals(claims, valid.claims)
+        assertEquals(NOW + 10_000, claims.finalAccessUntilEpochMs())
+        assertEquals(
+            LicenseVerificationResult.Invalid(LicenseVerificationFailure.EXPIRED),
+            verifier(trusted) { claims }.verify(envelope, NOW + 10_000)
+        )
+    }
+
+    @Test
+    fun `trial license rejects a lease longer than 24 hours`() {
+        val trusted = generateKeyPair()
+        val payload = "long-trial".toByteArray()
+        val envelope = SignedLicenseEnvelope(payload, sign(trusted, payload), KEY_ID)
+        val claims = validClaims().copy(
+            tier = CommercialTier.TRIAL,
+            validity = LicenseValidity.TRIAL,
+            expiresAtEpochMs = NOW + LicenseVerifier.TRIAL_LICENSE_MAX_DURATION_MS + 1,
+            offlineGraceUntilEpochMs = NOW + LicenseVerifier.TRIAL_LICENSE_MAX_DURATION_MS + 1,
+            trialEndsAtEpochMs = NOW + LicenseVerifier.TRIAL_LICENSE_MAX_DURATION_MS + 1
+        )
+
+        assertEquals(
+            LicenseVerificationResult.Invalid(LicenseVerificationFailure.TIME_BOUNDARY),
+            verifier(trusted) { claims }.verify(envelope, NOW)
+        )
     }
 
     @Test
@@ -228,9 +246,10 @@ class CommercialSecurityTest {
         deviceKeyVersion = 1,
         tier = CommercialTier.PRO,
         issuedAtEpochMs = NOW - 1_000,
-        expiresAtEpochMs = NOW + 1_000,
-        offlineGraceUntilEpochMs = NOW + 2_000,
-        trialEndsAtEpochMs = null
+        expiresAtEpochMs = null,
+        offlineGraceUntilEpochMs = null,
+        trialEndsAtEpochMs = null,
+        validity = LicenseValidity.PERMANENT
     )
 
     private fun generateKeyPair() = KeyPairGenerator.getInstance("EC").run {

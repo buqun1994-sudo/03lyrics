@@ -6,7 +6,7 @@ import kotlinx.coroutines.ensureActive
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * The process-wide owner of entitlement reads, refreshes and the last trusted
+ * The process-wide owner of entitlement reads, rechecks and the last trusted
  * projection. Settings and the lyric service must use this object instead of
  * evaluating the gateway and access gate independently.
  */
@@ -70,6 +70,9 @@ class CommercialEntitlementCoordinator(
         }
 
         val failure = result as EntitlementQueryResult.Failure
+        if (failure.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
+            publishRevoked()
+        }
         if (failure.reason.isTransient()) {
             val local = snapshotFromAccess(evaluate(nowEpochMs), nowEpochMs)
             if (local != null) {
@@ -80,27 +83,42 @@ class CommercialEntitlementCoordinator(
         return result
     }
 
-    suspend fun refreshAccess(
-        nowEpochMs: Long = this.nowEpochMs(),
-        forceRemote: Boolean = false
+    /**
+     * Performs the online, read-only device entitlement check. A successful
+     * active response does not replace the locally stored license.
+     */
+    suspend fun recheckEntitlement(
+        nowEpochMs: Long = this.nowEpochMs()
     ): CommercialAccessRefreshResult {
         val result = try {
-            if (forceRemote) {
-                gateway.forceRefreshAccess(nowEpochMs)
-            } else {
-                gateway.refreshAccess(nowEpochMs)
-            }
+            gateway.checkEntitlement(nowEpochMs)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             CommercialAccessRefreshResult.Failure(CommercialFailure.UNKNOWN)
         }
         currentCoroutineContext().ensureActive()
-
-        // The persisted, locally verified decision is the final runtime
-        // authority after either a remote response or a transient failure.
+        // The gateway persists any newly issued purchase/trial/recovery
+        // license before returning. Re-read the local verifier so runtime
+        // consumers observe one authoritative gate projection.
         evaluate(nowEpochMs)
+        if (result is CommercialAccessRefreshResult.Failure &&
+            result.reason == CommercialFailure.ENTITLEMENT_REVOKED
+        ) {
+            publishRevoked()
+        }
         return result
+    }
+
+    /**
+     * Compatibility wrapper for the pre-check API. It intentionally performs
+     * the same read-only check and never invokes license/refresh itself.
+     */
+    suspend fun refreshAccess(
+        nowEpochMs: Long = this.nowEpochMs(),
+        @Suppress("UNUSED_PARAMETER") forceRemote: Boolean = true
+    ): CommercialAccessRefreshResult {
+        return recheckEntitlement(nowEpochMs)
     }
 
     fun diagnostic(nowEpochMs: Long = this.nowEpochMs()): CommercialEntitlementDiagnostic {
@@ -121,9 +139,7 @@ class CommercialEntitlementCoordinator(
             offlineGraceUntilEpochMs = when (decision) {
                 is CommercialAccessDecision.Allowed -> decision.offlineGraceUntilEpochMs
                 is CommercialAccessDecision.Denied -> decision.offlineGraceUntilEpochMs
-            },
-            refreshAfterEpochMs = (decision as? CommercialAccessDecision.Allowed)
-                ?.refreshAfterEpochMs
+            }
         )
     }
 
@@ -159,6 +175,9 @@ class CommercialEntitlementCoordinator(
             }
             is CommercialAccessDecision.Denied -> when (access.reason) {
                 CommercialAccessDenial.LICENSE_EXPIRED -> EntitlementState.Expired
+                CommercialAccessDenial.ENTITLEMENT_REVOKED -> {
+                    EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED)
+                }
                 else -> return null
             }
         }
@@ -176,6 +195,16 @@ class CommercialEntitlementCoordinator(
         if (latestKey == key) return
         latestKey = key
         listeners.forEach { listener -> notifyListener(listener, snapshot) }
+    }
+
+    private fun publishRevoked() {
+        publish(
+            EntitlementSnapshot(
+                entitlement = EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED),
+                quote = null,
+                pendingPayment = null
+            )
+        )
     }
 
     private fun notifyListener(
@@ -232,6 +261,5 @@ data class CommercialEntitlementDiagnostic(
     val tier: CommercialTier?,
     val trialEndsAtEpochMs: Long?,
     val remainingMillis: Long?,
-    val offlineGraceUntilEpochMs: Long?,
-    val refreshAfterEpochMs: Long?
+    val offlineGraceUntilEpochMs: Long?
 )

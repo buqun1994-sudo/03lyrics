@@ -104,39 +104,39 @@ class SettingsBehaviorTest {
     }
 
     @Test
-    fun `commercial cloud refresh runs once for a new service lifecycle`() {
+    fun `commercial cloud entitlement check runs once for a new service lifecycle`() {
         assertTrue(
-            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+            LyricsCommercialStartupCheckPolicy.shouldCheck(
                 LyricsOverlayService.ACTION_START,
                 alreadyStarted = false
             )
         )
         assertTrue(
-            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+            LyricsCommercialStartupCheckPolicy.shouldCheck(
                 LyricsOverlayService.ACTION_SETTINGS_OPENED,
                 alreadyStarted = false
             )
         )
         assertFalse(
-            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+            LyricsCommercialStartupCheckPolicy.shouldCheck(
                 LyricsOverlayService.ACTION_START,
                 alreadyStarted = true
             )
         )
         assertFalse(
-            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+            LyricsCommercialStartupCheckPolicy.shouldCheck(
                 LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_CHANGED,
                 alreadyStarted = false
             )
         )
         assertFalse(
-            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+            LyricsCommercialStartupCheckPolicy.shouldCheck(
                 LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_REVOKED,
                 alreadyStarted = false
             )
         )
         assertFalse(
-            LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+            LyricsCommercialStartupCheckPolicy.shouldCheck(
                 LyricsOverlayService.ACTION_STOP,
                 alreadyStarted = false
             )
@@ -144,19 +144,19 @@ class SettingsBehaviorTest {
     }
 
     @Test
-    fun `startup cloud refresh only overrides local access for authoritative denial`() {
+    fun `startup cloud check only overrides local access for authoritative denial`() {
         val localPro = CommercialAccessDecision.Allowed(CommercialTier.PRO, 20_000L)
 
         assertEquals(
             localPro,
-            LyricsCommercialStartupRefreshPolicy.reconcile(
+            LyricsCommercialStartupCheckPolicy.reconcile(
                 CommercialAccessRefreshResult.Failure(CommercialFailure.NETWORK),
                 localPro
             )
         )
         assertEquals(
             CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED),
-            LyricsCommercialStartupRefreshPolicy.reconcile(
+            LyricsCommercialStartupCheckPolicy.reconcile(
                 CommercialAccessRefreshResult.Failure(
                     CommercialFailure.ENTITLEMENT_REVOKED
                 ),
@@ -165,30 +165,44 @@ class SettingsBehaviorTest {
         )
         assertEquals(
             CommercialAccessDecision.Denied(CommercialAccessDenial.LICENSE_EXPIRED),
-            LyricsCommercialStartupRefreshPolicy.reconcile(
+            LyricsCommercialStartupCheckPolicy.reconcile(
                 CommercialAccessRefreshResult.Ready(EntitlementState.Expired),
+                localPro
+            )
+        )
+        assertEquals(
+            CommercialAccessDecision.Denied(CommercialAccessDenial.DEVICE_MISMATCH),
+            LyricsCommercialStartupCheckPolicy.reconcile(
+                CommercialAccessRefreshResult.Failure(CommercialFailure.DEVICE_MISMATCH),
+                localPro
+            )
+        )
+        assertEquals(
+            CommercialAccessDecision.Denied(CommercialAccessDenial.INVALID_LICENSE),
+            LyricsCommercialStartupCheckPolicy.reconcile(
+                CommercialAccessRefreshResult.Failure(CommercialFailure.INVALID_LICENSE),
                 localPro
             )
         )
     }
 
     @Test
-    fun `denied access only waits for cloud refresh before runtime resources exist`() {
+    fun `denied access only waits for cloud check before runtime resources exist`() {
         assertTrue(
-            LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
-                waitingForRefresh = true,
+            LyricsCommercialStartupCheckPolicy.shouldDeferDeniedAccess(
+                waitingForCheck = true,
                 runtimeActive = false
             )
         )
         assertFalse(
-            LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
-                waitingForRefresh = true,
+            LyricsCommercialStartupCheckPolicy.shouldDeferDeniedAccess(
+                waitingForCheck = true,
                 runtimeActive = true
             )
         )
         assertFalse(
-            LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
-                waitingForRefresh = false,
+            LyricsCommercialStartupCheckPolicy.shouldDeferDeniedAccess(
+                waitingForCheck = false,
                 runtimeActive = false
             )
         )
@@ -207,40 +221,65 @@ class SettingsBehaviorTest {
     }
 
     @Test
-    fun `commercial access guard triggers one renewal callback before final expiry`() {
+    fun `trial lease boundary triggers one online check before the seven day end`() {
         var now = 10_000L
-        var refreshes = 0
+        var leaseChecks = 0
         val scheduled = linkedMapOf<Runnable, Long>()
         val guard = CommercialRuntimeAccessGuard(
             nowEpochMs = { now },
             evaluateAccess = {
-                CommercialAccessDecision.Allowed(
-                    CommercialTier.PRO,
-                    expiresAtEpochMs = 30_000L,
-                    refreshAfterEpochMs = 15_000L
-                )
+                error("trial lease renewal must use the online callback")
             },
             scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
-            cancelExpiry = { scheduled.remove(it) },
+            cancelExpiry = { runnable -> scheduled.remove(runnable) },
             onDenied = {},
-            onRefreshDue = { refreshes += 1 }
+            onTrialLeaseDue = { leaseChecks += 1 }
         )
 
         guard.authorize(
             CommercialAccessDecision.Allowed(
-                CommercialTier.PRO,
-                expiresAtEpochMs = 30_000L,
-                refreshAfterEpochMs = 15_000L
+                tier = CommercialTier.TRIAL,
+                expiresAtEpochMs = 15_000L,
+                trialEndsAtEpochMs = 30_000L
             )
         )
-        val renewal = scheduled.entries.single { it.value == 5_000L }.key
-        scheduled.remove(renewal)
-        now = 15_000L
-        renewal.run()
-        renewal.run()
 
-        assertEquals(1, refreshes)
+        assertEquals(setOf(5_000L, 20_000L), scheduled.values.toSet())
+        val leaseRunnable = scheduled.entries.single { it.value == 5_000L }.key
+        now = 15_000L
+        leaseRunnable.run()
+        leaseRunnable.run()
+
+        assertEquals(1, leaseChecks)
         assertTrue(guard.hasCurrentAccess())
+        assertEquals(setOf(20_000L), scheduled.values.toSet())
+    }
+
+    @Test
+    fun `permanent pro does not schedule a trial lease check`() {
+        val now = 10_000L
+        var leaseChecks = 0
+        val scheduled = linkedMapOf<Runnable, Long>()
+        val guard = CommercialRuntimeAccessGuard(
+            nowEpochMs = { now },
+            evaluateAccess = {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.LICENSE_EXPIRED)
+            },
+            scheduleExpiry = { runnable, delay -> scheduled[runnable] = delay },
+            cancelExpiry = { runnable -> scheduled.remove(runnable) },
+            onDenied = {},
+            onTrialLeaseDue = { leaseChecks += 1 }
+        )
+
+        guard.authorize(
+            CommercialAccessDecision.Allowed(
+                tier = CommercialTier.PRO,
+                expiresAtEpochMs = null
+            )
+        )
+        assertTrue(scheduled.isEmpty())
+
+        assertEquals(0, leaseChecks)
     }
 
     @Test
@@ -281,7 +320,7 @@ class SettingsBehaviorTest {
     }
 
     @Test
-    fun `commercial access refresh replaces and reschedules the prior permission`() {
+    fun `commercial access boundary revalidates and reschedules the prior permission`() {
         val harness = CommercialRuntimeAccessHarness(now = 10_000L)
         harness.guard.authorize(
             CommercialAccessDecision.Allowed(CommercialTier.TRIAL, 15_000L)

@@ -205,7 +205,6 @@ class MainActivity : AppCompatActivity() {
         )
         CommercialVariantUi.handleDebugIntent(this, intent, commercialController)
         commercialRenderer.render(commercialController.state)
-        commercialController.start()
 
         refreshThemePalette()
         showSection(selectedSection)
@@ -239,6 +238,12 @@ class MainActivity : AppCompatActivity() {
         refreshThemePalette()
         lyricsSettingsRenderer.renderServiceRunning(LyricsOverlayService.isRunning)
         ensureLyricsOverlayForSettings()
+        // A newly visible settings surface is an entitlement lifecycle
+        // boundary. The controller keeps rendering the locally verified state
+        // while this request runs asynchronously.
+        if (::commercialController.isInitialized) {
+            commercialController.reloadEntitlement()
+        }
         requestSettingsState()
     }
 

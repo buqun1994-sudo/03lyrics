@@ -100,11 +100,12 @@ class LyricsOverlayService : Service() {
     private var lyricsJob: Job? = null
     private var lyricsScope: CoroutineScope? = null
     private val lyricsUsageLock = Any()
-    private val commercialRefreshJob = SupervisorJob()
-    private val commercialRefreshScope = CoroutineScope(commercialRefreshJob + Dispatchers.IO)
-    private var commercialStartupRefreshStarted = false
-    private var commercialStartupRefreshPending = false
-    private var resumeAfterCommercialStartupRefresh = false
+    private val commercialCheckJob = SupervisorJob()
+    private val commercialCheckScope = CoroutineScope(commercialCheckJob + Dispatchers.IO)
+    private var commercialStartupCheckStarted = false
+    private var commercialStartupCheckPending = false
+    private var commercialTrialLeaseCheckPending = false
+    private var resumeAfterCommercialStartupCheck = false
     private var pendingCommercialStartupIntent: Intent? = null
     private var latestStartId = 0
     private var commercialAccessBoundaryReceiverRegistered = false
@@ -119,7 +120,7 @@ class LyricsOverlayService : Service() {
             },
             cancelExpiry = mainHandler::removeCallbacks,
             onDenied = ::onCommercialRuntimeAccessDenied,
-            onRefreshDue = ::refreshCommercialAccessAtSignedBoundary
+            onTrialLeaseDue = ::recheckCommercialEntitlementAtTrialLease
         )
     }
 
@@ -353,6 +354,7 @@ class LyricsOverlayService : Service() {
             if (systemDecision.clearsAutoStart) {
                 prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
             }
+            invalidatePendingCommercialChecks()
             commercialRuntimeAccess.clear()
             clearRecoveryNotification()
             releaseRuntimeResources()
@@ -375,7 +377,7 @@ class LyricsOverlayService : Service() {
 
         val commercialAccess = CommercialRuntimeFactory.entitlementCoordinator(this)
             .evaluate(System.currentTimeMillis())
-        val waitingForRefresh = beginCommercialStartupRefreshIfNeeded(intent, commercialAccess)
+        val waitingForCheck = beginCommercialStartupCheckIfNeeded(intent, commercialAccess)
         if (systemDecision == LyricsStartupOutcome.RECOVERY) {
             enterRecoveryState(startId, overlayAccess, notificationAccess)
             logStartupOutcome(source, overlayAccess, notificationAccess, systemDecision)
@@ -385,8 +387,8 @@ class LyricsOverlayService : Service() {
         val decision = LyricsCommercialGatePolicy.decide(systemDecision, commercialAccess)
         if (decision == LyricsStartupOutcome.COMMERCIAL_RECOVERY) {
             val runtimeActive = lyricsRepository != null || overlayRoot != null || monitorStarted
-            if (LyricsCommercialStartupRefreshPolicy.shouldDeferDeniedAccess(
-                    waitingForRefresh = waitingForRefresh,
+            if (LyricsCommercialStartupCheckPolicy.shouldDeferDeniedAccess(
+                    waitingForCheck = waitingForCheck,
                     runtimeActive = runtimeActive
                 )
             ) {
@@ -409,77 +411,114 @@ class LyricsOverlayService : Service() {
         )
     }
 
-    private fun beginCommercialStartupRefreshIfNeeded(
+    private fun beginCommercialStartupCheckIfNeeded(
         intent: Intent?,
         localAccess: CommercialAccessDecision
     ): Boolean {
         val localDenied = localAccess is CommercialAccessDecision.Denied
-        if (!LyricsCommercialStartupRefreshPolicy.shouldRefresh(
+        if (!LyricsCommercialStartupCheckPolicy.shouldCheck(
                 action = intent?.action,
-                alreadyStarted = commercialStartupRefreshStarted
+                alreadyStarted = commercialStartupCheckStarted
             )
         ) {
-            if (commercialStartupRefreshPending && localDenied) {
-                resumeAfterCommercialStartupRefresh = true
+            if (commercialStartupCheckPending && localDenied) {
+                resumeAfterCommercialStartupCheck = true
                 pendingCommercialStartupIntent = intent?.let(::Intent)
             }
-            return commercialStartupRefreshPending && localDenied
+            return commercialStartupCheckPending && localDenied
         }
 
-        commercialStartupRefreshStarted = true
-        commercialStartupRefreshPending = true
-        resumeAfterCommercialStartupRefresh = localDenied
+        commercialStartupCheckStarted = true
+        commercialStartupCheckPending = true
+        resumeAfterCommercialStartupCheck = localDenied
         pendingCommercialStartupIntent = if (localDenied) intent?.let(::Intent) else null
         Log.i(
             LOG_TAG,
-            "Commercial startup revalidation started localAllowed=${!localDenied}"
+            "Commercial startup entitlement check started localAllowed=${!localDenied}"
         )
-        launchCommercialAccessRefresh()
+        launchCommercialEntitlementCheck()
         return localDenied
     }
 
-    private fun refreshCommercialAccessAtSignedBoundary() {
-        if (commercialStartupRefreshPending || lyricsRepository == null) return
-        commercialStartupRefreshPending = true
-        resumeAfterCommercialStartupRefresh = false
-        pendingCommercialStartupIntent = null
-        Log.i(LOG_TAG, "Commercial signed renewal point reached; refreshing access")
-        launchCommercialAccessRefresh()
+    private fun recheckCommercialEntitlementAtTrialLease() {
+        if (!isRunning || lyricsRepository == null) return
+        if (commercialStartupCheckPending || commercialTrialLeaseCheckPending) return
+        commercialTrialLeaseCheckPending = true
+        Log.i(LOG_TAG, "Commercial trial lease boundary reached; checking entitlement")
+        launchCommercialEntitlementCheck(::finishCommercialTrialLeaseCheck)
     }
 
-    private fun launchCommercialAccessRefresh() {
-        commercialRefreshScope.launch {
+    private fun launchCommercialEntitlementCheck(
+        onComplete: (CommercialAccessRefreshResult) -> Unit = ::finishCommercialStartupCheck
+    ) {
+        commercialCheckScope.launch {
             val result = try {
                 CommercialRuntimeFactory.entitlementCoordinator(this@LyricsOverlayService)
-                    .refreshAccess(System.currentTimeMillis())
+                    .recheckEntitlement(System.currentTimeMillis())
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(LOG_TAG, "Commercial access refresh failed unexpectedly", error)
+                Log.w(LOG_TAG, "Commercial entitlement recheck failed unexpectedly", error)
                 CommercialAccessRefreshResult.Failure(CommercialFailure.UNKNOWN)
             }
-            mainHandler.post { finishCommercialStartupRefresh(result) }
+            mainHandler.post { onComplete(result) }
         }
     }
 
-    private fun finishCommercialStartupRefresh(result: CommercialAccessRefreshResult) {
-        if (!commercialStartupRefreshPending) return
-        commercialStartupRefreshPending = false
-        val shouldResume = resumeAfterCommercialStartupRefresh
-        val pendingIntent = pendingCommercialStartupIntent
-        resumeAfterCommercialStartupRefresh = false
-        pendingCommercialStartupIntent = null
+    private fun finishCommercialTrialLeaseCheck(result: CommercialAccessRefreshResult) {
+        if (!commercialTrialLeaseCheckPending) return
+        commercialTrialLeaseCheckPending = false
 
         val localAccess = CommercialRuntimeFactory.entitlementCoordinator(this)
             .evaluate(System.currentTimeMillis())
-        val access = LyricsCommercialStartupRefreshPolicy.reconcile(result, localAccess)
+        val access = LyricsCommercialStartupCheckPolicy.reconcile(result, localAccess)
         val resultLog = when (result) {
             is CommercialAccessRefreshResult.Ready -> "ready"
             is CommercialAccessRefreshResult.Failure -> "failure_${result.reason.name.lowercase()}"
         }
         Log.i(
             LOG_TAG,
-            "Commercial access refresh completed result=$resultLog " +
+            "Commercial trial lease check completed result=$resultLog " +
+                "localAllowed=${access is CommercialAccessDecision.Allowed}"
+        )
+
+        when (access) {
+            is CommercialAccessDecision.Allowed -> {
+                // The gateway has already verified and persisted a newly
+                // issued lease when one was required. Re-authorizing here
+                // replaces the old lease callback without recreating lyrics.
+                commercialRuntimeAccess.authorize(access)
+            }
+            is CommercialAccessDecision.Denied -> {
+                enterCommercialRecoveryState(latestStartId, access)
+                logStartupOutcome(
+                    source = START_SOURCE_RUNTIME_ACCESS,
+                    overlayAccess = Settings.canDrawOverlays(this),
+                    notificationAccess = hasNotificationListenerAccess(),
+                    outcome = LyricsStartupOutcome.COMMERCIAL_RECOVERY
+                )
+            }
+        }
+    }
+
+    private fun finishCommercialStartupCheck(result: CommercialAccessRefreshResult) {
+        if (!commercialStartupCheckPending) return
+        commercialStartupCheckPending = false
+        val shouldResume = resumeAfterCommercialStartupCheck
+        val pendingIntent = pendingCommercialStartupIntent
+        resumeAfterCommercialStartupCheck = false
+        pendingCommercialStartupIntent = null
+
+        val localAccess = CommercialRuntimeFactory.entitlementCoordinator(this)
+            .evaluate(System.currentTimeMillis())
+        val access = LyricsCommercialStartupCheckPolicy.reconcile(result, localAccess)
+        val resultLog = when (result) {
+            is CommercialAccessRefreshResult.Ready -> "ready"
+            is CommercialAccessRefreshResult.Failure -> "failure_${result.reason.name.lowercase()}"
+        }
+        Log.i(
+            LOG_TAG,
+            "Commercial entitlement recheck completed result=$resultLog " +
                 "localAllowed=${access is CommercialAccessDecision.Allowed}"
         )
 
@@ -747,7 +786,8 @@ class LyricsOverlayService : Service() {
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
         IcarRightDockStateRegistry.removeListener(rightDockStateListener)
         unregisterCommercialAccessBoundaryReceiver()
-        commercialRefreshJob.cancel()
+        invalidatePendingCommercialChecks()
+        commercialCheckJob.cancel()
         commercialRuntimeAccess.clear()
         releaseRuntimeResources()
         mainHandler.removeCallbacksAndMessages(null)
@@ -814,6 +854,7 @@ class LyricsOverlayService : Service() {
     }
 
     private fun onCommercialRuntimeAccessDenied(access: CommercialAccessDecision.Denied) {
+        invalidatePendingCommercialChecks()
         Log.i(
             LOG_TAG,
             "Commercial runtime access ended reason=${access.reason.name.lowercase()}"
@@ -1511,6 +1552,7 @@ class LyricsOverlayService : Service() {
         startId: Int,
         access: CommercialAccessDecision
     ) {
+        invalidatePendingCommercialChecks()
         commercialRuntimeAccess.clear()
         releaseRuntimeResources()
         stopForegroundNotification()
@@ -1519,6 +1561,14 @@ class LyricsOverlayService : Service() {
             buildCommercialRecoveryNotification(access)
         )
         stopSelfResult(startId)
+    }
+
+    /** Ignore completions from a check that raced with a terminal lifecycle state. */
+    private fun invalidatePendingCommercialChecks() {
+        commercialStartupCheckPending = false
+        commercialTrialLeaseCheckPending = false
+        resumeAfterCommercialStartupCheck = false
+        pendingCommercialStartupIntent = null
     }
 
     private fun buildCommercialRecoveryNotification(
@@ -3172,20 +3222,41 @@ internal object LyricsCommercialGatePolicy {
     }
 }
 
-internal object LyricsCommercialStartupRefreshPolicy {
-    fun shouldRefresh(action: String?, alreadyStarted: Boolean): Boolean =
-        !alreadyStarted &&
-            action != LyricsOverlayService.ACTION_STOP &&
+internal object LyricsCommercialStartupCheckPolicy {
+    fun shouldCheck(action: String?, alreadyStarted: Boolean): Boolean =
+        action != LyricsOverlayService.ACTION_STOP &&
+            action != LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_REVOKED &&
             action != LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_CHANGED &&
-            action != LyricsOverlayService.ACTION_COMMERCIAL_ACCESS_REVOKED
+            (
+                !alreadyStarted ||
+                    action == LyricsOverlayService.ACTION_RESTART ||
+                    action == LyricsOverlayService.ACTION_SETTINGS_OPENED
+                )
 
     fun reconcile(
         result: CommercialAccessRefreshResult,
         localAccess: CommercialAccessDecision
     ): CommercialAccessDecision = when {
-        result is CommercialAccessRefreshResult.Failure &&
-            result.reason == CommercialFailure.ENTITLEMENT_REVOKED -> {
-            CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED)
+        result is CommercialAccessRefreshResult.Failure -> when (result.reason) {
+            CommercialFailure.ENTITLEMENT_REVOKED -> {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.ENTITLEMENT_REVOKED)
+            }
+            CommercialFailure.DEVICE_MISMATCH -> {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.DEVICE_MISMATCH)
+            }
+            CommercialFailure.INVALID_LICENSE -> {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.INVALID_LICENSE)
+            }
+            CommercialFailure.CLOCK_ROLLBACK -> {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.CLOCK_ROLLBACK)
+            }
+            CommercialFailure.STORAGE -> {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.STORAGE_FAILURE)
+            }
+            CommercialFailure.CONFIGURATION_MISSING -> {
+                CommercialAccessDecision.Denied(CommercialAccessDenial.CONFIGURATION_MISSING)
+            }
+            else -> localAccess
         }
         result is CommercialAccessRefreshResult.Ready &&
             result.entitlement is EntitlementState.Expired -> {
@@ -3195,7 +3266,7 @@ internal object LyricsCommercialStartupRefreshPolicy {
     }
 
     fun shouldDeferDeniedAccess(
-        waitingForRefresh: Boolean,
+        waitingForCheck: Boolean,
         runtimeActive: Boolean
-    ): Boolean = waitingForRefresh && !runtimeActive
+    ): Boolean = waitingForCheck && !runtimeActive
 }

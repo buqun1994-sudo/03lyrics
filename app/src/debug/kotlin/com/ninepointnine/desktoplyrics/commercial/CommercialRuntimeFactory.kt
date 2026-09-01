@@ -75,6 +75,7 @@ internal class DebugCommercialRuntime private constructor(
         store.delete(SecureCommercialRecord.PURCHASE_SESSION)
         store.delete(SecureCommercialRecord.LICENSE)
         store.delete(SecureCommercialRecord.ACCESS_REVOCATION)
+        store.delete(SecureCommercialRecord.ENTITLEMENT_RECHECK_PENDING)
         store.delete(SecureCommercialRecord.LICENSE_CLOCK)
         store.delete(SecureCommercialRecord.DEVICE_TOKEN)
         store.delete(SecureCommercialRecord.DEVICE_KEY_VERSION)

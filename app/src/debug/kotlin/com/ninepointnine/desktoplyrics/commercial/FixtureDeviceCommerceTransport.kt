@@ -129,12 +129,14 @@ internal class FixtureDeviceCommerceTransport(
     private val purchases = ConcurrentHashMap<String, PurchaseRecord>()
     private val identities = ConcurrentHashMap<String, IdentityRecord>()
     private val usedPollNonces = ConcurrentHashMap.newKeySet<String>()
+    private val requestCounts = ConcurrentHashMap<String, Int>()
 
     override fun execute(request: DeviceCommerceHttpRequest): DeviceCommerceHttpResponse {
         val action = request.path.substringAfter("/device-access/", missingDelimiterValue = "")
         if (action.isBlank()) return failure(404, "not_found")
+        requestCounts.merge(action, 1, Int::plus)
         if (entitlementScenario == DebugEntitlementScenario.QUERY_ERROR &&
-            action in setOf("challenges", "trial/start", "license/refresh")
+            action in setOf("challenges", "trial/start", "license/refresh", "license/check")
         ) {
             throw IOException("fixture network unavailable")
         }
@@ -146,6 +148,7 @@ internal class FixtureDeviceCommerceTransport(
             request.method == "POST" && action == "purchases" -> createPurchase(request)
             request.method == "GET" && action.startsWith("purchases/") -> pollPurchase(request)
             request.method == "POST" && action == "license/refresh" -> refreshLicense(request)
+            request.method == "POST" && action == "license/check" -> checkEntitlement(request)
             request.method == "POST" && action == "recover" -> recover(request)
             else -> failure(404, "not_found")
         }
@@ -157,12 +160,15 @@ internal class FixtureDeviceCommerceTransport(
         purchases.clear()
         identities.clear()
         usedPollNonces.clear()
+        requestCounts.clear()
     }
+
+    fun requestCount(action: String): Int = requestCounts[action] ?: 0
 
     private fun createChallenge(request: DeviceCommerceHttpRequest): DeviceCommerceHttpResponse {
         val body = request.jsonBody()
         val purpose = body.optString("purpose")
-        if (purpose !in setOf("trial", "purchase", "refresh", "recover")) {
+        if (purpose !in setOf("trial", "purchase", "refresh", "check", "recover")) {
             return failure(400, "invalid_device_identity")
         }
         if (body.optString("packageName") != DeviceCommerceProductContract.PACKAGE_NAME) {
@@ -279,12 +285,12 @@ internal class FixtureDeviceCommerceTransport(
             identity.pro = false
             return failure(403, "entitlement_revoked", JSONObject().put("status", "revoked"))
         }
-        if (identity.pro) return accessSuccess("licensed", identity, CommercialTier.PRO)
+        if (identity.pro) return activeAccessSuccess(identity)
         return when (entitlementScenario) {
             DebugEntitlementScenario.QUERY_ERROR -> throw IOException("fixture network unavailable")
             DebugEntitlementScenario.PRO -> {
                 identity.pro = true
-                accessSuccess("licensed", identity, CommercialTier.PRO)
+                activeAccessSuccess(identity)
             }
             DebugEntitlementScenario.EXPIRED -> {
                 identity.pro = false
@@ -317,6 +323,77 @@ internal class FixtureDeviceCommerceTransport(
                 accessSuccess("trial_active", identity, CommercialTier.TRIAL)
             }
         }
+    }
+
+    private fun checkEntitlement(request: DeviceCommerceHttpRequest): DeviceCommerceHttpResponse {
+        val proof = consumeProof(request, "check")
+        if (proof is ProofResult.Failure) return proof.response
+        val challenge = (proof as ProofResult.Success).challenge
+        val identity = identities[challenge.fingerprint]
+            ?: return success(
+                JSONObject()
+                    .put("status", "not_started")
+                    .put("serverTime", utc(nowEpochMs()))
+            )
+        if (identity.publicKeyBase64 != challenge.publicKeyBase64 ||
+            challenge.identityKeyVersion != identity.keyVersion
+        ) {
+            return failure(
+                409,
+                "device_key_mismatch",
+                JSONObject().put("status", "device_key_mismatch")
+            )
+        }
+        if (entitlementScenario == DebugEntitlementScenario.REVOKED) {
+            identity.pro = false
+            return success(
+                JSONObject()
+                    .put("status", "revoked")
+                    .put("deviceKeyVersion", identity.keyVersion)
+                    .put("serverTime", utc(nowEpochMs()))
+            )
+        }
+        if (identity.pro || entitlementScenario == DebugEntitlementScenario.PRO) {
+            return success(
+                JSONObject()
+                    .put("status", "active")
+                    .put("access", "pro")
+                    .put("validity", "permanent")
+                    .put("deviceKeyVersion", identity.keyVersion)
+                    .put("serverTime", utc(nowEpochMs()))
+            )
+        }
+        val trialEndsAt = identity.trialEndsAtEpochMs
+        if (trialEndsAt != null) {
+            return if (nowEpochMs() < trialEndsAt) {
+                success(
+                    JSONObject()
+                        .put("status", "active")
+                        .put("access", "trial")
+                        .put("validity", "trial")
+                        .put("trialEndsAt", utc(trialEndsAt))
+                        .put("deviceKeyVersion", identity.keyVersion)
+                        .put("serverTime", utc(nowEpochMs()))
+                )
+            } else {
+                success(
+                    JSONObject()
+                        .put("status", "revoked")
+                        .put("access", "trial")
+                        .put("validity", "trial")
+                        .put("trialEndsAt", utc(trialEndsAt))
+                        .put("deviceKeyVersion", identity.keyVersion)
+                        .put("reason", "trial_expired")
+                        .put("serverTime", utc(nowEpochMs()))
+                )
+            }
+        }
+        return success(
+            JSONObject()
+                .put("status", "not_started")
+                .put("deviceKeyVersion", identity.keyVersion)
+                .put("serverTime", utc(nowEpochMs()))
+        )
     }
 
     private fun createPurchase(request: DeviceCommerceHttpRequest): DeviceCommerceHttpResponse {
@@ -451,7 +528,7 @@ internal class FixtureDeviceCommerceTransport(
         }
         val tier = if (entitlementScenario == DebugEntitlementScenario.REVOKED) {
             CommercialTier.TRIAL
-        } else if (recoveryGrantsPro) {
+        } else if (existing.pro && recoveryGrantsPro) {
             CommercialTier.PRO
         } else {
             CommercialTier.TRIAL
@@ -534,17 +611,30 @@ internal class FixtureDeviceCommerceTransport(
         return success(body)
     }
 
+    private fun activeAccessSuccess(identity: IdentityRecord): DeviceCommerceHttpResponse =
+        success(
+            JSONObject()
+                .put("status", "active")
+                .put("access", "pro")
+                .put("validity", "permanent")
+                .put("deviceKeyVersion", identity.keyVersion)
+                .put("serverTime", utc(nowEpochMs()))
+        )
+
     private fun issueLicense(identity: IdentityRecord, tier: CommercialTier): JSONObject {
         val now = nowEpochMs()
         val expiresAt = if (tier == CommercialTier.TRIAL) {
-            requireNotNull(identity.trialEndsAtEpochMs)
+            minOf(
+                now + TRIAL_LICENSE_MAX_DURATION_MS,
+                requireNotNull(identity.trialEndsAtEpochMs)
+            )
         } else {
-            now + PRO_REFRESH_INTERVAL_MS
+            null
         }
         val graceUntil = if (tier == CommercialTier.TRIAL) {
             expiresAt
         } else {
-            now + PRO_FINAL_ACCESS_WINDOW_MS
+            null
         }
         val payload = JSONObject()
             .put("version", 1)
@@ -552,14 +642,15 @@ internal class FixtureDeviceCommerceTransport(
             .put("keyId", licenseSigner.keyId)
             .put("productId", DeviceCommerceProductContract.PRODUCT_ID)
             .put("access", if (tier == CommercialTier.PRO) "pro" else "trial")
+            .put("validity", if (tier == CommercialTier.PRO) "permanent" else "trial")
             .put(
                 "devicePublicKeySha256",
                 CommercialDigests.sha256Hex(Base64.getDecoder().decode(identity.publicKeyBase64))
             )
             .put("deviceKeyVersion", identity.keyVersion)
             .put("issuedAt", utc(now))
-            .put("expiresAt", utc(expiresAt))
-            .put("offlineGraceUntil", utc(graceUntil))
+            .put("expiresAt", expiresAt?.let(::utc) ?: JSONObject.NULL)
+            .put("offlineGraceUntil", graceUntil?.let(::utc) ?: JSONObject.NULL)
             .put(
                 "trialEndsAt",
                 if (tier == CommercialTier.TRIAL) {
@@ -782,7 +873,6 @@ internal class FixtureDeviceCommerceTransport(
         const val QUOTE_TTL_MS = 5 * 60 * 1000L
         const val PURCHASE_TTL_MS = 10 * 60 * 1000L
         const val TRIAL_DURATION_MS = 7L * 24 * 60 * 60 * 1000
-        const val PRO_REFRESH_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
-        const val PRO_FINAL_ACCESS_WINDOW_MS = 90L * 24 * 60 * 60 * 1000
+        const val TRIAL_LICENSE_MAX_DURATION_MS = 24L * 60 * 60 * 1000
     }
 }

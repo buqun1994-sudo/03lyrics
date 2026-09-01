@@ -62,15 +62,24 @@ data class LicenseClaims(
     val deviceKeyVersion: Int,
     val tier: CommercialTier,
     val issuedAtEpochMs: Long,
-    val expiresAtEpochMs: Long,
-    val offlineGraceUntilEpochMs: Long,
-    val trialEndsAtEpochMs: Long?
+    val expiresAtEpochMs: Long?,
+    val offlineGraceUntilEpochMs: Long?,
+    val trialEndsAtEpochMs: Long?,
+    val validity: LicenseValidity
 ) {
-    /** The signed terminal boundary for the tier, never a client-derived value. */
-    fun finalAccessUntilEpochMs(): Long = when (tier) {
-        CommercialTier.TRIAL -> requireNotNull(trialEndsAtEpochMs)
-        CommercialTier.PRO -> offlineGraceUntilEpochMs
+    /** The signed terminal boundary, or null for a perpetual PRO license. */
+    fun finalAccessUntilEpochMs(): Long? = when (tier) {
+        // A trial entitlement lasts seven days, but each signed trial
+        // license is only a bounded 24-hour lease.  The entitlement and the
+        // license boundary are deliberately kept separate.
+        CommercialTier.TRIAL -> expiresAtEpochMs
+        CommercialTier.PRO -> null
     }
+}
+
+enum class LicenseValidity {
+    TRIAL,
+    PERMANENT
 }
 
 fun interface LicenseClaimsParser {
@@ -98,8 +107,7 @@ enum class LicenseVerificationFailure {
 
 enum class LicenseValidityWindow {
     ACTIVE,
-    TRIAL,
-    OFFLINE_GRACE
+    TRIAL
 }
 
 sealed interface LicenseVerificationResult {
@@ -168,33 +176,53 @@ class LicenseVerifier(
                 LicenseVerificationFailure.DEVICE_KEY_VERSION
             )
         }
-        if (claims.issuedAtEpochMs > nowEpochMs + LICENSE_CLOCK_SKEW_MS) {
+        if (claims.issuedAtEpochMs > nowEpochMs &&
+            claims.issuedAtEpochMs - nowEpochMs > LICENSE_CLOCK_SKEW_MS
+        ) {
             return LicenseVerificationResult.Invalid(LicenseVerificationFailure.NOT_YET_VALID)
         }
-        if (claims.expiresAtEpochMs <= claims.issuedAtEpochMs ||
-            claims.offlineGraceUntilEpochMs < claims.expiresAtEpochMs
-        ) {
-            return LicenseVerificationResult.Invalid(LicenseVerificationFailure.TIME_BOUNDARY)
+        val finalAccessUntil = when (claims.tier) {
+            CommercialTier.TRIAL -> {
+                if (claims.validity == LicenseValidity.PERMANENT ||
+                    claims.expiresAtEpochMs == null ||
+                    claims.offlineGraceUntilEpochMs == null ||
+                    claims.trialEndsAtEpochMs == null ||
+                    claims.expiresAtEpochMs <= claims.issuedAtEpochMs ||
+                    claims.offlineGraceUntilEpochMs != claims.expiresAtEpochMs ||
+                    claims.trialEndsAtEpochMs < claims.expiresAtEpochMs ||
+                    claims.trialEndsAtEpochMs <= claims.issuedAtEpochMs ||
+                    claims.expiresAtEpochMs - claims.issuedAtEpochMs >
+                    TRIAL_LICENSE_MAX_DURATION_MS
+                ) {
+                    return LicenseVerificationResult.Invalid(LicenseVerificationFailure.TIME_BOUNDARY)
+                }
+                claims.expiresAtEpochMs
+            }
+            CommercialTier.PRO -> when (claims.validity) {
+                LicenseValidity.PERMANENT -> {
+                    if (claims.expiresAtEpochMs != null ||
+                        claims.offlineGraceUntilEpochMs != null ||
+                        claims.trialEndsAtEpochMs != null
+                    ) {
+                        return LicenseVerificationResult.Invalid(
+                            LicenseVerificationFailure.TIME_BOUNDARY
+                        )
+                    }
+                    null
+                }
+                LicenseValidity.TRIAL -> {
+                    return LicenseVerificationResult.Invalid(LicenseVerificationFailure.TIME_BOUNDARY)
+                }
+            }
         }
-        val trialBoundaryValid = when (claims.tier) {
-            CommercialTier.TRIAL -> claims.trialEndsAtEpochMs?.let {
-                it >= claims.expiresAtEpochMs && it > claims.issuedAtEpochMs
-            } == true
-            CommercialTier.PRO -> claims.trialEndsAtEpochMs == null
-        }
-        if (!trialBoundaryValid) {
-            return LicenseVerificationResult.Invalid(LicenseVerificationFailure.TIME_BOUNDARY)
-        }
-        val finalAccessUntil = claims.finalAccessUntilEpochMs()
-        if (nowEpochMs >= finalAccessUntil) {
+        if (finalAccessUntil != null && nowEpochMs >= finalAccessUntil) {
             return LicenseVerificationResult.Invalid(LicenseVerificationFailure.EXPIRED)
         }
         return LicenseVerificationResult.Valid(
             claims = claims,
-            window = when {
-                nowEpochMs < claims.expiresAtEpochMs -> LicenseValidityWindow.ACTIVE
-                claims.tier == CommercialTier.TRIAL -> LicenseValidityWindow.TRIAL
-                else -> LicenseValidityWindow.OFFLINE_GRACE
+            window = when (claims.tier) {
+                CommercialTier.PRO -> LicenseValidityWindow.ACTIVE
+                CommercialTier.TRIAL -> LicenseValidityWindow.TRIAL
             }
         )
     }
@@ -216,12 +244,12 @@ class LicenseVerifier(
     companion object {
         const val SUPPORTED_LICENSE_VERSION = 1
         const val LICENSE_CLOCK_SKEW_MS = 5 * 60 * 1000L
+        const val TRIAL_LICENSE_MAX_DURATION_MS = 24L * 60 * 60 * 1000
     }
 }
 
 object SignedLicenseEnvelopeCodec {
     private const val CURRENT_VERSION = 2
-    private const val LEGACY_VERSION = 1
     private const val MAX_FIELD_BYTES = 256 * 1024
     private const val MAX_KEY_ID_BYTES = 256
 
@@ -245,12 +273,6 @@ object SignedLicenseEnvelopeCodec {
                     val keyId = data.readSized(MAX_KEY_ID_BYTES).toString(StandardCharsets.UTF_8)
                     require(data.available() == 0)
                     SignedLicenseEnvelope(payload, signature, keyId)
-                }
-                LEGACY_VERSION -> {
-                    val payload = data.readSized(MAX_FIELD_BYTES)
-                    val signature = data.readSized(MAX_FIELD_BYTES)
-                    require(data.available() == 0)
-                    SignedLicenseEnvelope(payload, signature, keyId = "")
                 }
                 else -> error("Unsupported signed license envelope version")
             }

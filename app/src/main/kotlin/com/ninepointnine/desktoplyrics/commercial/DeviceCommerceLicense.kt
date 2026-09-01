@@ -30,6 +30,19 @@ object DeviceCommerceLicenseClaimsParser : LicenseClaimsParser {
     override fun parse(rawPayload: ByteArray): LicenseClaims {
         val payload = JSONObject(rawPayload.toString(Charsets.UTF_8))
         val access = payload.getString("access")
+        val validity = when (payload.getString("validity")) {
+            "permanent" -> LicenseValidity.PERMANENT
+            "trial" -> LicenseValidity.TRIAL
+            else -> error("Unsupported license validity")
+        }
+        if (validity == LicenseValidity.PERMANENT) {
+            require(payload.has("expiresAt") && payload.isNull("expiresAt"))
+            require(
+                payload.has("offlineGraceUntil") &&
+                    payload.isNull("offlineGraceUntil")
+            )
+            require(payload.has("trialEndsAt") && payload.isNull("trialEndsAt"))
+        }
         return LicenseClaims(
             version = payload.getInt("version"),
             licenseId = payload.requiredString("licenseId"),
@@ -43,13 +56,14 @@ object DeviceCommerceLicenseClaimsParser : LicenseClaimsParser {
                 else -> error("Unsupported license access")
             },
             issuedAtEpochMs = payload.requiredInstant("issuedAt"),
-            expiresAtEpochMs = payload.requiredInstant("expiresAt"),
-            offlineGraceUntilEpochMs = payload.requiredInstant("offlineGraceUntil"),
-            trialEndsAtEpochMs = if (payload.isNull("trialEndsAt")) {
+            expiresAtEpochMs = payload.optionalInstant("expiresAt"),
+            offlineGraceUntilEpochMs = payload.optionalInstant("offlineGraceUntil"),
+            trialEndsAtEpochMs = if (!payload.has("trialEndsAt") || payload.isNull("trialEndsAt")) {
                 null
             } else {
                 payload.requiredInstant("trialEndsAt")
-            }
+            },
+            validity = validity
         )
     }
 
@@ -59,4 +73,7 @@ object DeviceCommerceLicenseClaimsParser : LicenseClaimsParser {
 
     private fun JSONObject.requiredInstant(name: String): Long =
         Instant.parse(requiredString(name)).toEpochMilli()
+
+    private fun JSONObject.optionalInstant(name: String): Long? =
+        if (!has(name) || isNull(name)) null else requiredInstant(name)
 }

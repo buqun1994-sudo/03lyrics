@@ -18,61 +18,11 @@ import org.junit.Test
 
 class CommercialAccessRefreshTest {
     @Test
-    fun `fresh local license avoids remote refresh until its signed renewal point`() {
-        assertFalse(
-            CommercialAccessRefreshPolicy.shouldRequestRemote(
-                localRefreshAfterEpochMs = 20_000L,
-                retryNotBeforeEpochMs = null,
-                nowEpochMs = 19_999L
-            )
-        )
-        assertTrue(
-            CommercialAccessRefreshPolicy.shouldRequestRemote(
-                localRefreshAfterEpochMs = 20_000L,
-                retryNotBeforeEpochMs = null,
-                nowEpochMs = 20_000L
-            )
-        )
-    }
-
-    @Test
-    fun `transient refresh failure permits one retry per day without delaying missing access`() {
-        val now = 20_000L
-        val retryAt = CommercialAccessRefreshPolicy.nextRetryNotBefore(now)
-
-        assertFalse(
-            CommercialAccessRefreshPolicy.shouldRequestRemote(
-                localRefreshAfterEpochMs = 10_000L,
-                retryNotBeforeEpochMs = retryAt,
-                nowEpochMs = retryAt - 1
-            )
-        )
-        assertTrue(
-            CommercialAccessRefreshPolicy.shouldRequestRemote(
-                localRefreshAfterEpochMs = 10_000L,
-                retryNotBeforeEpochMs = retryAt,
-                nowEpochMs = retryAt
-            )
-        )
-        assertTrue(
-            CommercialAccessRefreshPolicy.shouldRequestRemote(
-                localRefreshAfterEpochMs = null,
-                retryNotBeforeEpochMs = retryAt,
-                nowEpochMs = now
-            )
-        )
-        assertEquals(
-            Long.MAX_VALUE,
-            CommercialAccessRefreshPolicy.nextRetryNotBefore(Long.MAX_VALUE)
-        )
-    }
-
-    @Test
     fun `concurrent startup and settings refresh share one request`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var calls = 0
-        val refresh = SingleFlightCommercialAccessRefresh(
+        val refresh = SingleFlightCommercialEntitlementCheck(
             operation = { nowEpochMs ->
                 calls += 1
                 started.complete(Unit)
@@ -101,7 +51,7 @@ class CommercialAccessRefreshTest {
         val release = CompletableDeferred<Unit>()
         var calls = 0
         val requestScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        val refresh = SingleFlightCommercialAccessRefresh(
+        val refresh = SingleFlightCommercialEntitlementCheck(
             operation = { nowEpochMs ->
                 calls += 1
                 started.complete(Unit)
@@ -170,6 +120,42 @@ class CommercialAccessRefreshTest {
 
         assertEquals(EntitlementQueryResult.Ready(snapshot), result)
         assertEquals(snapshot, coordinator.currentSnapshot())
+    }
+
+    @Test
+    fun `lifecycle revocation replaces the shared pro snapshot`() = runBlocking {
+        val pro = EntitlementSnapshot(EntitlementState.Pro, quote = null)
+        val gateway = StubGateway(EntitlementQueryResult.Ready(pro))
+        var localAccess: CommercialAccessDecision = CommercialAccessDecision.Allowed(
+            CommercialTier.PRO,
+            expiresAtEpochMs = null
+        )
+        val snapshots = mutableListOf<EntitlementSnapshot>()
+        val coordinator = CommercialEntitlementCoordinator(
+            gateway = gateway,
+            accessGate = CommercialAccessGate { localAccess },
+            nowEpochMs = { 1_000L }
+        )
+        coordinator.addListener(snapshots::add)
+        assertEquals(EntitlementQueryResult.Ready(pro), coordinator.queryEntitlement())
+
+        gateway.queryResult = EntitlementQueryResult.Failure(
+            CommercialFailure.ENTITLEMENT_REVOKED
+        )
+        localAccess = CommercialAccessDecision.Denied(
+            CommercialAccessDenial.ENTITLEMENT_REVOKED
+        )
+
+        assertEquals(
+            CommercialAccessRefreshResult.Failure(CommercialFailure.ENTITLEMENT_REVOKED),
+            coordinator.recheckEntitlement()
+        )
+        val revoked = EntitlementSnapshot(
+            EntitlementState.Error(CommercialFailure.ENTITLEMENT_REVOKED),
+            quote = null
+        )
+        assertEquals(revoked, coordinator.currentSnapshot())
+        assertEquals(listOf(pro, revoked), snapshots)
     }
 
     @Test

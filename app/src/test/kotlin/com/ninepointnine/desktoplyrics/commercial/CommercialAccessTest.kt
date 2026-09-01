@@ -1,7 +1,6 @@
 package com.ninepointnine.desktoplyrics.commercial
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -54,9 +53,9 @@ class CommercialAccessTest {
     }
 
     @Test
-    fun `valid signed pro license allows runtime through offline grace boundary`() {
+    fun `permanent signed pro license exposes no local expiry or renewal boundary`() {
         val keys = generateKeyPair()
-        val payload = "payload".toByteArray()
+        val payload = "permanent-payload".toByteArray()
         val envelope = SignedLicenseEnvelope(payload, sign(keys, payload), KEY_ID)
         val store = FakeStore().apply {
             values[SecureCommercialRecord.LICENSE] = SignedLicenseEnvelopeCodec.encode(envelope)
@@ -70,18 +69,14 @@ class CommercialAccessTest {
             parser = LicenseClaimsParser { validClaims() }
         )
 
-        val result = VerifiedLicenseAccessGate(store, verifier).evaluate(NOW)
-
         assertEquals(
             CommercialAccessDecision.Allowed(
                 tier = CommercialTier.PRO,
-                expiresAtEpochMs = NOW + 20_000,
-                refreshAfterEpochMs = NOW + 10_000,
-                offlineGraceUntilEpochMs = NOW + 20_000
+                expiresAtEpochMs = null,
+                offlineGraceUntilEpochMs = null
             ),
-            result
+            VerifiedLicenseAccessGate(store, verifier).evaluate(NOW)
         )
-        assertTrue(store.values.containsKey(SecureCommercialRecord.LICENSE_CLOCK))
     }
 
     private fun verifier(): LicenseVerifier {
@@ -105,9 +100,10 @@ class CommercialAccessTest {
         deviceKeyVersion = 1,
         tier = CommercialTier.PRO,
         issuedAtEpochMs = NOW - 10_000,
-        expiresAtEpochMs = NOW + 10_000,
-        offlineGraceUntilEpochMs = NOW + 20_000,
-        trialEndsAtEpochMs = null
+        expiresAtEpochMs = null,
+        offlineGraceUntilEpochMs = null,
+        trialEndsAtEpochMs = null,
+        validity = LicenseValidity.PERMANENT
     )
 
     private fun generateKeyPair() = KeyPairGenerator.getInstance("EC").run {

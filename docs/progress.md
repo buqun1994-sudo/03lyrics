@@ -1,8 +1,39 @@
 # 项目进度
 
+## 2026-09-01 测试包与正式包重新打包
+
+1. 在当前客户端提交前完成 `testDebugUnitTest lintDebug assembleDebug`，JVM `274` 项通过、`2` 项按设计跳过，Lint 无错误；随后以 staging 信任配置生成测试 APK（`1.14-icar03` / versionCode `114`），以 production 信任配置和正式签名生成 Release APK（`1.0.1-icar03` / versionCode `115`），Release 的 R8、资源收缩和资源优化任务均成功。
+2. 两个 APK 均核对为包名 `com.ninepointnine.desktoplyrics`、单 signer、APK Signature Scheme v2 有效；测试包证书摘要为登记的 staging 摘要，正式包证书摘要为登记的 production 摘要。Release 未包含 fixture / 调试入口标记。
+3. 已重新生成各自只含同名 APK 的 ZIP，并覆盖桌面现有 `03歌词-staging-v1.14-icar03.apk`、`03歌词-staging-v1.14-icar03.zip`、`03歌词-v1.0.1-icar03.apk` 和 `03歌词-v1.0.1-icar03.zip`；四个文件均回读校验，ZIP 内单一条目与对应 APK 字节一致。
+4. 本轮未修改 `cloud`；未安装 Release 到车机、未清数据、未卸载、未重启、未运行商业 instrumentation。提交和推送仅包含本客户端仓库。
+
+## 2026-09-01 试用权益时间边界验证
+
+1. 采用 Debug fixture 注入可控 `nowEpochMs`，无需等待真实时间：首次领取后推进到 `24h + 1ms`，客户端通过 `license/check` / `trial/start` 取得新的 24 小时租约，同时保留原始七天 `trialEndsAt`；推进到七天截止后返回过期并关闭本地门禁。
+2. 定向试用网关测试 `22` 项、许可证安全边界 `2` 项和设置行为边界 `1` 项均通过，另有完整 Debug JVM `274` 项、`0` 失败、`2` 项按设计跳过；未调用 `license/refresh`。
+3. 实时发现车机 `S56_HQX` 后只读启动设置页，当前 staging 包显示“权益已撤销，当前无法继续使用”，没有 `LyricsOverlayService` 或歌词悬浮窗口。该设备的试用已消费且当前权益已撤销，不能在不清数据、不卸载和不改 Cloud 的前提下再次领取新试用。
+4. 本轮未修改 `cloud`，未改系统时间、未清数据、未卸载、未重启车机、未运行商业 instrumentation、未提交、未推送或发布。
+
+## 2026-09-01 真实车机购买与退款闭环
+
+1. 通过实时 ADB 设备发现完成 staging Debug 安装与授权；安装包为 `com.ninepointnine.desktoplyrics 1.14-icar03`，悬浮窗、通知监听和窗口避让无障碍均已启用，既有无障碍组件保持不变。
+2. 真实支付后，设置页显示 `Pro / 权益生效中 · 永久`，歌词服务和 Overlay 恢复；`node scripts/install-and-smoke.mjs` 通过设置页、两个表面租约、服务绑定和致命日志检查。
+3. 后台退款后执行真实的“返回退出设置页 → 重新打开设置页”生命周期，在线复核返回撤权；设置页显示“权益已撤销，当前无法继续使用”，撤权通知显示“Pro 权益已撤销”。
+4. 撤权后定向运行态断言全部通过：`LyricsOverlayService` 和本应用 `APPLICATION_OVERLAY` 消失，`MediaListenerService` 与窗口避让无障碍仍保持有效绑定；`no_backup` 中仅保留设备密钥版本和观测时钟，许可证、device token、撤销/待复核及订单轮询记录均已清理。
+5. 本轮未清数据、未卸载、未重启车机、未运行商业 instrumentation；未修改 `cloud`，未提交、未推送、未发布。后续测试可在此撤权基线继续。
+
+## 2026-09-01 永久 PRO 客户端与生命周期在线复核
+
+1. 本轮仅修改 `03lyrics` 客户端，未修改 `cloud`。客户端已按云端公开契约接入 `license/check`，启动、歌词服务生命周期、设置页打开和用户重启服务均通过只读在线复核，不再调用 `license/refresh`。
+2. 永久 PRO 许可证要求 `validity=permanent`，`expiresAt`、`offlineGraceUntil`、`trialEndsAt` 均为 `null`；`active` 复核保持本地许可证原始 bytes、`licenseId` 和时间不变，不生成新签发记录。
+3. 退款撤权收到 `revoked` 后清除本地许可证、device token、待复核和支付状态，并使运行服务 fail closed、释放歌词资源；网络失败只保留有效本地凭证并记录待复核状态。
+4. 七天试用保留固定截止时间；单张试用许可证最长 24 小时，租约到期时使用当前设备密钥重新取得许可证，不轮换密钥。云端 `not_started` 时不静默沿用本地权益。
+5. 自动化验证：`testDebugUnitTest lintDebug assembleDebug` 全部通过，JVM 共 `274` 项、`0` 失败、`2` 项按设计跳过；项目文档检查、Skill 检查和 `git diff --check` 通过，03 APP 登记检查仅因登记快照为 clean 而当前工作树有本轮未提交改动报告不一致。
+6. 已按项目默认授权尝试保留数据 debug 覆盖安装和最简 smoke；目标车机 `192.168.0.203:5555` 当前不在 ADB 设备列表，脚本在安装前安全退出，未改动车机。仍不清数据、不卸载、不重启车机、不运行商业 instrumentation、不提交、不推送、不发布。
+
 ## 2026-08-24 Release 版本规则
 
-1. Release 版本真值固定在根目录 `release-version.properties`，当前 `versionName=1.0.0-icar03`；Debug / Staging 继续使用原有 `1.14-icar03` 基线。
+1. Release 版本真值固定在根目录 `release-version.properties`，当前 `versionName=1.0.1-icar03`；Debug / Staging 继续使用原有 `1.14-icar03` 基线。
 2. 未指定版本时由 `scripts/bump-release-version.mjs` 递增 patch 并同步递增 `versionCode`；明确指定版本时使用传入值。构建过程不会自动改写版本文件。
 
 ## 2026-08-21 全媒体 MediaSession 归一、选源与设置状态刷新

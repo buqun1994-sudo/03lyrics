@@ -14,6 +14,7 @@ enum class DeviceChallengePurpose(val protocolValue: String) {
     TRIAL("trial"),
     PURCHASE("purchase"),
     REFRESH("refresh"),
+    CHECK("check"),
     RECOVER("recover")
 }
 
@@ -61,6 +62,11 @@ data class DeviceAccessPayload(
     val trialEndsAtEpochMs: Long?,
     val deviceToken: String?,
     val keyVersion: Int?
+)
+
+data class DeviceEntitlementCheckPayload(
+    val status: String,
+    val deviceKeyVersion: Int?
 )
 
 data class DevicePurchasePayload(
@@ -142,6 +148,13 @@ interface DeviceCommerceApi {
     fun refreshLicense(
         proof: DeviceChallengeProof
     ): DeviceCommerceApiResult<DeviceAccessPayload>
+
+    fun checkEntitlement(
+        proof: DeviceChallengeProof
+    ): DeviceCommerceApiResult<DeviceEntitlementCheckPayload> =
+        DeviceCommerceApiResult.Failure(
+            DeviceCommerceApiFailure(DeviceCommerceApiFailureKind.PROTOCOL)
+        )
 
     fun recover(
         proof: DeviceChallengeProof,
@@ -349,6 +362,17 @@ class DeviceCommerceJsonApi(
         ::parseAccess
     )
 
+    override fun checkEntitlement(
+        proof: DeviceChallengeProof
+    ): DeviceCommerceApiResult<DeviceEntitlementCheckPayload> = execute(
+        DeviceCommerceHttpRequest(
+            method = "POST",
+            path = path("license/check"),
+            body = proof.toJson().toString()
+        ),
+        ::parseEntitlementCheck
+    )
+
     override fun recover(
         proof: DeviceChallengeProof,
         previousKeySignatureBase64: String?
@@ -381,6 +405,15 @@ class DeviceCommerceJsonApi(
         deviceToken = json.nullableString("deviceToken"),
         keyVersion = json.optionalPositiveInt("keyVersion")
     )
+
+    private fun parseEntitlementCheck(json: JSONObject): DeviceEntitlementCheckPayload {
+        val status = json.requiredString("status")
+        require(status in setOf("active", "revoked", "not_started", "device_key_mismatch"))
+        return DeviceEntitlementCheckPayload(
+            status = status,
+            deviceKeyVersion = json.optionalPositiveInt("deviceKeyVersion")
+        )
+    }
 
     private fun parsePurchaseResponse(json: JSONObject): DevicePurchaseResponse =
         DevicePurchaseResponse(
