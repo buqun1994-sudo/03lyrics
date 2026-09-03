@@ -2,28 +2,51 @@ package com.ninepointnine.desktoplyrics
 
 import kotlin.math.abs
 
-internal enum class IcarRightDockStatus {
+internal enum class IcarDockPanelStatus {
     UNKNOWN,
     COLLAPSED,
     EXPANDED
 }
 
-internal data class IcarRightDockWindowState(
-    val status: IcarRightDockStatus,
+internal data class IcarDockPanelState(
+    val status: IcarDockPanelStatus,
     val expandedTopPx: Int? = null
 ) {
     init {
-        require(status == IcarRightDockStatus.EXPANDED || expandedTopPx == null)
-        require(status != IcarRightDockStatus.EXPANDED || expandedTopPx != null)
+        require(status == IcarDockPanelStatus.EXPANDED || expandedTopPx == null)
+        require(status != IcarDockPanelStatus.EXPANDED || expandedTopPx != null)
     }
 
     companion object {
-        val UNKNOWN = IcarRightDockWindowState(IcarRightDockStatus.UNKNOWN)
-        val COLLAPSED = IcarRightDockWindowState(IcarRightDockStatus.COLLAPSED)
+        val UNKNOWN = IcarDockPanelState(IcarDockPanelStatus.UNKNOWN)
+        val COLLAPSED = IcarDockPanelState(IcarDockPanelStatus.COLLAPSED)
 
-        fun expanded(topPx: Int): IcarRightDockWindowState = IcarRightDockWindowState(
-            status = IcarRightDockStatus.EXPANDED,
+        fun expanded(topPx: Int): IcarDockPanelState = IcarDockPanelState(
+            status = IcarDockPanelStatus.EXPANDED,
             expandedTopPx = topPx
+        )
+    }
+}
+
+internal data class IcarDockWindowState(
+    val left: IcarDockPanelState,
+    val center: IcarDockPanelState,
+    val right: IcarDockPanelState
+) {
+    fun panelFor(
+        position: WallpaperLyricsPosition,
+        srPanelOccupancy: IcarSrPanelOccupancy
+    ): IcarDockPanelState = when {
+        position == WallpaperLyricsPosition.RIGHT -> right
+        srPanelOccupancy == IcarSrPanelOccupancy.CLEAR -> left
+        else -> center
+    }
+
+    companion object {
+        val UNKNOWN = IcarDockWindowState(
+            left = IcarDockPanelState.UNKNOWN,
+            center = IcarDockPanelState.UNKNOWN,
+            right = IcarDockPanelState.UNKNOWN
         )
     }
 }
@@ -42,17 +65,90 @@ internal data class IcarObservedWindow(
         get() = (bottomPx - topPx).coerceAtLeast(0)
 }
 
-/** Classifies only the verified right-side Launcher Dock window geometry. */
-internal object IcarRightDockWindowClassifier {
+internal object IcarSrPanelObservationSpec {
+    const val SETTLE_RECHECK_MS = 320L
+
+    fun motionThresholdPx(screenWidthPx: Int): Int =
+        maxOf(MIN_MOTION_THRESHOLD_PX, screenWidthPx / WIDTH_DIVISOR)
+
+    private const val MIN_MOTION_THRESHOLD_PX = 4
+    private const val WIDTH_DIVISOR = 240
+}
+
+/** Converts the verified SR handle movement into a one-shot direction hint. */
+internal class IcarSrPanelMotionTracker {
+    private var previousCenterXPx: Int? = null
+    private var activeMotion = IcarSrPanelOccupancy.UNKNOWN
+
+    fun update(
+        screenWidthPx: Int,
+        handlerLeftPx: Int?,
+        handlerRightPx: Int?
+    ): IcarSrPanelOccupancy {
+        if (screenWidthPx <= 0 || handlerLeftPx == null || handlerRightPx == null ||
+            handlerRightPx <= handlerLeftPx
+        ) {
+            previousCenterXPx = null
+            activeMotion = IcarSrPanelOccupancy.UNKNOWN
+            return IcarSrPanelOccupancy.UNKNOWN
+        }
+
+        val centerXPx = handlerLeftPx + (handlerRightPx - handlerLeftPx) / 2
+        val previousCenterX = previousCenterXPx
+        previousCenterXPx = centerXPx
+        val motionThresholdPx = IcarSrPanelObservationSpec.motionThresholdPx(screenWidthPx)
+        activeMotion = when {
+            previousCenterX != null && centerXPx - previousCenterX >= motionThresholdPx -> {
+                IcarSrPanelOccupancy.OCCUPIED
+            }
+            previousCenterX != null && previousCenterX - centerXPx >= motionThresholdPx -> {
+                IcarSrPanelOccupancy.CLEAR
+            }
+            else -> activeMotion
+        }
+        return activeMotion
+    }
+
+    fun settle(handlerLeftPx: Int?, handlerRightPx: Int?): IcarSrPanelOccupancy {
+        previousCenterXPx = if (
+            handlerLeftPx != null && handlerRightPx != null && handlerRightPx > handlerLeftPx
+        ) {
+            handlerLeftPx + (handlerRightPx - handlerLeftPx) / 2
+        } else {
+            null
+        }
+        activeMotion = IcarSrPanelOccupancy.UNKNOWN
+        return activeMotion
+    }
+
+    fun reset() {
+        previousCenterXPx = null
+        activeMotion = IcarSrPanelOccupancy.UNKNOWN
+    }
+}
+
+internal object IcarSrPanelOccupancyPolicy {
+    fun resolve(
+        stableOccupancy: IcarSrPanelOccupancy,
+        motionOccupancy: IcarSrPanelOccupancy
+    ): IcarSrPanelOccupancy = if (motionOccupancy != IcarSrPanelOccupancy.UNKNOWN) {
+        motionOccupancy
+    } else {
+        stableOccupancy
+    }
+}
+
+/** Classifies the verified left, center and right Launcher Dock window geometry. */
+internal object IcarDockWindowClassifier {
     const val LAUNCHER_PACKAGE = "com.mengbo.launcher3"
 
     fun classify(
         screenWidthPx: Int,
         screenHeightPx: Int,
         windows: List<IcarObservedWindow>
-    ): IcarRightDockWindowState {
+    ): IcarDockWindowState {
         if (screenWidthPx <= 0 || screenHeightPx <= 0) {
-            return IcarRightDockWindowState.UNKNOWN
+            return IcarDockWindowState.UNKNOWN
         }
 
         val tolerancePx = maxOf(8, screenWidthPx / 160)
@@ -63,43 +159,66 @@ internal object IcarRightDockWindowClassifier {
                 window.rightPx >= screenWidthPx - tolerancePx &&
                 window.bottomPx >= screenHeightPx - tolerancePx
         }
-        if (!hasLauncherRoot) return IcarRightDockWindowState.UNKNOWN
+        if (!hasLauncherRoot) return IcarDockWindowState.UNKNOWN
 
-        val rightPanels = launcherWindows.filter { window ->
-            val minPanelLeftPx = screenWidthPx * 60 / 100
-            val maxPanelLeftPx = screenWidthPx * 75 / 100
+        return IcarDockWindowState(
+            left = classifyPanel(screenWidthPx, screenHeightPx, launcherWindows, DockSlot.LEFT),
+            center = classifyPanel(screenWidthPx, screenHeightPx, launcherWindows, DockSlot.CENTER),
+            right = classifyPanel(screenWidthPx, screenHeightPx, launcherWindows, DockSlot.RIGHT)
+        )
+    }
+
+    private fun classifyPanel(
+        screenWidthPx: Int,
+        screenHeightPx: Int,
+        launcherWindows: List<IcarObservedWindow>,
+        slot: DockSlot
+    ): IcarDockPanelState {
+        val tolerancePx = maxOf(8, screenWidthPx / 160)
+        val panels = launcherWindows.filter { window ->
             val minPanelWidthPx = screenWidthPx * 25 / 100
             val maxPanelWidthPx = screenWidthPx * 40 / 100
-            window.leftPx in minPanelLeftPx..maxPanelLeftPx &&
-                window.widthPx in minPanelWidthPx..maxPanelWidthPx &&
-                abs(window.rightPx - screenWidthPx) <= tolerancePx &&
+            val anchoredToSlot = when (slot) {
+                DockSlot.LEFT -> abs(window.leftPx) <= tolerancePx
+                DockSlot.CENTER -> {
+                    abs(window.leftPx + window.rightPx - screenWidthPx) <= tolerancePx * 2
+                }
+                DockSlot.RIGHT -> abs(window.rightPx - screenWidthPx) <= tolerancePx
+            }
+            anchoredToSlot && window.widthPx in minPanelWidthPx..maxPanelWidthPx &&
                 abs(window.bottomPx - screenHeightPx) <= tolerancePx
         }
-        if (rightPanels.isEmpty()) return IcarRightDockWindowState.UNKNOWN
+        if (panels.isEmpty()) return IcarDockPanelState.UNKNOWN
 
         val verifiedCollapsedHeightPx = screenHeightPx * COLLAPSED_HEIGHT_DESIGN_PX /
             DESIGN_HEIGHT_PX
-        val collapsedPanel = rightPanels.minByOrNull { window ->
+        val collapsedPanel = panels.minByOrNull { window ->
             abs(window.heightPx - verifiedCollapsedHeightPx)
-        } ?: return IcarRightDockWindowState.UNKNOWN
-        val additionalPanels = rightPanels.filterNot { it === collapsedPanel }
+        } ?: return IcarDockPanelState.UNKNOWN
+        val additionalPanels = panels.filterNot { it === collapsedPanel }
         if (additionalPanels.isNotEmpty()) {
             val expandedTopPx = additionalPanels.minOf(IcarObservedWindow::topPx)
                 .coerceIn(0, screenHeightPx)
-            return IcarRightDockWindowState.expanded(expandedTopPx)
+            return IcarDockPanelState.expanded(expandedTopPx)
         }
 
         val expandedHeightThresholdPx = screenHeightPx * EXPANDED_HEIGHT_THRESHOLD_PERCENT / 100
         return if (collapsedPanel.heightPx >= expandedHeightThresholdPx) {
-            IcarRightDockWindowState.expanded(collapsedPanel.topPx.coerceIn(0, screenHeightPx))
+            IcarDockPanelState.expanded(collapsedPanel.topPx.coerceIn(0, screenHeightPx))
         } else {
-            IcarRightDockWindowState.COLLAPSED
+            IcarDockPanelState.COLLAPSED
         }
     }
 
     private const val DESIGN_HEIGHT_PX = 1080
     private const val COLLAPSED_HEIGHT_DESIGN_PX = 165
     private const val EXPANDED_HEIGHT_THRESHOLD_PERCENT = 30
+
+    private enum class DockSlot {
+        LEFT,
+        CENTER,
+        RIGHT
+    }
 }
 
 internal enum class LyricsOverlayVisibility {
@@ -120,8 +239,38 @@ internal data class IcarExternalSurfaceOccupancy(
 internal data class IcarLyricsPresentation(
     val surfaceMode: LyricsSurfaceMode,
     val visibility: LyricsOverlayVisibility,
-    val desktopBottomLimitPx: Int? = null
+    val desktopBottomLimitPx: Int? = null,
+    val desktopPosition: WallpaperLyricsPosition = WallpaperLyricsPosition.RIGHT,
+    val srPanelOccupancy: IcarSrPanelOccupancy = IcarSrPanelOccupancy.UNKNOWN
 )
+
+internal object IcarWallpaperPositionPolicy {
+    fun leftPx(
+        screenWidthPx: Int,
+        surfaceWidthPx: Int,
+        edgeInsetPx: Int,
+        position: WallpaperLyricsPosition,
+        srPanelOccupancy: IcarSrPanelOccupancy
+    ): Int {
+        val maximumLeft = (screenWidthPx - surfaceWidthPx).coerceAtLeast(0)
+        val leftAligned = edgeInsetPx.coerceIn(0, maximumLeft)
+        val rightAligned = (screenWidthPx - surfaceWidthPx - edgeInsetPx)
+            .coerceIn(0, maximumLeft)
+        return when {
+            position == WallpaperLyricsPosition.RIGHT -> rightAligned
+            srPanelOccupancy == IcarSrPanelOccupancy.CLEAR -> leftAligned
+            else -> rightAligned
+        }
+    }
+}
+
+internal object IcarWallpaperHorizontalMotionSpec {
+    const val DURATION_MS = 250L
+    const val CONTROL_X1 = 0.2f
+    const val CONTROL_Y1 = 0.8f
+    const val CONTROL_X2 = 0.2f
+    const val CONTROL_Y2 = 1f
+}
 
 internal object IcarWallpaperClipPolicy {
     fun bottomPx(
@@ -153,8 +302,14 @@ internal object IcarLyricsPresentationPolicy {
         wallpaperLyricsEnabled: Boolean,
         localSettingsOpen: Boolean,
         externalSurfaceOccupancy: IcarExternalSurfaceOccupancy,
-        rightDockState: IcarRightDockWindowState
+        wallpaperPosition: WallpaperLyricsPosition,
+        srPanelMotionOccupancy: IcarSrPanelOccupancy = IcarSrPanelOccupancy.UNKNOWN,
+        dockState: IcarDockWindowState
     ): IcarLyricsPresentation {
+        val srPanelOccupancy = IcarSrPanelOccupancyPolicy.resolve(
+            stableOccupancy = displayState?.srPanelOccupancy ?: IcarSrPanelOccupancy.UNKNOWN,
+            motionOccupancy = srPanelMotionOccupancy
+        )
         val baseSurface = IcarLyricsSurfacePolicy.effectiveSurfaceMode(
             displayState = displayState,
             wallpaperLyricsEnabled = wallpaperLyricsEnabled,
@@ -164,66 +319,109 @@ internal object IcarLyricsPresentationPolicy {
         if (externalSurfaceOccupancy.fullDisplayOccupied) {
             return IcarLyricsPresentation(
                 surfaceMode = baseSurface,
-                visibility = LyricsOverlayVisibility.HIDDEN
+                visibility = LyricsOverlayVisibility.HIDDEN,
+                desktopPosition = wallpaperPosition,
+                srPanelOccupancy = srPanelOccupancy
             )
         }
         if (displayState?.climatePageOccupancy != IcarClimatePageOccupancy.CLEAR) {
             return IcarLyricsPresentation(
                 surfaceMode = baseSurface,
-                visibility = LyricsOverlayVisibility.HIDDEN
+                visibility = LyricsOverlayVisibility.HIDDEN,
+                desktopPosition = wallpaperPosition,
+                srPanelOccupancy = srPanelOccupancy
             )
         }
         if (baseSurface != LyricsSurfaceMode.DESKTOP) {
             return IcarLyricsPresentation(
                 surfaceMode = baseSurface,
-                visibility = LyricsOverlayVisibility.VISIBLE
+                visibility = LyricsOverlayVisibility.VISIBLE,
+                desktopPosition = wallpaperPosition,
+                srPanelOccupancy = srPanelOccupancy
             )
         }
 
-        return when (rightDockState.status) {
-            IcarRightDockStatus.UNKNOWN -> IcarLyricsPresentation(
+        val selectedDock = dockState.panelFor(wallpaperPosition, srPanelOccupancy)
+        return when (selectedDock.status) {
+            IcarDockPanelStatus.UNKNOWN -> IcarLyricsPresentation(
                 surfaceMode = LyricsSurfaceMode.TOPBAR,
-                visibility = LyricsOverlayVisibility.VISIBLE
+                visibility = LyricsOverlayVisibility.VISIBLE,
+                desktopPosition = wallpaperPosition,
+                srPanelOccupancy = srPanelOccupancy
             )
-            IcarRightDockStatus.COLLAPSED -> IcarLyricsPresentation(
-                surfaceMode = LyricsSurfaceMode.DESKTOP,
-                visibility = LyricsOverlayVisibility.VISIBLE
-            )
-            IcarRightDockStatus.EXPANDED -> IcarLyricsPresentation(
+            IcarDockPanelStatus.COLLAPSED -> IcarLyricsPresentation(
                 surfaceMode = LyricsSurfaceMode.DESKTOP,
                 visibility = LyricsOverlayVisibility.VISIBLE,
-                desktopBottomLimitPx = rightDockState.expandedTopPx
+                desktopPosition = wallpaperPosition,
+                srPanelOccupancy = srPanelOccupancy
+            )
+            IcarDockPanelStatus.EXPANDED -> IcarLyricsPresentation(
+                surfaceMode = LyricsSurfaceMode.DESKTOP,
+                visibility = LyricsOverlayVisibility.VISIBLE,
+                desktopBottomLimitPx = selectedDock.expandedTopPx,
+                desktopPosition = wallpaperPosition,
+                srPanelOccupancy = srPanelOccupancy
             )
         }
     }
 }
 
-internal class IcarRightDockStateStore {
-    private val listeners = linkedSetOf<(IcarRightDockWindowState) -> Unit>()
-    private var state = IcarRightDockWindowState.UNKNOWN
+internal class IcarDockStateStore {
+    private val listeners = linkedSetOf<(IcarDockWindowState) -> Unit>()
+    private var state = IcarDockWindowState.UNKNOWN
 
-    fun addListener(listener: (IcarRightDockWindowState) -> Unit) {
+    fun addListener(listener: (IcarDockWindowState) -> Unit) {
         listeners += listener
         listener(state)
     }
 
-    fun removeListener(listener: (IcarRightDockWindowState) -> Unit) {
+    fun removeListener(listener: (IcarDockWindowState) -> Unit) {
         listeners -= listener
     }
 
-    fun update(nextState: IcarRightDockWindowState) {
+    fun update(nextState: IcarDockWindowState) {
         if (state == nextState) return
         state = nextState
         listeners.toList().forEach { listener -> listener(nextState) }
     }
 }
 
-internal object IcarRightDockStateRegistry {
-    private val store = IcarRightDockStateStore()
+internal object IcarDockStateRegistry {
+    private val store = IcarDockStateStore()
 
-    fun addListener(listener: (IcarRightDockWindowState) -> Unit) = store.addListener(listener)
+    fun addListener(listener: (IcarDockWindowState) -> Unit) = store.addListener(listener)
 
-    fun removeListener(listener: (IcarRightDockWindowState) -> Unit) = store.removeListener(listener)
+    fun removeListener(listener: (IcarDockWindowState) -> Unit) = store.removeListener(listener)
 
-    fun update(state: IcarRightDockWindowState) = store.update(state)
+    fun update(state: IcarDockWindowState) = store.update(state)
+}
+
+internal class IcarSrPanelMotionStore {
+    private val listeners = linkedSetOf<(IcarSrPanelOccupancy) -> Unit>()
+    private var state = IcarSrPanelOccupancy.UNKNOWN
+
+    fun addListener(listener: (IcarSrPanelOccupancy) -> Unit) {
+        listeners += listener
+        listener(state)
+    }
+
+    fun removeListener(listener: (IcarSrPanelOccupancy) -> Unit) {
+        listeners -= listener
+    }
+
+    fun update(nextState: IcarSrPanelOccupancy) {
+        if (state == nextState) return
+        state = nextState
+        listeners.toList().forEach { it(nextState) }
+    }
+}
+
+internal object IcarSrPanelMotionRegistry {
+    private val store = IcarSrPanelMotionStore()
+
+    fun addListener(listener: (IcarSrPanelOccupancy) -> Unit) = store.addListener(listener)
+
+    fun removeListener(listener: (IcarSrPanelOccupancy) -> Unit) = store.removeListener(listener)
+
+    fun update(state: IcarSrPanelOccupancy) = store.update(state)
 }

@@ -391,6 +391,44 @@
     </LinearLayout>
 
     <TextView
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_wallpaper_position" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_segment_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_segment_track"
+        android:orientation="horizontal"
+        android:padding="@dimen/settings_segment_padding">
+
+        <TextView
+            android:id="@+id/wallpaper_position_left"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_position_left" />
+
+        <TextView
+            android:id="@+id/wallpaper_position_right"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_position_right" />
+    </LinearLayout>
+
+    <TextView
         style="@style/SettingsText.Body1.Emphasis"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

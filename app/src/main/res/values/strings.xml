@@ -33,6 +33,9 @@
     <string name="settings_wallpaper_focus">歌词焦点</string>
     <string name="settings_focus_top">顶部</string>
     <string name="settings_focus_center">中间</string>
+    <string name="settings_wallpaper_position">歌词位置</string>
+    <string name="settings_position_left">左侧</string>
+    <string name="settings_position_right">右侧</string>
     <string name="settings_general">通用</string>
     <string name="settings_auto_start">开机自启动</string>
     <string name="settings_auto_start_summary">车机启动或应用升级后自动恢复歌词服务</string>
@@ -165,5 +168,5 @@
     <string name="accessibility_switch_on">已开启</string>
     <string name="accessibility_switch_off">已关闭</string>
     <string name="accessibility_dock_service_name">歌词窗口避让</string>
-    <string name="accessibility_dock_service_description">仅观察原车桌面窗口边界，用于在右侧 Dock 展开时裁剪壁纸歌词；不读取界面文字，不点击界面，也不模拟手势。</string>
+    <string name="accessibility_dock_service_description">仅观察原车 SR 把手与 Dock 窗口边界，用于动态避让 SR，并按歌词实际位置裁剪壁纸歌词；不读取界面文字，不点击界面，也不模拟手势。</string>
 </resources>

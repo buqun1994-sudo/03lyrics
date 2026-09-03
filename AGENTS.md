@@ -42,7 +42,7 @@
 6. `RecordingIdentity` 负责录音身份归一；`RecordingEvidence` 输出带原因的四级字段证据；`LyricsCandidateSelector` 负责显式准入、排序和入选证明，不让排序分值充当安全门槛。
 7. `LyricsCache` 负责本地歌词缓存与淘汰，并携带当前匹配策略可重放的入选证明；不把缓存策略复制到服务层。
 8. `IcarDisplayStateMonitor` 只读观察已验证的公开系统状态，不写车辆状态，不连接 CAN、无障碍或猜测的私有接口。
-9. `IcarDockAccessibilityService` 只读观察原厂 Launcher 的交互窗口边界，不读取文字、不执行节点动作或手势；`IcarWindowAvoidancePolicy` 统一拥有空调隐藏、右侧 Dock 裁剪和未知状态保守退化规则。
+9. `IcarDockAccessibilityService` 只读观察原厂 Launcher 的 SR 把手与 Dock 窗口边界，不读取文字、不执行节点动作或手势；`IcarWindowAvoidancePolicy` 统一拥有空调隐藏、按壁纸歌词实际位置选择 Dock 裁剪、SR 早期避让和未知状态保守退化规则。
 10. `BootReceiver` 只在用户已开启自动恢复时重启歌词服务。
 11. 跨两个以上调用点的规则必须回到上述 owner，不在 UI、广播接收器或临时分支中复制第二套状态机。
 

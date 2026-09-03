@@ -417,6 +417,10 @@ class SettingsBehaviorTest {
         assertTrue(LyricsOverlayService.AUTO_START_DEFAULT)
         assertTrue(LyricsOverlayService.WALLPAPER_BLUR_DEFAULT)
         assertTrue(LyricsOverlayService.WALLPAPER_SHADOW_DEFAULT)
+        assertEquals(
+            WallpaperLyricsPosition.RIGHT,
+            WallpaperLyricsPosition.fromPreference(null)
+        )
         assertNotEquals(
             LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT,
             LyricsOverlayService.PREF_WALLPAPER_FONT_SCALE_PERCENT
@@ -465,6 +469,9 @@ class SettingsBehaviorTest {
         assertTrue(display.contains("@+id/wallpaper_shadow_switch"))
         assertTrue(display.contains("@+id/wallpaper_spacing_dense"))
         assertTrue(display.contains("@+id/wallpaper_focus_top"))
+        assertTrue(display.contains("@+id/wallpaper_position_left"))
+        assertTrue(display.contains("@+id/wallpaper_position_right"))
+        assertTrue(display.contains("@string/settings_wallpaper_position"))
         assertTrue(search.contains("@+id/search_track_input"))
         assertTrue(search.contains("@+id/search_artist_input"))
         assertTrue(search.contains("@+id/search_album_input"))
@@ -505,6 +512,8 @@ class SettingsBehaviorTest {
         assertTrue(overlay.contains("topbarLyricFontScale"))
         assertTrue(overlay.contains("wallpaperLyricFontScale"))
         assertTrue(overlay.contains("desktopFocusRatio=settings.wallpaperFocus==='top' ? .15 : .48"))
+        assertTrue(overlay.contains("desktop-position-left"))
+        assertTrue(overlay.contains("settings.wallpaperPosition==='left'"))
         assertTrue(overlay.contains("desktop-all-shadow"))
         assertTrue(overlay.contains("desktop-all-shadow .line.active"))
         assertTrue(overlay.contains("desktop-blur"))

@@ -25,6 +25,16 @@ internal enum class WallpaperLyricsFocus(val preferenceValue: String) {
     }
 }
 
+internal enum class WallpaperLyricsPosition(val preferenceValue: String) {
+    LEFT("left"),
+    RIGHT("right");
+
+    companion object {
+        fun fromPreference(value: String?): WallpaperLyricsPosition =
+            entries.firstOrNull { it.preferenceValue == value } ?: RIGHT
+    }
+}
+
 internal enum class LyricsCacheSelection {
     AUTOMATIC,
     MANUAL

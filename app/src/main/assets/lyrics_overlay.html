@@ -289,6 +289,7 @@
       border:0; border-radius:0; background:transparent; box-shadow:none;
     }
     body.surface-desktop #player { padding:0 54px 0 20px; }
+    body.surface-desktop.desktop-position-left #player { padding:0 20px 0 54px; }
     body.surface-desktop .lyrics-viewport {
       display:block; border-radius:0; touch-action:none;
       -webkit-mask-image:linear-gradient(
@@ -324,6 +325,8 @@
       transition:none;
     }
     body.surface-desktop .line-original { transform-origin:100% 0; }
+    body.surface-desktop.desktop-position-left .line { text-align:left; }
+    body.surface-desktop.desktop-position-left .line-original { transform-origin:0 0; }
     body.surface-desktop .line.desktop-motion {
       transition:transform var(--desktop-motion-duration) var(--desktop-motion-easing),
         opacity var(--desktop-motion-duration) ease;
@@ -1521,6 +1524,7 @@
         : settings.wallpaperSpacing==='loose' ? 22 : 14;
       document.documentElement.style.setProperty('--desktop-line-padding',spacing+'px');
       desktopFocusRatio=settings.wallpaperFocus==='top' ? .15 : .48;
+      document.body.classList.toggle('desktop-position-left',settings.wallpaperPosition==='left');
       document.body.classList.toggle('desktop-blur',settings.wallpaperBlur!==false);
       document.body.classList.toggle('desktop-all-shadow',settings.wallpaperShadow===true);
       applyFontScales();

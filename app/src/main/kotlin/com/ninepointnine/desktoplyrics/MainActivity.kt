@@ -143,6 +143,7 @@ class MainActivity : AppCompatActivity() {
                 onWallpaperShadowChanged = ::setWallpaperShadowEnabled,
                 onWallpaperSpacingChanged = ::setWallpaperSpacing,
                 onWallpaperFocusChanged = ::setWallpaperFocus,
+                onWallpaperPositionChanged = ::setWallpaperPosition,
                 onAutoStartChanged = ::setAutoStartEnabled,
                 onTranslationChanged = ::setLyricsTranslationEnabled,
                 onServiceRunningChanged = ::setServiceRunning,
@@ -365,6 +366,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setWallpaperPosition(position: WallpaperLyricsPosition) {
+        overlayPrefs.edit()
+            .putString(LyricsOverlayService.PREF_WALLPAPER_POSITION, position.preferenceValue)
+            .apply()
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_WALLPAPER_POSITION) {
+            putExtra(LyricsOverlayService.EXTRA_WALLPAPER_POSITION, position.preferenceValue)
+        }
+    }
+
     private fun setAutoStartEnabled(enabled: Boolean) {
         overlayPrefs.edit()
             .putBoolean(LyricsOverlayService.PREF_AUTO_START, enabled)
@@ -433,6 +444,12 @@ class MainActivity : AppCompatActivity() {
                     overlayPrefs.getString(
                         LyricsOverlayService.PREF_WALLPAPER_FOCUS,
                         WallpaperLyricsFocus.CENTER.preferenceValue
+                    )
+                ),
+                wallpaperPosition = WallpaperLyricsPosition.fromPreference(
+                    overlayPrefs.getString(
+                        LyricsOverlayService.PREF_WALLPAPER_POSITION,
+                        WallpaperLyricsPosition.RIGHT.preferenceValue
                     )
                 ),
                 autoStart = overlayPrefs.getBoolean(

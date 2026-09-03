@@ -26,6 +26,7 @@ internal data class LyricsSettingsPreferences(
     val wallpaperShadow: Boolean,
     val wallpaperSpacing: WallpaperLyricsSpacing,
     val wallpaperFocus: WallpaperLyricsFocus,
+    val wallpaperPosition: WallpaperLyricsPosition,
     val autoStart: Boolean,
     val translationEnabled: Boolean
 )
@@ -39,6 +40,7 @@ internal data class LyricsSettingsActions(
     val onWallpaperShadowChanged: (Boolean) -> Unit,
     val onWallpaperSpacingChanged: (WallpaperLyricsSpacing) -> Unit,
     val onWallpaperFocusChanged: (WallpaperLyricsFocus) -> Unit,
+    val onWallpaperPositionChanged: (WallpaperLyricsPosition) -> Unit,
     val onAutoStartChanged: (Boolean) -> Unit,
     val onTranslationChanged: (Boolean) -> Unit,
     val onServiceRunningChanged: (Boolean) -> Unit,
@@ -74,6 +76,10 @@ internal class LyricsSettingsRenderer(
     private val focusOptions = listOf(
         root.findViewById<TextView>(R.id.wallpaper_focus_top) to WallpaperLyricsFocus.TOP,
         root.findViewById<TextView>(R.id.wallpaper_focus_center) to WallpaperLyricsFocus.CENTER
+    )
+    private val positionOptions = listOf(
+        root.findViewById<TextView>(R.id.wallpaper_position_left) to WallpaperLyricsPosition.LEFT,
+        root.findViewById<TextView>(R.id.wallpaper_position_right) to WallpaperLyricsPosition.RIGHT
     )
 
     private val wallpaperSwitch: IcarSwitch = root.findViewById(R.id.wallpaper_lyrics_switch)
@@ -130,6 +136,9 @@ internal class LyricsSettingsRenderer(
         }
         focusOptions.forEach { (view, value) ->
             view.setOnClickListener { actions.onWallpaperFocusChanged(value) }
+        }
+        positionOptions.forEach { (view, value) ->
+            view.setOnClickListener { actions.onWallpaperPositionChanged(value) }
         }
         bindSwitch(
             root.findViewById(R.id.wallpaper_lyrics_setting),
@@ -202,6 +211,9 @@ internal class LyricsSettingsRenderer(
             }
             focusOptions.forEach { (view, focus) ->
                 view.renderSelected(focus == value.wallpaperFocus)
+            }
+            positionOptions.forEach { (view, position) ->
+                view.renderSelected(position == value.wallpaperPosition)
             }
             renderSwitch(wallpaperSwitch, value.wallpaperEnabled)
             renderSwitch(wallpaperBlurSwitch, value.wallpaperBlur)

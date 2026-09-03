@@ -1,5 +1,6 @@
 package com.ninepointnine.desktoplyrics
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -43,6 +44,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
+import android.view.animation.PathInterpolator
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -177,13 +179,16 @@ class LyricsOverlayService : Service() {
     private var wallpaperShadowEnabled = WALLPAPER_SHADOW_DEFAULT
     private var wallpaperSpacing = WallpaperLyricsSpacing.STANDARD
     private var wallpaperFocus = WallpaperLyricsFocus.CENTER
+    private var wallpaperPosition = WallpaperLyricsPosition.RIGHT
     private var nightTheme = true
     private var surfaceMode = LyricsSurfaceMode.TOPBAR
     private var surfaceHandoffTarget: LyricsSurfaceMode? = null
     private var surfaceHandoffGeneration = 0L
     private var displayState: IcarDisplayState? = null
     private var externalSurfaceOccupancy = IcarExternalSurfaceOccupancy()
-    private var rightDockState = IcarRightDockWindowState.UNKNOWN
+    private var dockState = IcarDockWindowState.UNKNOWN
+    private var srPanelMotionOccupancy = IcarSrPanelOccupancy.UNKNOWN
+    private var wallpaperHorizontalAnimator: ValueAnimator? = null
     private var desktopVisibleRatioBasisPoints: Int? = null
     private var monitorStarted = false
     private var foregroundStarted = false
@@ -281,10 +286,22 @@ class LyricsOverlayService : Service() {
             if (displayState != null || overlayRoot != null) applyCurrentSurface()
         }
     }
-    private val rightDockStateListener: (IcarRightDockWindowState) -> Unit = { state ->
-        if (rightDockState != state) {
-            rightDockState = state
-            Log.i(LOG_TAG, "Right Dock window status=${state.status} top=${state.expandedTopPx}")
+    private val dockStateListener: (IcarDockWindowState) -> Unit = { state ->
+        if (dockState != state) {
+            dockState = state
+            Log.i(
+                LOG_TAG,
+                "Dock window left=${state.left.status}/${state.left.expandedTopPx} " +
+                    "center=${state.center.status}/${state.center.expandedTopPx} " +
+                    "right=${state.right.status}/${state.right.expandedTopPx}"
+            )
+            if (displayState != null || overlayRoot != null) applyCurrentSurface()
+        }
+    }
+    private val srPanelMotionListener: (IcarSrPanelOccupancy) -> Unit = { occupancy ->
+        if (srPanelMotionOccupancy != occupancy) {
+            srPanelMotionOccupancy = occupancy
+            Log.i(LOG_TAG, "SR motion occupancy=$occupancy")
             if (displayState != null || overlayRoot != null) applyCurrentSurface()
         }
     }
@@ -367,7 +384,8 @@ class LyricsOverlayService : Service() {
         announceOverlayState()
         loadRuntimePreferences()
         SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
-        IcarRightDockStateRegistry.addListener(rightDockStateListener)
+        IcarDockStateRegistry.addListener(dockStateListener)
+        IcarSrPanelMotionRegistry.addListener(srPanelMotionListener)
         registerCommercialAccessBoundaryReceiver()
     }
 
@@ -727,6 +745,18 @@ class LyricsOverlayService : Service() {
             if (overlayRoot != null) return START_STICKY
         }
 
+        if (intent?.action == ACTION_SET_WALLPAPER_POSITION) {
+            wallpaperPosition = WallpaperLyricsPosition.fromPreference(
+                intent.getStringExtra(EXTRA_WALLPAPER_POSITION)
+            )
+            prefs.edit()
+                .putString(PREF_WALLPAPER_POSITION, wallpaperPosition.preferenceValue)
+                .apply()
+            applyDisplayPreferencesToWeb()
+            applyCurrentSurface()
+            return START_STICKY
+        }
+
         if (intent?.action == ACTION_SET_TOPBAR_LINES) {
             topbarLines = normalizedTopbarLines(
                 intent.getIntExtra(EXTRA_TOPBAR_LINES, TOPBAR_LINES_DEFAULT)
@@ -824,7 +854,8 @@ class LyricsOverlayService : Service() {
 
     override fun onDestroy() {
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
-        IcarRightDockStateRegistry.removeListener(rightDockStateListener)
+        IcarDockStateRegistry.removeListener(dockStateListener)
+        IcarSrPanelMotionRegistry.removeListener(srPanelMotionListener)
         unregisterCommercialAccessBoundaryReceiver()
         invalidatePendingCommercialChecks()
         commercialCheckJob.cancel()
@@ -874,6 +905,9 @@ class LyricsOverlayService : Service() {
         )
         wallpaperFocus = WallpaperLyricsFocus.fromPreference(
             prefs.getString(PREF_WALLPAPER_FOCUS, WallpaperLyricsFocus.CENTER.preferenceValue)
+        )
+        wallpaperPosition = WallpaperLyricsPosition.fromPreference(
+            prefs.getString(PREF_WALLPAPER_POSITION, WallpaperLyricsPosition.RIGHT.preferenceValue)
         )
         prefs.edit()
             .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
@@ -1876,14 +1910,18 @@ class LyricsOverlayService : Service() {
             wallpaperLyricsEnabled = wallpaperLyricsEnabled,
             localSettingsOpen = localSettingsOpen,
             externalSurfaceOccupancy = externalSurfaceOccupancy,
-            rightDockState = rightDockState
+            wallpaperPosition = wallpaperPosition,
+            srPanelMotionOccupancy = srPanelMotionOccupancy,
+            dockState = dockState
         )
 
     private fun geometryForPresentation(presentation: IcarLyricsPresentation): OverlayGeometry =
         overlayGeometry(
             mode = presentation.surfaceMode,
             state = displayState,
-            desktopBottomLimitPx = presentation.desktopBottomLimitPx
+            desktopBottomLimitPx = presentation.desktopBottomLimitPx,
+            desktopPosition = presentation.desktopPosition,
+            srPanelOccupancy = presentation.srPanelOccupancy
         )
 
     private fun geometryForSurface(mode: LyricsSurfaceMode): OverlayGeometry {
@@ -1895,7 +1933,9 @@ class LyricsOverlayService : Service() {
                 presentation.desktopBottomLimitPx
             } else {
                 null
-            }
+            },
+            desktopPosition = presentation.desktopPosition,
+            srPanelOccupancy = presentation.srPanelOccupancy
         )
     }
 
@@ -1919,7 +1959,15 @@ class LyricsOverlayService : Service() {
             applySurfaceMode(nextSurfaceMode)
         }
         if (surfaceMode == nextSurfaceMode) {
-            windowParams?.let { params -> applyOverlayGeometry(params, geometry) }
+            windowParams?.let { params ->
+                applyOverlayGeometry(
+                    params = params,
+                    geometry = geometry,
+                    animateDesktopHorizontal = nextSurfaceMode == LyricsSurfaceMode.DESKTOP &&
+                        presentation.visibility == LyricsOverlayVisibility.VISIBLE &&
+                        root.visibility == View.VISIBLE
+                )
+            }
         }
         updateOverlayVisibility(geometry, presentation.visibility)
     }
@@ -2032,6 +2080,7 @@ class LyricsOverlayService : Service() {
         surfaceHandoffGeneration += 1
         surfaceHandoffTarget = null
         overlayRoot?.animate()?.cancel()
+        cancelWallpaperHorizontalAnimation()
         if (resetAlpha) overlayRoot?.alpha = 1f
     }
 
@@ -2059,10 +2108,64 @@ class LyricsOverlayService : Service() {
         applyOverlayGeometry(params, overlayGeometry(LyricsSurfaceMode.TOPBAR, state))
     }
 
-    private fun applyOverlayGeometry(params: WindowManager.LayoutParams, geometry: OverlayGeometry) {
+    private fun applyOverlayGeometry(
+        params: WindowManager.LayoutParams,
+        geometry: OverlayGeometry,
+        animateDesktopHorizontal: Boolean = false
+    ) {
         if (!IcarLyricsSurfacePolicy.hasRenderableGeometry(geometry.width, geometry.height)) {
+            cancelWallpaperHorizontalAnimation()
             return
         }
+        if (animateDesktopHorizontal && params.x != geometry.x) {
+            startWallpaperHorizontalAnimation(params, geometry)
+            return
+        }
+        cancelWallpaperHorizontalAnimation()
+        commitOverlayGeometry(params, geometry)
+    }
+
+    private fun startWallpaperHorizontalAnimation(
+        params: WindowManager.LayoutParams,
+        geometry: OverlayGeometry
+    ) {
+        val root = overlayRoot ?: return
+        val startX = params.x
+        cancelWallpaperHorizontalAnimation()
+        commitOverlayGeometry(params, geometry.copy(x = startX))
+        wallpaperHorizontalAnimator = ValueAnimator.ofInt(startX, geometry.x).apply {
+            duration = IcarWallpaperHorizontalMotionSpec.DURATION_MS
+            interpolator = PathInterpolator(
+                IcarWallpaperHorizontalMotionSpec.CONTROL_X1,
+                IcarWallpaperHorizontalMotionSpec.CONTROL_Y1,
+                IcarWallpaperHorizontalMotionSpec.CONTROL_X2,
+                IcarWallpaperHorizontalMotionSpec.CONTROL_Y2
+            )
+            addUpdateListener { animator ->
+                if (overlayRoot !== root || windowParams !== params) {
+                    animator.cancel()
+                    return@addUpdateListener
+                }
+                params.x = animator.animatedValue as Int
+                runCatching { windowManager.updateViewLayout(root, params) }
+                    .onFailure { error ->
+                        Log.w(LOG_TAG, "Unable to animate lyric surface position", error)
+                        animator.cancel()
+                    }
+            }
+            start()
+        }
+    }
+
+    private fun cancelWallpaperHorizontalAnimation() {
+        wallpaperHorizontalAnimator?.cancel()
+        wallpaperHorizontalAnimator = null
+    }
+
+    private fun commitOverlayGeometry(
+        params: WindowManager.LayoutParams,
+        geometry: OverlayGeometry
+    ) {
         val changed = params.x != geometry.x ||
             params.y != geometry.y ||
             params.width != geometry.width ||
@@ -2119,7 +2222,10 @@ class LyricsOverlayService : Service() {
     private fun overlayGeometry(
         mode: LyricsSurfaceMode,
         state: IcarDisplayState?,
-        desktopBottomLimitPx: Int? = null
+        desktopBottomLimitPx: Int? = null,
+        desktopPosition: WallpaperLyricsPosition = WallpaperLyricsPosition.RIGHT,
+        srPanelOccupancy: IcarSrPanelOccupancy =
+            state?.srPanelOccupancy ?: IcarSrPanelOccupancy.UNKNOWN
     ): OverlayGeometry {
         val realMetrics = DisplayMetrics()
         @Suppress("DEPRECATION")
@@ -2130,19 +2236,25 @@ class LyricsOverlayService : Service() {
         fun scaledY(value: Int): Int = (screenHeight * value / DESIGN_HEIGHT.toFloat()).roundToInt()
 
         if (mode == LyricsSurfaceMode.DESKTOP) {
-            val left = scaledX(DESKTOP_LEFT)
             val top = scaledY(DESKTOP_TOP)
-            val right = scaledX(DESKTOP_RIGHT).coerceAtMost(screenWidth)
+            val width = scaledX(DESKTOP_RIGHT - DESKTOP_LEFT).coerceAtMost(screenWidth)
+            val left = IcarWallpaperPositionPolicy.leftPx(
+                screenWidthPx = screenWidth,
+                surfaceWidthPx = width,
+                edgeInsetPx = scaledX(DESKTOP_EDGE_INSET),
+                position = desktopPosition,
+                srPanelOccupancy = srPanelOccupancy
+            )
             val defaultBottom = scaledY(DESKTOP_BOTTOM).coerceAtMost(screenHeight)
             val bottom = IcarWallpaperClipPolicy.bottomPx(
                 defaultBottomPx = defaultBottom,
                 dockTopPx = desktopBottomLimitPx,
-                safeGapPx = scaledY(RIGHT_DOCK_SAFE_GAP)
+                safeGapPx = scaledY(DOCK_SAFE_GAP)
             )
             return OverlayGeometry(
                 x = left,
                 y = top,
-                width = max(1, right - left),
+                width = max(1, width),
                 height = max(0, bottom - top)
             )
         }
@@ -2264,6 +2376,7 @@ class LyricsOverlayService : Service() {
             .put("wallpaperShadow", wallpaperShadowEnabled)
             .put("wallpaperSpacing", wallpaperSpacing.preferenceValue)
             .put("wallpaperFocus", wallpaperFocus.preferenceValue)
+            .put("wallpaperPosition", wallpaperPosition.preferenceValue)
         webView?.evaluateJavascript(
             "window.LobstaOverlay && window.LobstaOverlay.setDisplayPreferences($value);",
             null
@@ -3202,6 +3315,8 @@ class LyricsOverlayService : Service() {
             "com.ninepointnine.desktoplyrics.action.SET_WALLPAPER_SPACING"
         const val ACTION_SET_WALLPAPER_FOCUS =
             "com.ninepointnine.desktoplyrics.action.SET_WALLPAPER_FOCUS"
+        const val ACTION_SET_WALLPAPER_POSITION =
+            "com.ninepointnine.desktoplyrics.action.SET_WALLPAPER_POSITION"
         const val ACTION_SET_TOPBAR_LINES = "com.ninepointnine.desktoplyrics.action.SET_TOPBAR_LINES"
         const val ACTION_SET_LYRICS_TRANSLATION =
             "com.ninepointnine.desktoplyrics.action.SET_LYRICS_TRANSLATION"
@@ -3231,6 +3346,7 @@ class LyricsOverlayService : Service() {
         const val EXTRA_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled"
         const val EXTRA_WALLPAPER_SPACING = "wallpaper_spacing"
         const val EXTRA_WALLPAPER_FOCUS = "wallpaper_focus"
+        const val EXTRA_WALLPAPER_POSITION = "wallpaper_position"
         const val EXTRA_MANUAL_TRACK = "manual_track"
         const val EXTRA_MANUAL_ARTIST = "manual_artist"
         const val EXTRA_MANUAL_ALBUM = "manual_album"
@@ -3250,6 +3366,7 @@ class LyricsOverlayService : Service() {
         const val PREF_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled_v1"
         const val PREF_WALLPAPER_SPACING = "wallpaper_spacing_v1"
         const val PREF_WALLPAPER_FOCUS = "wallpaper_focus_v1"
+        const val PREF_WALLPAPER_POSITION = "wallpaper_position_v1"
         const val BACKGROUND_TRANSPARENT = "transparent"
         const val BACKGROUND_LOW = "low"
         const val BACKGROUND_HIGH = "high"
@@ -3287,7 +3404,8 @@ class LyricsOverlayService : Service() {
         private const val DESKTOP_TOP = 90
         private const val DESKTOP_RIGHT = 1890
         private const val DESKTOP_BOTTOM = 900
-        private const val RIGHT_DOCK_SAFE_GAP = 16
+        private const val DESKTOP_EDGE_INSET = 30
+        private const val DOCK_SAFE_GAP = 16
         private const val SURFACE_FADE_OUT_MS = 120L
         private const val SURFACE_FADE_IN_MS = 160L
         private const val SURFACE_HIDDEN_ALPHA = 0.01f

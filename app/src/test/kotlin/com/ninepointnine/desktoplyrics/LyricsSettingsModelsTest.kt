@@ -7,6 +7,19 @@ import org.junit.Test
 
 class LyricsSettingsModelsTest {
     @Test
+    fun `wallpaper position defaults to right for new and unknown preferences`() {
+        assertEquals(WallpaperLyricsPosition.RIGHT, WallpaperLyricsPosition.fromPreference(null))
+        assertEquals(
+            WallpaperLyricsPosition.RIGHT,
+            WallpaperLyricsPosition.fromPreference("unsupported")
+        )
+        assertEquals(
+            WallpaperLyricsPosition.LEFT,
+            WallpaperLyricsPosition.fromPreference("left")
+        )
+    }
+
+    @Test
     fun `runtime state round trip carries summaries without lyrics bodies`() {
         val playback = LyricsPlaybackIdentity("Song", "Artist", "Album", 201_000L)
         val result = LyricsResult(

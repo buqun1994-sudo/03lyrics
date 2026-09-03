@@ -29,6 +29,12 @@ internal enum class IcarDesktopSurfaceOccupancy {
     UNKNOWN
 }
 
+internal enum class IcarSrPanelOccupancy {
+    CLEAR,
+    OCCUPIED,
+    UNKNOWN
+}
+
 internal enum class IcarClimatePageOccupancy {
     CLEAR,
     OCCUPIED,
@@ -87,6 +93,17 @@ internal data class IcarDisplayState(
     val windowMode: Int = IcarDisplayStateMonitor.WINDOW_MODE_NONE,
     val climatePageStatus: Int = IcarDisplayStateMonitor.STATE_UNKNOWN
 ) {
+    val srPanelOccupancy: IcarSrPanelOccupancy
+        get() = when (windowMode) {
+            IcarDisplayStateMonitor.WINDOW_MODE_NONE,
+            IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW -> IcarSrPanelOccupancy.CLEAR
+            IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD,
+            IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD_AND_STANDARD_WINDOW -> {
+                IcarSrPanelOccupancy.OCCUPIED
+            }
+            else -> IcarSrPanelOccupancy.UNKNOWN
+        }
+
     val desktopSurfaceOccupancy: IcarDesktopSurfaceOccupancy
         get() = when (windowMode) {
             IcarDisplayStateMonitor.WINDOW_MODE_NONE,

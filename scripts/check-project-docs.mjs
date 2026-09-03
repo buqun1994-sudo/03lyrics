@@ -107,6 +107,10 @@ if (!/versionCode\s*=\s*releaseVersionCode/.test(appBuild) ||
     !/versionName\s*=\s*releaseVersionName/.test(appBuild)) {
   failures.push("Debug / Release 未共用 release-version.properties 版本入口");
 }
+if (!/const packageName\s*=\s*apkIdentity\[1\]/.test(installAndSmoke) ||
+    !/packageName !== debugPackageName/.test(installAndSmoke)) {
+  failures.push("安装 smoke 未从 APK 读取并限制 Debug 测试身份");
+}
 
 for (const permission of [
   "android.permission.SYSTEM_ALERT_WINDOW",

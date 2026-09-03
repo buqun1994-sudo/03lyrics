@@ -13,8 +13,8 @@ class IcarWindowAvoidancePolicyTest {
             rightDockCollapsed()
         )
 
-        assertEquals(IcarRightDockStatus.COLLAPSED, state.status)
-        assertNull(state.expandedTopPx)
+        assertEquals(IcarDockPanelStatus.COLLAPSED, state.right.status)
+        assertNull(state.right.expandedTopPx)
     }
 
     @Test
@@ -25,12 +25,12 @@ class IcarWindowAvoidancePolicyTest {
             launcherWindow(left = 1275, top = 586, right = 1920, bottom = 1080)
         )
 
-        assertEquals(IcarRightDockStatus.EXPANDED, state.status)
-        assertEquals(586, state.expandedTopPx)
+        assertEquals(IcarDockPanelStatus.EXPANDED, state.right.status)
+        assertEquals(586, state.right.expandedTopPx)
     }
 
     @Test
-    fun `left and center Dock expansion do not affect the right Dock`() {
+    fun `left and center Dock expansion are classified independently`() {
         val state = classify(
             launcherRoot(),
             rightDockCollapsed(),
@@ -38,7 +38,11 @@ class IcarWindowAvoidancePolicyTest {
             launcherWindow(left = 645, top = 586, right = 1275, bottom = 1080)
         )
 
-        assertEquals(IcarRightDockStatus.COLLAPSED, state.status)
+        assertEquals(IcarDockPanelStatus.EXPANDED, state.left.status)
+        assertEquals(586, state.left.expandedTopPx)
+        assertEquals(IcarDockPanelStatus.EXPANDED, state.center.status)
+        assertEquals(586, state.center.expandedTopPx)
+        assertEquals(IcarDockPanelStatus.COLLAPSED, state.right.status)
     }
 
     @Test
@@ -49,8 +53,8 @@ class IcarWindowAvoidancePolicyTest {
             launcherWindow(left = 1275, top = 880, right = 1920, bottom = 1080)
         )
 
-        assertEquals(IcarRightDockStatus.EXPANDED, state.status)
-        assertEquals(880, state.expandedTopPx)
+        assertEquals(IcarDockPanelStatus.EXPANDED, state.right.status)
+        assertEquals(880, state.right.expandedTopPx)
     }
 
     @Test
@@ -60,15 +64,17 @@ class IcarWindowAvoidancePolicyTest {
             launcherWindow(left = 1275, top = 586, right = 1920, bottom = 1080)
         )
 
-        assertEquals(IcarRightDockStatus.EXPANDED, state.status)
-        assertEquals(586, state.expandedTopPx)
+        assertEquals(IcarDockPanelStatus.EXPANDED, state.right.status)
+        assertEquals(586, state.right.expandedTopPx)
     }
 
     @Test
     fun `snapshot without verified Launcher root is unknown`() {
         val state = classify(rightDockCollapsed())
 
-        assertEquals(IcarRightDockStatus.UNKNOWN, state.status)
+        assertEquals(IcarDockPanelStatus.UNKNOWN, state.left.status)
+        assertEquals(IcarDockPanelStatus.UNKNOWN, state.center.status)
+        assertEquals(IcarDockPanelStatus.UNKNOWN, state.right.status)
     }
 
     @Test
@@ -79,14 +85,14 @@ class IcarWindowAvoidancePolicyTest {
             launcherWindow(left = 850, top = 391, right = 1280, bottom = 720)
         )
 
-        val state = IcarRightDockWindowClassifier.classify(
+        val state = IcarDockWindowClassifier.classify(
             screenWidthPx = 1280,
             screenHeightPx = 720,
             windows = windows
         )
 
-        assertEquals(IcarRightDockStatus.EXPANDED, state.status)
-        assertEquals(391, state.expandedTopPx)
+        assertEquals(IcarDockPanelStatus.EXPANDED, state.right.status)
+        assertEquals(391, state.right.expandedTopPx)
     }
 
     @Test
@@ -113,14 +119,14 @@ class IcarWindowAvoidancePolicyTest {
     fun `climate page has priority and hides every lyric surface`() {
         val desktop = presentation(
             displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_EXPANDED),
-            dockState = IcarRightDockWindowState.COLLAPSED
+            dockState = IcarDockPanelState.COLLAPSED
         )
         val topbar = presentation(
             displayState = wallpaperState(
                 climateStatus = IcarDisplayStateMonitor.CLIMATE_PAGE_EXPANDING,
                 windowMode = IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW
             ),
-            dockState = IcarRightDockWindowState.expanded(586)
+            dockState = IcarDockPanelState.expanded(586)
         )
 
         assertEquals(LyricsOverlayVisibility.HIDDEN, desktop.visibility)
@@ -132,7 +138,7 @@ class IcarWindowAvoidancePolicyTest {
     fun `unknown climate status fails closed to hidden`() {
         val state = presentation(
             displayState = wallpaperState(IcarDisplayStateMonitor.STATE_UNKNOWN),
-            dockState = IcarRightDockWindowState.COLLAPSED
+            dockState = IcarDockPanelState.COLLAPSED
         )
 
         assertEquals(LyricsOverlayVisibility.HIDDEN, state.visibility)
@@ -142,12 +148,12 @@ class IcarWindowAvoidancePolicyTest {
     fun `full display lease hides lyrics without changing ordinary window policy`() {
         val fullscreen = presentation(
             displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
-            dockState = IcarRightDockWindowState.COLLAPSED,
+            dockState = IcarDockPanelState.COLLAPSED,
             externalSurfaceOccupancy = IcarExternalSurfaceOccupancy(fullDisplayOccupied = true)
         )
         val released = presentation(
             displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
-            dockState = IcarRightDockWindowState.COLLAPSED
+            dockState = IcarDockPanelState.COLLAPSED
         )
 
         assertEquals(LyricsOverlayVisibility.HIDDEN, fullscreen.visibility)
@@ -160,14 +166,14 @@ class IcarWindowAvoidancePolicyTest {
     fun `expanded right Dock clips only wallpaper lyrics`() {
         val desktop = presentation(
             displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
-            dockState = IcarRightDockWindowState.expanded(586)
+            dockState = IcarDockPanelState.expanded(586)
         )
         val topbar = presentation(
             displayState = wallpaperState(
                 climateStatus = IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED,
                 windowMode = IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW
             ),
-            dockState = IcarRightDockWindowState.expanded(586)
+            dockState = IcarDockPanelState.expanded(586)
         )
 
         assertEquals(LyricsSurfaceMode.DESKTOP, desktop.surfaceMode)
@@ -176,6 +182,189 @@ class IcarWindowAvoidancePolicyTest {
         assertEquals(LyricsSurfaceMode.TOPBAR, topbar.surfaceMode)
         assertEquals(LyricsOverlayVisibility.VISIBLE, topbar.visibility)
         assertNull(topbar.desktopBottomLimitPx)
+    }
+
+    @Test
+    fun `wallpaper clips against the Dock under its effective position`() {
+        val leftClipped = presentation(
+            displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
+            dockState = IcarDockPanelState.expanded(700),
+            wallpaperPosition = WallpaperLyricsPosition.LEFT,
+            leftDockState = IcarDockPanelState.expanded(586)
+        )
+        val leftIgnoresRight = presentation(
+            displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
+            dockState = IcarDockPanelState.expanded(586),
+            wallpaperPosition = WallpaperLyricsPosition.LEFT,
+            leftDockState = IcarDockPanelState.COLLAPSED
+        )
+        val shiftedLeftClippedByCenter = presentation(
+            displayState = wallpaperState(
+                climateStatus = IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED,
+                windowMode = IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD
+            ),
+            dockState = IcarDockPanelState.expanded(700),
+            wallpaperPosition = WallpaperLyricsPosition.LEFT,
+            leftDockState = IcarDockPanelState.expanded(650),
+            centerDockState = IcarDockPanelState.expanded(586)
+        )
+        val shiftedLeftIgnoresSideDocks = presentation(
+            displayState = wallpaperState(
+                climateStatus = IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED,
+                windowMode = IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD
+            ),
+            dockState = IcarDockPanelState.expanded(700),
+            wallpaperPosition = WallpaperLyricsPosition.LEFT,
+            leftDockState = IcarDockPanelState.expanded(650),
+            centerDockState = IcarDockPanelState.COLLAPSED
+        )
+
+        assertEquals(586, leftClipped.desktopBottomLimitPx)
+        assertNull(leftIgnoresRight.desktopBottomLimitPx)
+        assertEquals(586, shiftedLeftClippedByCenter.desktopBottomLimitPx)
+        assertNull(shiftedLeftIgnoresSideDocks.desktopBottomLimitPx)
+    }
+
+    @Test
+    fun `wallpaper positions are mirrored and SR shifts the left position right`() {
+        assertEquals(
+            30,
+            IcarWallpaperPositionPolicy.leftPx(
+                screenWidthPx = 1920,
+                surfaceWidthPx = 1230,
+                edgeInsetPx = 30,
+                position = WallpaperLyricsPosition.LEFT,
+                srPanelOccupancy = IcarSrPanelOccupancy.CLEAR
+            )
+        )
+        assertEquals(
+            660,
+            IcarWallpaperPositionPolicy.leftPx(
+                screenWidthPx = 1920,
+                surfaceWidthPx = 1230,
+                edgeInsetPx = 30,
+                position = WallpaperLyricsPosition.LEFT,
+                srPanelOccupancy = IcarSrPanelOccupancy.OCCUPIED
+            )
+        )
+        assertEquals(
+            660,
+            IcarWallpaperPositionPolicy.leftPx(
+                screenWidthPx = 1920,
+                surfaceWidthPx = 1230,
+                edgeInsetPx = 30,
+                position = WallpaperLyricsPosition.RIGHT,
+                srPanelOccupancy = IcarSrPanelOccupancy.CLEAR
+            )
+        )
+    }
+
+    @Test
+    fun `SR horizontal shift uses the fixed fast out motion contract`() {
+        assertEquals(250L, IcarWallpaperHorizontalMotionSpec.DURATION_MS)
+        assertEquals(0.2f, IcarWallpaperHorizontalMotionSpec.CONTROL_X1)
+        assertEquals(0.8f, IcarWallpaperHorizontalMotionSpec.CONTROL_Y1)
+        assertEquals(0.2f, IcarWallpaperHorizontalMotionSpec.CONTROL_X2)
+        assertEquals(1f, IcarWallpaperHorizontalMotionSpec.CONTROL_Y2)
+    }
+
+    @Test
+    fun `window mode exposes SR occupancy independently from standard windows`() {
+        fun srOccupancy(windowMode: Int) = wallpaperState(
+            climateStatus = IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED,
+            windowMode = windowMode
+        ).srPanelOccupancy
+
+        assertEquals(IcarSrPanelOccupancy.CLEAR, srOccupancy(0))
+        assertEquals(IcarSrPanelOccupancy.OCCUPIED, srOccupancy(1))
+        assertEquals(IcarSrPanelOccupancy.CLEAR, srOccupancy(2))
+        assertEquals(IcarSrPanelOccupancy.OCCUPIED, srOccupancy(3))
+        assertEquals(IcarSrPanelOccupancy.UNKNOWN, srOccupancy(99))
+    }
+
+    @Test
+    fun `SR handle movement publishes direction before its terminal position`() {
+        val tracker = IcarSrPanelMotionTracker()
+
+        assertEquals(8, IcarSrPanelObservationSpec.motionThresholdPx(1920))
+        assertEquals(320L, IcarSrPanelObservationSpec.SETTLE_RECHECK_MS)
+        assertEquals(
+            IcarSrPanelOccupancy.UNKNOWN,
+            tracker.update(screenWidthPx = 1920, handlerLeftPx = -9, handlerRightPx = 51)
+        )
+        assertEquals(
+            IcarSrPanelOccupancy.UNKNOWN,
+            tracker.update(screenWidthPx = 1920, handlerLeftPx = -2, handlerRightPx = 58)
+        )
+        assertEquals(
+            IcarSrPanelOccupancy.OCCUPIED,
+            tracker.update(screenWidthPx = 1920, handlerLeftPx = 6, handlerRightPx = 66)
+        )
+        assertEquals(
+            IcarSrPanelOccupancy.OCCUPIED,
+            tracker.update(screenWidthPx = 1920, handlerLeftPx = 600, handlerRightPx = 660)
+        )
+        assertEquals(
+            IcarSrPanelOccupancy.UNKNOWN,
+            tracker.settle(handlerLeftPx = 600, handlerRightPx = 660)
+        )
+        assertEquals(
+            IcarSrPanelOccupancy.CLEAR,
+            tracker.update(screenWidthPx = 1920, handlerLeftPx = 580, handlerRightPx = 640)
+        )
+    }
+
+    @Test
+    fun `SR motion hint leads and stable window mode remains the fallback`() {
+        assertEquals(
+            IcarSrPanelOccupancy.OCCUPIED,
+            IcarSrPanelOccupancyPolicy.resolve(
+                stableOccupancy = IcarSrPanelOccupancy.CLEAR,
+                motionOccupancy = IcarSrPanelOccupancy.OCCUPIED
+            )
+        )
+        assertEquals(
+            IcarSrPanelOccupancy.CLEAR,
+            IcarSrPanelOccupancyPolicy.resolve(
+                stableOccupancy = IcarSrPanelOccupancy.OCCUPIED,
+                motionOccupancy = IcarSrPanelOccupancy.CLEAR
+            )
+        )
+        assertEquals(
+            IcarSrPanelOccupancy.OCCUPIED,
+            IcarSrPanelOccupancyPolicy.resolve(
+                stableOccupancy = IcarSrPanelOccupancy.OCCUPIED,
+                motionOccupancy = IcarSrPanelOccupancy.UNKNOWN
+            )
+        )
+    }
+
+    @Test
+    fun `early SR motion moves left lyrics and switches clipping to center Dock`() {
+        val opening = presentation(
+            displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
+            dockState = IcarDockPanelState.COLLAPSED,
+            wallpaperPosition = WallpaperLyricsPosition.LEFT,
+            leftDockState = IcarDockPanelState.expanded(650),
+            centerDockState = IcarDockPanelState.expanded(586),
+            srPanelMotionOccupancy = IcarSrPanelOccupancy.OCCUPIED
+        )
+        val closing = presentation(
+            displayState = wallpaperState(
+                climateStatus = IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED,
+                windowMode = IcarDisplayStateMonitor.WINDOW_MODE_ADAS_CARD
+            ),
+            dockState = IcarDockPanelState.COLLAPSED,
+            wallpaperPosition = WallpaperLyricsPosition.LEFT,
+            leftDockState = IcarDockPanelState.expanded(650),
+            centerDockState = IcarDockPanelState.expanded(586),
+            srPanelMotionOccupancy = IcarSrPanelOccupancy.CLEAR
+        )
+
+        assertEquals(IcarSrPanelOccupancy.OCCUPIED, opening.srPanelOccupancy)
+        assertEquals(586, opening.desktopBottomLimitPx)
+        assertEquals(IcarSrPanelOccupancy.CLEAR, closing.srPanelOccupancy)
+        assertEquals(650, closing.desktopBottomLimitPx)
     }
 
     @Test
@@ -235,7 +424,7 @@ class IcarWindowAvoidancePolicyTest {
     fun `unknown Dock availability conservatively uses topbar on wallpaper`() {
         val state = presentation(
             displayState = wallpaperState(IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED),
-            dockState = IcarRightDockWindowState.UNKNOWN
+            dockState = IcarDockPanelState.UNKNOWN
         )
 
         assertEquals(LyricsSurfaceMode.TOPBAR, state.surfaceMode)
@@ -249,7 +438,7 @@ class IcarWindowAvoidancePolicyTest {
                 climateStatus = IcarDisplayStateMonitor.CLIMATE_PAGE_COLLAPSED,
                 windowMode = IcarDisplayStateMonitor.WINDOW_MODE_STANDARD_WINDOW
             ),
-            dockState = IcarRightDockWindowState.COLLAPSED
+            dockState = IcarDockPanelState.COLLAPSED
         )
 
         assertEquals(LyricsOverlayVisibility.VISIBLE, closing.visibility)
@@ -258,16 +447,21 @@ class IcarWindowAvoidancePolicyTest {
 
     @Test
     fun `state store replays current state and suppresses duplicates`() {
-        val store = IcarRightDockStateStore()
-        val changes = mutableListOf<IcarRightDockWindowState>()
-        val expanded = IcarRightDockWindowState.expanded(586)
+        val store = IcarDockStateStore()
+        val changes = mutableListOf<IcarDockWindowState>()
+        val collapsed = IcarDockWindowState(
+            left = IcarDockPanelState.COLLAPSED,
+            center = IcarDockPanelState.COLLAPSED,
+            right = IcarDockPanelState.COLLAPSED
+        )
+        val expanded = collapsed.copy(right = IcarDockPanelState.expanded(586))
 
-        store.update(IcarRightDockWindowState.COLLAPSED)
+        store.update(collapsed)
         store.addListener(changes::add)
         store.update(expanded)
         store.update(expanded)
 
-        assertEquals(listOf(IcarRightDockWindowState.COLLAPSED, expanded), changes)
+        assertEquals(listOf(collapsed, expanded), changes)
     }
 
     @Test
@@ -295,8 +489,8 @@ class IcarWindowAvoidancePolicyTest {
         )
     }
 
-    private fun classify(vararg windows: IcarObservedWindow): IcarRightDockWindowState =
-        IcarRightDockWindowClassifier.classify(
+    private fun classify(vararg windows: IcarObservedWindow): IcarDockWindowState =
+        IcarDockWindowClassifier.classify(
             screenWidthPx = 1920,
             screenHeightPx = 1080,
             windows = windows.toList()
@@ -304,14 +498,24 @@ class IcarWindowAvoidancePolicyTest {
 
     private fun presentation(
         displayState: IcarDisplayState,
-        dockState: IcarRightDockWindowState,
+        dockState: IcarDockPanelState,
         externalSurfaceOccupancy: IcarExternalSurfaceOccupancy = IcarExternalSurfaceOccupancy(),
+        wallpaperPosition: WallpaperLyricsPosition = WallpaperLyricsPosition.RIGHT,
+        leftDockState: IcarDockPanelState = IcarDockPanelState.COLLAPSED,
+        centerDockState: IcarDockPanelState = IcarDockPanelState.COLLAPSED,
+        srPanelMotionOccupancy: IcarSrPanelOccupancy = IcarSrPanelOccupancy.UNKNOWN,
     ): IcarLyricsPresentation = IcarLyricsPresentationPolicy.resolve(
         displayState = displayState,
         wallpaperLyricsEnabled = true,
         localSettingsOpen = false,
         externalSurfaceOccupancy = externalSurfaceOccupancy,
-        rightDockState = dockState
+        wallpaperPosition = wallpaperPosition,
+        srPanelMotionOccupancy = srPanelMotionOccupancy,
+        dockState = IcarDockWindowState(
+            left = leftDockState,
+            center = centerDockState,
+            right = dockState
+        )
     )
 
     private fun wallpaperState(
@@ -335,7 +539,7 @@ class IcarWindowAvoidancePolicyTest {
         right: Int,
         bottom: Int
     ): IcarObservedWindow = IcarObservedWindow(
-        packageName = IcarRightDockWindowClassifier.LAUNCHER_PACKAGE,
+        packageName = IcarDockWindowClassifier.LAUNCHER_PACKAGE,
         leftPx = left,
         topPx = top,
         rightPx = right,

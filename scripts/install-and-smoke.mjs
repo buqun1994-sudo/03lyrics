@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,16 +11,13 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = join(root, ".codex", "local-context.properties");
-const packageName = "com.ninepointnine.desktoplyrics";
-const activityName = `${packageName}/.MainActivity`;
+const namespacePackageName = "com.ninepointnine.desktoplyrics";
+const debugPackageName = `${namespacePackageName}.test`;
 const occupancyLeaseAction = "com.tcrrry.icar.surface.action.ACQUIRE_OCCUPANCY_LEASE";
 const occupancyLeaseServiceName = "SurfaceOccupancyLeaseService";
 const fullDisplayOccupancyLeaseAction =
   "com.tcrrry.icar.surface.action.ACQUIRE_FULL_DISPLAY_OCCUPANCY_LEASE";
 const fullDisplayOccupancyLeaseServiceName = "FullDisplayOccupancyLeaseService";
-const dockAccessibilityService = `${packageName}/${packageName}.IcarDockAccessibilityService`;
-const dockAccessibilityServiceShort = `${packageName}/.IcarDockAccessibilityService`;
-const notificationServiceRecord = `${packageName}/.MediaListenerService`;
 const startupSettleMs = 8_000;
 const defaultApk = join(root, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
 
@@ -72,8 +69,40 @@ if (!existsSync(apkPath)) fail(`找不到 debug APK：${apkPath}`);
 const config = parseProperties(readFileSync(configPath, "utf8"));
 const adb = config.PRIMARY_ADB;
 const serial = options.serialOverride || config.VEHICLE_ADB_SERIAL;
+const androidSdkRoot = config.ANDROID_SDK_ROOT;
 if (!adb || !existsSync(adb)) fail("PRIMARY_ADB 不存在");
 if (!serial) fail("未通过 --serial 指定设备，且本机配置缺少 VEHICLE_ADB_SERIAL");
+if (!androidSdkRoot || !existsSync(androidSdkRoot)) fail("ANDROID_SDK_ROOT 不存在");
+
+const buildToolsRoot = join(androidSdkRoot, "build-tools");
+const aapt = readdirSync(buildToolsRoot)
+  .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
+  .map((version) => join(buildToolsRoot, version, "aapt"))
+  .find(existsSync);
+if (!aapt) fail("Android Build Tools 中找不到 aapt");
+
+const badging = spawnSync(aapt, ["dump", "badging", apkPath], {
+  cwd: root,
+  encoding: "utf8",
+  maxBuffer: 2 * 1024 * 1024,
+});
+if (badging.status !== 0) {
+  fail("无法读取 debug APK 身份", `${badging.stdout || ""}${badging.stderr || ""}`);
+}
+const apkIdentity = `${badging.stdout || ""}`.match(
+  /package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'/
+);
+if (!apkIdentity) fail("无法解析 debug APK 包名与版本");
+const packageName = apkIdentity[1];
+const expectedVersionCode = apkIdentity[2];
+const expectedVersionName = apkIdentity[3];
+if (packageName !== debugPackageName) {
+  fail(`安装脚本只接受 ${debugPackageName}，实际 APK 为 ${packageName}`);
+}
+const activityName = `${packageName}/${namespacePackageName}.MainActivity`;
+const dockAccessibilityService =
+  `${packageName}/${namespacePackageName}.IcarDockAccessibilityService`;
+const notificationServiceRecord = `${packageName}/${namespacePackageName}.MediaListenerService`;
 
 function adbRun(args, label, allowFailure = false) {
   const result = spawnSync(adb, ["-s", serial, ...args], {
@@ -93,7 +122,7 @@ function parseAccessibilityServices(value) {
 }
 
 function isDockAccessibilityService(component) {
-  return component === dockAccessibilityService || component === dockAccessibilityServiceShort;
+  return component === dockAccessibilityService;
 }
 
 function enableDockAccessibilityService() {
@@ -200,7 +229,7 @@ function retriggerDockAccessibilityBinding() {
   if (removedServices.length > 0) {
     fail(`刷新窗口避让服务时丢失既有无障碍组件：${removedServices.join(", ")}`);
   }
-  if (!waitForServiceAbsent(dockAccessibilityServiceShort)) {
+  if (!waitForServiceAbsent(dockAccessibilityService)) {
     adbRun(
       [
         "shell",
@@ -248,7 +277,7 @@ const launch = adbRun(
   ["shell", "am", "start", "-W", "-n", activityName],
   "设置页启动失败"
 ).output;
-if (!/Status:\s*ok/i.test(launch) && !/Activity:\s*com\.ninepointnine\.desktoplyrics/i.test(launch)) {
+if (!/Status:\s*ok/i.test(launch) && !launch.includes(`Activity: ${packageName}/`)) {
   fail("设置页未报告成功启动", launch);
 }
 
@@ -263,22 +292,28 @@ const packageDump = adbRun(
 const versionName = packageDump.match(/versionName=([^\s]+)/)?.[1];
 const versionCode = packageDump.match(/versionCode=(\d+)/)?.[1];
 if (!versionName || !versionCode) fail("无法确认已安装版本", packageDump);
+if (versionName !== expectedVersionName || versionCode !== expectedVersionCode) {
+  fail(
+    `安装版本与 APK 不一致：APK ${expectedVersionName} (${expectedVersionCode})，` +
+      `设备 ${versionName} (${versionCode})`
+  );
+}
 if (!packageDump.includes("IcarDockAccessibilityService")) {
   fail("已安装歌词 APK 未声明窗口避让无障碍服务", packageDump);
 }
 const accessibilityAuthorization = enableDockAccessibilityService();
-if (!waitForServiceBound(dockAccessibilityServiceShort)) {
+if (!waitForServiceBound(dockAccessibilityService)) {
   const initialDump = serviceDump().output;
-  if (hasDeadServiceConnection(initialDump, dockAccessibilityServiceShort)) {
+  if (hasDeadServiceConnection(initialDump, dockAccessibilityService)) {
     fail(
       "歌词窗口避让无障碍服务未完成系统绑定：系统仍保留该服务的 DEAD 连接；需要先恢复系统无障碍管理器状态",
       initialDump
     );
   }
   retriggerDockAccessibilityBinding();
-  if (!waitForServiceBound(dockAccessibilityServiceShort)) {
+  if (!waitForServiceBound(dockAccessibilityService)) {
     const dump = serviceDump().output;
-    const detail = hasDeadServiceConnection(dump, dockAccessibilityServiceShort)
+    const detail = hasDeadServiceConnection(dump, dockAccessibilityService)
       ? "系统仍保留该服务的 DEAD 连接；需要先恢复系统无障碍管理器状态"
       : "系统未创建目标服务自己的有效绑定记录";
     fail(`歌词窗口避让无障碍服务未完成系统绑定：${detail}`, dump);
@@ -330,7 +365,10 @@ const processErrors = adbRun(
   true
 );
 if (processErrors.status !== 0) fail("当前 ADB 不支持按应用进程读取日志", processErrors.output);
-const fatalPattern = /FATAL EXCEPTION|AndroidRuntime|Process:\s*com\.ninepointnine\.desktoplyrics|WebView .*\bERROR\b/;
+const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const fatalPattern = new RegExp(
+  `FATAL EXCEPTION|AndroidRuntime|Process:\\s*${escapedPackageName}|WebView .*\\bERROR\\b`
+);
 if (fatalPattern.test(processErrors.output)) fail("应用进程存在致命错误", processErrors.output);
 
 const serviceAfter = adbRun(
