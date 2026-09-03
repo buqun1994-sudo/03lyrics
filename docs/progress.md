@@ -1,5 +1,12 @@
 # 项目进度
 
+## 2026-09-03 蓝牙字段语义恢复为平台无关的唯一解释（已完成）
+
+1. 用户确认 QQ 音乐异常来自手机端“车载蓝牙歌词”开关；关闭该开关后，QQ 通过蓝牙恢复标准字段投影。因此车机端不再根据音乐平台、横杠或展示文本猜测字段边界。
+2. `MediaSessionMetadataPolicy` 已移除蓝牙复合 `ARTIST` 拆分、平台能力画像和全部连字符 / 语言阈值；所有传输统一遵循 `TITLE` = 歌曲名、`ARTIST` = 完整歌手名、`ALBUM` = 专辑名。蓝牙 Browser 会话、时长单位归一、位置证据和时间线能力保持不变。
+3. 回归测试覆盖 Apple Music 的 `A-Lin`、常见带横杠艺人、Unicode 破折号以及形如 `歌曲名-AAAAAA-BBBBBBBBB` 的完整艺人字段，证明任何横杠都不会被车机端拆解释。
+4. 隔离 worktree 中定向媒体 / 设置 / 选源测试和完整 `testDebugUnitTest` 均通过，`assembleDebug` 成功；按用户授权卸载正式包并安装 `1.0.2-icar03-test (versionCode 116)` debug 包，启动和致命日志 smoke 通过。用户随后在手机切换 QQ 音乐与 Apple Music，歌词均正常显示。
+
 ## 2026-09-03 03 APP 测试身份简化（施工中，未发布）
 
 1. 正式包名保持 `com.ninepointnine.desktoplyrics`；Debug/staging 测试包统一为 `com.ninepointnine.desktoplyrics.test`，版本名在同一正式版本后追加 `-test`。
