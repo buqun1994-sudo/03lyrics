@@ -29,6 +29,7 @@ const requiredFiles = [
   "docs/architecture/rules/security.md",
   "docs/architecture/rules/operations.md",
   "docs/architecture/rules/ai-collaboration.md",
+  "release-version.properties",
   "scripts/check-skills.mjs",
   "scripts/check-local-environment.mjs",
   "scripts/install-and-smoke.mjs",
@@ -61,6 +62,7 @@ const commercialInstrumentation = read("scripts/run-commercial-security-instrume
 const appBuild = read("app/build.gradle.kts");
 const manifest = read("app/src/main/AndroidManifest.xml");
 const ignore = read(".gitignore");
+const releaseVersion = read("release-version.properties");
 
 for (const [file, content] of [
   ["AGENTS.md", agents],
@@ -84,8 +86,8 @@ for (const route of requiredRoutes) {
   if (!docsIndex.includes(route)) failures.push(`docs/README.md 缺少路由：${route}`);
 }
 
-const versionName = appBuild.match(/versionName\s*=\s*"([^"]+)"/)?.[1];
-const versionCode = appBuild.match(/versionCode\s*=\s*(\d+)/)?.[1];
+const versionName = releaseVersion.match(/^releaseVersionName\s*=\s*(\S+)$/m)?.[1];
+const versionCode = releaseVersion.match(/^releaseVersionCode\s*=\s*(\d+)$/m)?.[1];
 const applicationId = appBuild.match(/applicationId\s*=\s*"([^"]+)"/)?.[1];
 for (const [label, value] of [
   ["versionName", versionName],
@@ -94,6 +96,16 @@ for (const [label, value] of [
 ]) {
   if (!value) failures.push(`app/build.gradle.kts 无法读取 ${label}`);
   else if (!architecture.includes(value)) failures.push(`架构总纲未同步 ${label}=${value}`);
+}
+if (!/applicationIdSuffix\s*=\s*["']\.test["']/.test(appBuild)) {
+  failures.push("Debug 构建未追加 applicationIdSuffix = \".test\"");
+}
+if (!/versionNameSuffix\s*=\s*["']-test["']/.test(appBuild)) {
+  failures.push("Debug 构建未追加 versionNameSuffix = \"-test\"");
+}
+if (!/versionCode\s*=\s*releaseVersionCode/.test(appBuild) ||
+    !/versionName\s*=\s*releaseVersionName/.test(appBuild)) {
+  failures.push("Debug / Release 未共用 release-version.properties 版本入口");
 }
 
 for (const permission of [

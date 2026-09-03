@@ -1,5 +1,43 @@
 # 项目进度
 
+## 2026-09-03 03 APP 测试身份简化（施工中，未发布）
+
+1. 正式包名保持 `com.ninepointnine.desktoplyrics`；Debug/staging 测试包统一为 `com.ninepointnine.desktoplyrics.test`，版本名在同一正式版本后追加 `-test`。
+2. Debug/staging 与 Release 共用根目录 `release-version.properties`（当前 `1.0.2-icar03` / `versionCode=116`）；每次只递增这一份版本文件即可连续覆盖更新测试包。测试包与正式包可并存，不能互相覆盖升级。
+3. 本轮只同步构建、台账、检查和文档规则，不生成、不上传、不部署、不上线产物。
+
+## 2026-09-03 蓝牙公开 Browser 兜底适配施工
+
+1. 新增 `BluetoothMediaBrowserSessionBridge`，沿公开 `android.media.browse.MediaBrowserService` 动态发现 `com.android.bluetooth` 的已导出 `A2dpMediaBrowserService` / `BluetoothMediaBrowserService`，在 A2DP / BLE 路由存在且系统活动会话未返回蓝牙包时取得同一 `MediaSession.Token` 对应的 `MediaController`；系统控制器按 Token 去重并保持原顺序，桥接器单路由单连接，`3000ms` 超时、最多一次 `1000ms` 重试，挂起、路由移除、会话销毁和服务停止均有生命周期收敛与迟到回调隔离。
+2. `MediaSessionMetadataPolicy` 增加显式 `MediaSessionDurationUnit` 与 `reportedPositionMs`：Android 9 A2DP 保持既有毫秒语义，Android 10/11 Browser 画像按秒归一；未知单位不猜测，重复毫秒值可由可信位置证据保留，零 / 负值、溢出和 `86_400_000ms` 上限均有规则测试。选源、录音代际、缓存、查词、设置和 WebView 主链未拆出第二套状态机。
+3. 新增 Browser 服务画像、导出与包过滤、Token 去重、超时 / 重试 / 挂起 / 断开 / 迟到回调测试，并补充标准时长、秒转毫秒、已是毫秒、未知单位和边界证据回归；本机 `testDebugUnitTest` 共 `311` 项，`0` 失败、`2` 项按既有设计跳过，Debug 编译打包和 lint 通过，项目文档 / Skill / diff 检查通过。
+4. 只读复核目标车机 `S56_HQX` 当前安装为 production signer、`versionCode=116`；本轮 Debug 产物为不同 signer、`versionCode=114`。按签名与版本安全边界未执行覆盖安装、降级、卸载或清数据；随后受控运行 `node scripts/install-and-smoke.mjs` 在 `get-state` 发现目标设备为 `offline` 后安全退出，未触碰安装数据。因此 Android 9 本轮仅完成公开会话矩阵复核，未把运行 smoke 写成新代码已通过；当前环境没有可用于 03T Android 11 Browser 兜底的独立实机，需后续提供同签名且更高版本测试包后再验证。
+5. 共享 03 APP 管家检查已执行；登记库仍为 production `1.0.1 / versionCode 115` 且记录工作树 clean，而本仓库现有真值为 `1.0.2 / versionCode 116`、工作树 dirty。该登记漂移不由本轮包名或 namespace 改动造成，未擅自改写共享登记库。
+
+## 2026-09-02 测试包与正式包版本升级打包
+
+1. Release 版本真值已由 `1.0.1-icar03 / versionCode 115` 升级为 `1.0.2-icar03 / versionCode 116`；Debug / Staging 继续保持项目固定基线 `1.14-icar03 / versionCode 114`。
+2. 以 staging 公开信任配置和仓库外 staging 签名生成测试 APK；以 production 公开信任配置、正式签名生成 Release APK，`minifyReleaseWithR8`、`shrinkReleaseRes` 和 `optimizeReleaseResources` 均成功。
+3. 两个 APK 均核对为包名 `com.ninepointnine.desktoplyrics`、单 signer、APK Signature Scheme v2 有效；测试包证书 SHA-256 为登记的 staging 摘要，正式包证书 SHA-256 为登记的 production 摘要。测试 APK SHA-256 为 `22875bcdec85843f76b3050149aa07916ac2ff40f56c19f85877d9784bd1bb4f`，正式 APK SHA-256 为 `0845ed30ec98511f092b948b7b61a8df9d49b4b669face0a9920d4d6037a5999`；正式包调试夹具标记隔离扫描通过。
+4. 已在桌面测试包目录替换 `03歌词-staging-v1.14-icar03.apk` 及对应 ZIP，并在正式发布包目录新增 `03歌词-v1.0.2-icar03.apk` 及对应 ZIP；正式目录中的 `v1.0.1` APK / ZIP 保留，测试目录校验清单已追加本轮 03歌词 哈希。两个 ZIP 均为 UTF-8 文件名、根目录单一同名 APK，解压字节与对应 APK 一致；测试 ZIP SHA-256 为 `d6028cbb732c015b0f544d977e99fb89e217560299bd68cdb60e162d8c178501`，正式 ZIP SHA-256 为 `2e16808a80412e7290256dcef6d252547bae13a1530f90d8ed3813199bad9de9`。
+5. 本轮只完成构建、签名 / 元数据 / ZIP 校验和桌面产物更新；用户已完成车机主测，因此未重复安装或截图，未清数据、未卸载、未重启、未运行商业 instrumentation。未修改 Cloud 登记库，未提交、未推送或发布。
+
+## 2026-09-02 蓝牙字段能力分流与 Apple Music 回归修正
+
+1. 用户反馈 Apple Music 通过同一 `com.android.bluetooth/A2dpMediaBrowserService` 会话无法识别。目标车机只读 `dumpsys media_session` 显示该会话公开描述为“歌名、歌手、专辑”四字段；车机不会把手机端播放器包名透传给应用，因此不能用 QQ / Apple 包名区分这两种来源。
+2. 修正 `MediaSessionMetadataPolicy` 的唯一入口：蓝牙先判定公开字段能力。原始 `ARTIST` 无复合分隔符时按标准独立 `TITLE` / `DISPLAY_TITLE` / `ARTIST` 映射；含连字符且完整 `ALBUM_ARTIST` 佐证时仍按标准字段保留完整艺人；只有复合边界有明确结构证据时才解码“录音名-艺人”，无法确认时保持空歌名，不把动态展示文本冒充身份。`ALBUM` 与 `DURATION` 始终只取各自原始键。
+3. 新增 Apple Music 标准投影、标准中文连字符艺人、原始标题优先于派生展示行等回归用例；QQ 复合字段、动态歌词行、艺人内部连字符和非法边界用例继续保留。定向 `MediaSessionMetadataPolicyTest` 与全量 JVM 单测均通过。
+4. 按用户授权，已用同一正式签名的 Release 包保留数据覆盖安装到车机（`1.0.1-icar03` / `versionCode=115`）；安装脚本启动设置页、核对两个表面租约、窗口避让无障碍、播放状态监听和进程状态均通过，未发现致命日志。
+5. 本轮按用户要求不执行截图或界面操作；剩余人工确认由用户播放 Apple Music、QQ 音乐及其它平台，核对歌名、歌手、专辑和歌词连续稳定。
+
+## 2026-09-02 QQ 蓝牙 AVRCP 元数据串线根因与归一修正
+
+1. 目标车机只读 `dumpsys media_session` 与车机公开媒体卡日志确认：`com.android.bluetooth/A2dpMediaBrowserService` 的四字段投影中，`TITLE` 会随 QQ 音乐逐句歌词变化，`ARTIST` 采用“录音名-艺人”复合值（艺人内部还可能含连字符），`ALBUM` 与时长保持独立稳定。原实现把控制器描述标题直接当歌名、把复合副标题直接当歌手；每次歌词行变化都被 `MediaRecordingStateTracker` 判定为切歌，取消旧查词并刷新设置输入，形成“歌词短暂出现后消失”和字段串线。
+2. 已在既有 `MediaSessionMetadataPolicy` 主链增加显式 `MediaSessionTransport` 画像。标准传输保持原有 `MediaDescription` 优先级；蓝牙 AVRCP 先判定独立字段或复合字段能力：独立能力使用原始 `TITLE` / `DISPLAY_TITLE` / `ARTIST`，复合能力才从原始 `ARTIST` 按 Unicode 连字符、非空两侧至少 `2` 个归一字符、多艺人分隔符和艺人内部连字符规则解出独立 `track` / `artist`，展示副标题不再作为第二解析输入；只有稳定字段提示、明确多艺人分隔符或已验证传输形状足以证明边界时才拆分，歧义值保留可确认的原始独立字段，不能确认时不发布动态 `TITLE`，`album` / `durationMs` 单独保留。服务的选源、录音代际、缓存、查词、设置和 WebView 均继续只消费这一份归一状态。
+3. 新增回归覆盖目标样本《星梦》《无期》《逝去的爱》《Cold Blooded》《My job (老本行) (Live)》《好男儿志在远方, 投名状 (The Oath)》《The Gentlemen (绅士们) (Live)》、艺人内部连字符、标题逗号、非法短边界、动态歌词行（含恰好等于标题片段的行）以及标准播放器路径。定向 JVM 测试已通过；本轮尝试保留数据覆盖安装时，车机正式包为 `versionCode=115` 且使用正式签名，本轮 debug 包为 `versionCode=114` 且签名不同，Android 以 `INSTALL_FAILED_VERSION_DOWNGRADE` 拒绝安装；未执行降级、卸载或清数据，剩余车机确认需使用同签名且版本高于 `115` 的测试包。
+4. 现场连续只读快照（间隔 `3s`）进一步复核同一曲目：`TITLE` 从“`不稀罕enemy`”变为“`Bring the new beat in`”，而 `ARTIST` 始终为“`Trouble Maker (麻烦你了) (Live)-那奇沃夫/Yamy郭颖`”、`ALBUM` 始终为“`说唱巅峰对决2026 第3期`”；这正是展示通道变化而录音身份不变的证据。
+5. 归一边界进一步收紧：蓝牙复合能力不读取 `TITLE`、`DISPLAY_TITLE`、`MediaDescription` 副标题或 `AUTHOR` 作为录音身份提示；独立能力仍按原始标题 / 歌手字段映射。复合能力仅以原始 `ARTIST` 的已验证形状、独立 `ALBUM_ARTIST` 佐证、明确多艺人分隔符或非拉丁目录形状解码。现场 Release 包以正式签名和 `versionCode=115` 保留数据覆盖安装成功；应用重启后连续约 `40s` 的 QQ AVRCP 歌词/制作信息回调没有再次推进录音代际，查找页继续保持同一歌曲三字段，未见致命日志。剩余主测仍是用户在 QQ 音乐切换歌曲时观察至少 `30s` 的字段稳定性。
+
 ## 2026-09-01 测试包与正式包重新打包
 
 1. 在当前客户端提交前完成 `testDebugUnitTest lintDebug assembleDebug`，JVM `274` 项通过、`2` 项按设计跳过，Lint 无错误；随后以 staging 信任配置生成测试 APK（`1.14-icar03` / versionCode `114`），以 production 信任配置和正式签名生成 Release APK（`1.0.1-icar03` / versionCode `115`），Release 的 R8、资源收缩和资源优化任务均成功。

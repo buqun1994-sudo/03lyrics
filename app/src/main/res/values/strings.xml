@@ -8,6 +8,7 @@
     <string name="settings_navigation_search">歌词查找</string>
     <string name="settings_navigation_entitlement">权益中心</string>
     <string name="settings_navigation_about">关于</string>
+    <string name="settings_about_version_label">版本号</string>
     <string name="settings_about_terms">用户协议</string>
     <string name="settings_topbar_display">顶栏歌词</string>
     <string name="settings_lyrics_lines">歌词行数</string>

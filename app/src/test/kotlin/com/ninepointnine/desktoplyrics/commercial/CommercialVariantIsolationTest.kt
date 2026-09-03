@@ -1,5 +1,6 @@
 package com.ninepointnine.desktoplyrics.commercial
 
+import com.ninepointnine.desktoplyrics.BuildConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -7,6 +8,13 @@ import org.junit.Test
 import java.io.File
 
 class CommercialVariantIsolationTest {
+    @Test
+    fun `package identity follows the active build variant`() {
+        assertEquals(BuildConfig.APPLICATION_ID, DeviceCommerceProductContract.PACKAGE_NAME)
+        assertEquals("com.ninepointnine.desktoplyrics", DeviceCommerceProductContract.PRODUCTION_PACKAGE_NAME)
+        assertEquals("com.ninepointnine.desktoplyrics.test", DeviceCommerceProductContract.TEST_PACKAGE_NAME)
+    }
+
     @Test
     fun `fixture catalog covers staging production and minimum charge boundaries`() {
         val staging = DebugCommercialFixtureCatalog.staging

@@ -87,6 +87,6 @@
 
 ## 9. Release 版本约束
 
-1. `release-version.properties` 是 Release 的唯一版本真值；Release 输出固定使用其中的 `releaseVersionName`，当前为 `1.0.1-icar03`。Debug 与 Staging 继续使用 `app/build.gradle.kts` 的 `defaultConfig` 版本，不因 Release 版本变化而改动。
+1. `release-version.properties` 是 Release、Debug 和 staging/test 共用的唯一版本真值；四种构建都读取其中的 `releaseVersionName` / `releaseVersionCode`。Debug/staging 只额外追加 `applicationIdSuffix=".test"` 与 `versionNameSuffix="-test"`，测试包可与正式包并存，且每次只递增这一份版本文件即可连续覆盖更新测试包。
 2. 用户未指定版本时，正式发布准备必须执行 `node scripts/bump-release-version.mjs`，只递增 `major.minor.patch-icar03` 的最后一位并同步递增 `releaseVersionCode`；用户明确指定版本时使用 `--version <major.minor.patch-icar03>`，不得擅自改写用户指定值。
-3. 构建本身不得修改版本文件；发布前先运行 `node scripts/bump-release-version.mjs --check`，再构建 Release 并核对 APK 元数据、签名和 `versionCode` 单调递增。该规则只约束 Release，不适用于 Debug / Staging。
+3. 构建本身不得修改版本文件；发布或测试包准备前先运行 `node scripts/bump-release-version.mjs --check`，再按目标变体核对 APK 包名、版本名、`versionCode` 和签名。测试包与正式包是两个独立 Android 身份，不能互相覆盖升级。

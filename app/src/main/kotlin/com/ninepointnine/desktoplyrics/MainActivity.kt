@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var searchContent: View
     private lateinit var commercialContent: View
     private lateinit var aboutContent: View
+    private lateinit var aboutVersionValue: TextView
     private lateinit var aboutTermsQr: ImageView
     private lateinit var contentScroll: ScrollView
     private lateinit var lyricsSettingsRenderer: LyricsSettingsRenderer
@@ -126,6 +127,7 @@ class MainActivity : AppCompatActivity() {
         searchContent = findViewById(R.id.settings_search_content)
         commercialContent = findViewById(R.id.settings_commercial_content)
         aboutContent = findViewById(R.id.settings_about_content)
+        aboutVersionValue = findViewById(R.id.about_version_value)
         aboutTermsQr = findViewById(R.id.about_terms_qr)
         renderAboutContent()
         contentScroll = findViewById(R.id.settings_content_scroll)
@@ -518,6 +520,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderAboutContent() {
+        aboutVersionValue.text = BuildConfig.VERSION_NAME
         aboutTermsQr.setImageBitmap(
             TermsQrCodeGenerator.createBitmap(
                 BuildConfig.USER_AGREEMENT_URL,

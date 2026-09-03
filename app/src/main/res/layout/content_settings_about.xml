@@ -11,6 +11,34 @@
     android:visibility="gone">
 
     <LinearLayout
+        android:id="@+id/about_version_item"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_action_card_height"
+        android:layout_marginBottom="@dimen/settings_group_spacing"
+        android:background="@drawable/bg_settings_card"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/settings_switch_card_padding_start"
+        android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+        <TextView
+            style="@style/SettingsText.Body2.Emphasis"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/settings_about_version_label" />
+
+        <TextView
+            android:id="@+id/about_version_value"
+            style="@style/SettingsText.Body2"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:maxLines="1"
+            android:textAlignment="viewEnd" />
+    </LinearLayout>
+
+    <LinearLayout
         android:id="@+id/about_terms_card"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

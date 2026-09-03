@@ -91,6 +91,41 @@ class LyricsOverlayService : Service() {
     private val sessionManager by lazy { getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager }
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private val listenerComponent by lazy { ComponentName(this, MediaListenerService::class.java) }
+    private var bluetoothBrowserSession: BluetoothMediaBrowserSession? = null
+    private val bluetoothBrowserProfiles = linkedMapOf<MediaSession.Token, BluetoothMediaBrowserProfile>()
+    private var systemBluetoothProfile = BluetoothMediaBrowserProfile.ANDROID_9_A2DP
+    private val bluetoothBrowserBridge by lazy {
+        BluetoothMediaBrowserSessionBridge(
+            context = this,
+            mainHandler = mainHandler,
+            listener = object : BluetoothMediaBrowserSessionBridge.Listener {
+                override fun onSessionChanged(session: BluetoothMediaBrowserSession?) {
+                    bluetoothBrowserSession = session
+                    if (session == null) {
+                        bluetoothBrowserProfiles.clear()
+                    } else {
+                        bluetoothBrowserProfiles[session.controller.sessionToken] = session.profile
+                    }
+                    if (monitorStarted) scheduleSessionSelectionRefresh()
+                }
+
+                override fun onConnectionSuspended() {
+                    if (monitorStarted) scheduleSessionSelectionRefresh()
+                }
+
+                override fun onStateChanged(
+                    state: BluetoothMediaBrowserBridgeState,
+                    descriptor: BluetoothMediaBrowserServiceDescriptor?
+                ) {
+                    Log.i(
+                        LOG_TAG,
+                        "Bluetooth Browser state=${state.name.lowercase()} " +
+                            "component=${descriptor?.componentName?.flattenToShortString() ?: "none"}"
+                    )
+                }
+            }
+        )
+    }
     private val displayStateMonitor by lazy {
         IcarDisplayStateMonitor(this, mainHandler, ::onIcarDisplayStateChanged)
     }
@@ -256,16 +291,21 @@ class LyricsOverlayService : Service() {
 
     private val activeSessionsListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-            if (monitorStarted) selectController(controllers.orEmpty())
+            if (monitorStarted) refreshActiveSessions(controllers.orEmpty())
         }
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-            if (monitorStarted) scheduleSnapshot()
+            if (monitorStarted) scheduleSessionSelectionRefresh()
         }
 
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-            if (monitorStarted) scheduleSnapshot()
+            if (!monitorStarted) return
+            // Drop a Browser binding as soon as the last Bluetooth output is
+            // gone; the debounced session refresh then performs normal
+            // controller selection and snapshot convergence.
+            if (!hasBluetoothBrowserRoute()) bluetoothBrowserBridge.disconnect()
+            scheduleSessionSelectionRefresh()
         }
     }
 
@@ -2357,6 +2397,10 @@ class LyricsOverlayService : Service() {
         mainHandler.removeCallbacks(sessionRetryRunnable)
         val activeSessionsListenerRegistered = monitorStarted
         monitorStarted = false
+        bluetoothBrowserBridge.disconnect()
+        bluetoothBrowserSession = null
+        bluetoothBrowserProfiles.clear()
+        systemBluetoothProfile = BluetoothMediaBrowserProfile.ANDROID_9_A2DP
         stopAudioRouteMonitor()
         stopAudioPlaybackMonitor()
         stopAvrcpEventMonitor()
@@ -2448,17 +2492,104 @@ class LyricsOverlayService : Service() {
         if (monitorStarted) refreshActiveSessions()
     }
 
-    private fun refreshActiveSessions() {
+    private fun refreshActiveSessions(
+        systemControllersOverride: List<MediaController>? = null
+    ) {
         try {
-            val controllers = sessionManager.getActiveSessions(listenerComponent).orEmpty()
+            val systemControllers = systemControllersOverride
+                ?: sessionManager.getActiveSessions(listenerComponent).orEmpty()
+            val systemPackages = systemControllers.map { it.packageName }
+            systemBluetoothProfile = if (systemPackages.contains(BLUETOOTH_PACKAGE)) {
+                bluetoothBrowserBridge.resolveProfile()
+                    ?: BluetoothMediaBrowserProfile.ANDROID_9_A2DP
+            } else {
+                BluetoothMediaBrowserProfile.ANDROID_9_A2DP
+            }
+            bluetoothBrowserBridge.refresh(
+                bluetoothRoutePresent = hasBluetoothBrowserRoute(),
+                systemControllerPackages = systemPackages
+            )
+            val controllers = mergeMediaControllers(
+                systemControllers,
+                bluetoothBrowserSession?.controller
+            )
+            updateBluetoothBrowserProfiles(bluetoothBrowserSession)
             selectController(controllers)
+            logBluetoothBridgeDiagnostics(systemControllers, controllers)
         } catch (error: SecurityException) {
+            bluetoothBrowserBridge.disconnect()
+            bluetoothBrowserSession = null
+            bluetoothBrowserProfiles.clear()
+            systemBluetoothProfile = BluetoothMediaBrowserProfile.ANDROID_9_A2DP
             pendingSnapshot = JSONObject()
                 .put("hasSession", false)
                 .put("permissionRequired", true)
             pendingSnapshot?.let { deliverToWeb(it) }
         }
     }
+
+    private fun mergeMediaControllers(
+        systemControllers: List<MediaController>,
+        browserController: MediaController?
+    ): List<MediaController> {
+        val seen = LinkedHashSet<MediaSession.Token>()
+        val merged = ArrayList<MediaController>(
+            systemControllers.size + if (browserController == null) 0 else 1
+        )
+        systemControllers.forEach { controller ->
+            if (seen.add(controller.sessionToken)) merged += controller
+        }
+        if (browserController != null && seen.add(browserController.sessionToken)) {
+            merged += browserController
+        }
+        return merged
+    }
+
+    private fun updateBluetoothBrowserProfiles(session: BluetoothMediaBrowserSession?) {
+        bluetoothBrowserProfiles.clear()
+        session?.let {
+            bluetoothBrowserProfiles[it.controller.sessionToken] = it.profile
+        }
+    }
+
+    private fun logBluetoothBridgeDiagnostics(
+        systemControllers: List<MediaController>,
+        mergedControllers: List<MediaController>
+    ) {
+        val selected = currentController
+        val metadata = selected?.let(::normalizedRecordingMetadata)
+        val durationUsable = metadata?.durationMs
+            ?.takeIf { it >= MediaRecordingStateTracker.MINIMUM_QUERY_DURATION_MS } != null
+        val bridgeState = bluetoothBrowserBridge.currentState
+        val rejectionReason = when {
+            selected == null && bridgeState == BluetoothMediaBrowserBridgeState.UNAVAILABLE ->
+                "browser_unavailable"
+            selected == null -> "no_selection"
+            metadata == null -> "metadata_missing"
+            !metadata.hasTrack -> "track_missing"
+            !durationUsable -> "duration_unusable"
+            else -> "none"
+        }
+        Log.i(
+            LOG_TAG,
+            "MediaSession bridge systemControllerCount=${systemControllers.size} " +
+                "browserBridgeState=${bridgeState.name.lowercase()} " +
+                "mergedControllerCount=${mergedControllers.size} " +
+                "selectedPackage=${selected?.packageName ?: "none"} " +
+                "durationUnit=${selected?.let(::durationUnitForController)?.name?.lowercase() ?: "none"} " +
+                "trackPresent=${metadata?.hasTrack == true} " +
+                "durationUsable=$durationUsable " +
+                "rejectionReason=$rejectionReason"
+        )
+    }
+
+    private fun hasBluetoothBrowserRoute(): Boolean = runCatching {
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .any { device -> isBluetoothBrowserRouteType(device.type) }
+    }.getOrDefault(false)
+
+    private fun isBluetoothBrowserRouteType(type: Int): Boolean =
+        BluetoothMediaBrowserBridgePolicy.isBluetoothOutputType(type, Build.VERSION.SDK_INT)
 
     private fun selectController(controllers: List<MediaController>) {
         updateControllerCallbacks(controllers)
@@ -2467,7 +2598,6 @@ class LyricsOverlayService : Service() {
                 .takeIf { it >= 0 }
         }
         val candidates = controllers.mapIndexed { index, controller ->
-            val metadata = controller.metadata
             val playback = controller.playbackState
             val playbackInfo = runCatching { controller.playbackInfo }.getOrNull()
             MediaSessionCandidate(
@@ -2477,7 +2607,7 @@ class LyricsOverlayService : Service() {
                 audioUsage = playbackInfo?.audioAttributes?.usage,
                 audioContentType = playbackInfo?.audioAttributes?.contentType,
                 playbackActions = playback?.actions ?: 0L,
-                hasTitle = normalizedRecordingMetadata(metadata)?.hasTrack == true
+                hasTitle = normalizedRecordingMetadata(controller)?.hasTrack == true
             )
         }
         logSessionCandidates(candidates)
@@ -2532,7 +2662,7 @@ class LyricsOverlayService : Service() {
         } else {
             recordingStateTracker.update(
                 sourceIdentity = controller.sessionToken,
-                incoming = normalizedRecordingMetadata(controller.metadata)
+                incoming = normalizedRecordingMetadata(controller)
             )
         }
         currentRecordingState = next
@@ -2623,6 +2753,9 @@ class LyricsOverlayService : Service() {
             }
 
             override fun onSessionDestroyed() {
+                if (bluetoothBrowserSession?.controller?.sessionToken == token) {
+                    bluetoothBrowserBridge.onSessionDestroyed()
+                }
                 if (monitorStarted) refreshActiveSessions()
             }
         }
@@ -2938,8 +3071,8 @@ class LyricsOverlayService : Service() {
         else -> null
     }?.takeIf { it in PlaybackState.STATE_NONE..PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM }
 
-    private fun normalizedRecordingMetadata(metadata: MediaMetadata?): MediaRecordingMetadata? {
-        metadata ?: return null
+    private fun normalizedRecordingMetadata(controller: MediaController?): MediaRecordingMetadata? {
+        val metadata = controller?.metadata ?: return null
         val description = runCatching { metadata.description }.getOrNull()
         return MediaSessionMetadataPolicy.normalize(
             MediaSessionMetadataFields(
@@ -2960,10 +3093,25 @@ class LyricsOverlayService : Service() {
                 ).orEmpty(),
                 author = metadata.getString(MediaMetadata.METADATA_KEY_AUTHOR).orEmpty(),
                 album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty(),
-                durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
+                durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION),
+                transport = if (controller.packageName == BLUETOOTH_PACKAGE) {
+                    MediaSessionTransport.BLUETOOTH_AVRCP
+                } else {
+                    MediaSessionTransport.STANDARD
+                },
+                durationUnit = durationUnitForController(controller),
+                reportedPositionMs = controller.playbackState?.position ?: -1L
             )
         ).takeIf(MediaRecordingMetadata::hasTrack)
     }
+
+    private fun durationUnitForController(controller: MediaController): MediaSessionDurationUnit =
+        if (controller.packageName != BLUETOOTH_PACKAGE) {
+            MediaSessionDurationUnit.MILLISECONDS
+        } else {
+            bluetoothBrowserProfiles[controller.sessionToken]?.durationUnit
+                ?: systemBluetoothProfile.durationUnit
+        }
 
     private fun artworkDataUrl(metadata: MediaMetadata?, key: String): String {
         // Media apps often publish title/artist first and artwork in a later callback.

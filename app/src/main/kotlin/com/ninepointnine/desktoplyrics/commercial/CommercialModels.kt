@@ -1,5 +1,7 @@
 package com.ninepointnine.desktoplyrics.commercial
 
+import com.ninepointnine.desktoplyrics.BuildConfig
+
 @JvmInline
 value class DisplayMoney(val text: String) {
     init {
@@ -10,7 +12,9 @@ value class DisplayMoney(val text: String) {
 object DeviceCommerceProductContract {
     const val PRODUCT_ID = "03lyrics"
     const val SKU = "03lyrics_pro_device_cny"
-    const val PACKAGE_NAME = "com.ninepointnine.desktoplyrics"
+    const val PRODUCTION_PACKAGE_NAME = "com.ninepointnine.desktoplyrics"
+    const val TEST_PACKAGE_NAME = "com.ninepointnine.desktoplyrics.test"
+    val PACKAGE_NAME: String = BuildConfig.APPLICATION_ID
     const val RUNTIME_IDENTIFIER = "icar03"
     const val LOCALE = "zh-CN"
 }

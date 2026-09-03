@@ -187,8 +187,8 @@ android {
         applicationId = "com.ninepointnine.desktoplyrics"
         minSdk = 26
         targetSdk = 34
-        versionCode = 114
-        versionName = "1.14-icar03"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -213,6 +213,8 @@ android {
 
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-test"
             signingConfigs.findByName("staging")?.let { signingConfig = it }
             buildConfigField(
                 "String",

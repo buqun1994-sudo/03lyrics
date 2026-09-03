@@ -375,6 +375,33 @@ class MediaSessionSelectionPolicyTest {
         )
     }
 
+    @Test
+    fun `browser fallback with metadata is selected when the helper has no playback state`() {
+        val helper = candidate(
+            index = 0,
+            packageName = "com.tencent.wecarflow",
+            playbackState = null,
+            audioUsage = AudioAttributes.USAGE_MEDIA,
+            title = false
+        )
+        val browserFallback = candidate(
+            index = 1,
+            packageName = "com.android.bluetooth",
+            playbackState = PlaybackState.STATE_PLAYING,
+            audioUsage = AudioAttributes.USAGE_MEDIA,
+            title = true
+        )
+
+        assertEquals(
+            1,
+            MediaSessionSelectionPolicy.select(
+                candidates = listOf(helper, browserFallback),
+                currentIndex = null,
+                ownPackageName = "com.ninepointnine.desktoplyrics"
+            )
+        )
+    }
+
     private fun candidate(
         index: Int,
         packageName: String,
