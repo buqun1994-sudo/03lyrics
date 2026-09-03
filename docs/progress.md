@@ -1,13 +1,22 @@
 # 项目进度
 
-## 2026-09-03 壁纸歌词左右位置、SR 动态避让与按实际位置 Dock 裁剪（待用户主测）
+## 2026-09-03 1.0.3 双轨产物打包（已完成）
+
+1. Release 版本真值由 `1.0.2-icar03 / versionCode 116` 升级为 `1.0.3-icar03 / versionCode 117`；Debug/staging 按统一规则显示为 `1.0.3-icar03-test / versionCode 117`。
+2. staging 通过 Cloud 03 APP 统一入口构建并写入桌面测试包目录，生成 `03歌词-staging-v1.0.3-icar03-test.apk` 与同名 ZIP；统一入口已核对测试包名、版本、长期 staging 证书、单 signer、APK Signature Scheme v2 和单 APK ZIP。
+3. production 使用正式公开信任配置和独立正式签名完成 `assembleRelease`；`minifyReleaseWithR8`、`shrinkReleaseRes`、`optimizeReleaseResources` 和 `assembleRelease` 均成功，`mapping.txt` 已生成。正式目录新增 `03歌词-v1.0.3-icar03.apk` 与同名 ZIP。
+4. 独立回读确认：staging 为 `com.ninepointnine.desktoplyrics.test / 1.0.3-icar03-test / 117`，APK 大小 `6574630` bytes、SHA-256 `5d0f327064e4e6a692876c0638f3842726fc694a3897c5b2351d4bbd7f497971`，ZIP 大小 `5490868` bytes、SHA-256 `09313b95099c25b948089765083563b56129ecc31e2ae21545f290bf03ebd2e7`。
+5. production 为 `com.ninepointnine.desktoplyrics / 1.0.3-icar03 / 117`，APK 大小 `2357915` bytes、SHA-256 `3b1efe89060282672949a6f1eff311a75e2a5fb383ee0f97ffc88ecc1182453f`，ZIP 大小 `1373851` bytes、SHA-256 `451bb7b64968905e371dfcc63d6a7e65d08fcd84cb687764df6102c0b1dd165b`；两个 ZIP 解包后的 APK SHA-256 均与外部 APK 完全一致。
+6. `bump-release-version --check`、项目文档检查、Skill 检查和 Git 文本检查通过。本轮按用户要求只打包，未安装、未连接车机执行 smoke、未推送或发布。
+
+## 2026-09-03 壁纸歌词左右位置、SR 动态避让与按实际位置 Dock 裁剪（已完成）
 
 1. 设置页“歌词设置”在现有“歌词排版”后新增“歌词位置：左侧 / 右侧”分段项，默认右侧并持久化；右侧沿用现有排版，左侧同步镜像文字对齐、内容 padding 和原文缩放原点。
 2. 壁纸歌词右侧窗口保持 `[660,90]..[1890,900]`，左侧窗口为水平对称的 `[30,90]..[1260,900]`。只读无障碍在目标 Launcher 内读取 SR 把手矩形，系统 `80ms` 事件合并后，相邻位置达到 `8px` 方向阈值便发布瞬时展开或收回提示，立即驱动 `250ms` 三次贝塞尔 `(0.2, 0.8, 0.2, 1)` 位移；最后一次事件后 `320ms` 复核并清除提示，再由 `window_mode=0/1/2/3` 稳定状态兜底。不跟随手势百分比、不新增轮询。
 3. 原车 Dock 分类扩展为左、中、右独立状态；左侧歌词原位采用左 Dock，SR 推到右侧安全位置后采用中间 Dock，右侧歌词始终采用右 Dock。有效 Dock 的真实上沿只裁剪外层 Overlay，并保持完整 `810px` WebView 与动态 mask 终点；其它 Dock 不改变歌词几何，未知有效 Dock 继续保守退回顶栏。
 4. 纯策略回归已覆盖默认右侧、左右镜像、SR 四个稳定值与未知值、目标车机 `8px` 方向阈值、低于阈值的抖动抑制、`320ms` 提示退场、固定 `250ms` 动画参数、左 / 中 / 右 Dock 独立分类和实际位置裁剪。前序完整 Debug JVM、Lint 与 debug APK 构建已通过；参数契约收口后再次定向运行 `IcarWindowAvoidancePolicyTest` 并执行 `assembleDebug`，结果成功。文档检查、Skill 检查和 Git 文本检查均通过。
 5. 安装脚本已跟随双轨身份规则从 APK 读取 `.test` 包名和版本、按实际应用身份与源码 namespace 组合组件，并显式拒绝 Release 包。最新源码已保留数据覆盖安装为 `com.ninepointnine.desktoplyrics.test 1.0.2-icar03-test (116)`；设置页启动、应用进程、两类表面租约、窗口避让无障碍、播放状态监听、歌词服务恢复和致命日志基础 smoke 全部通过，正式包保持不存在，未清数据或重启车机。
-6. 无截图运行级功能 smoke 已观察到：SR 展开时 Overlay 在 `window_mode` 仍为 `0` 时先从 `x=30` 移到采样点 `x=192`，随后终态变为 `1` 并到达 `x=660`；收回时同样在稳定值仍为 `1` 时提前向左移动。`window_mode=0` 且歌词原位时，左 Dock 令底边 `900 -> 570 -> 900`；`window_mode=1` 且歌词位于 `x=660` 时，中间 Dock 令底边 `900 -> 570 -> 900`。自动证据已覆盖早期响应与裁剪归属，剩余仅为用户确认 `250ms` 先快后慢观感、移动过程无反弹，以及右侧模式视觉上仍只响应右 Dock。
+6. 无截图运行级功能 smoke 已观察到：SR 展开时 Overlay 在 `window_mode` 仍为 `0` 时先从 `x=30` 移到采样点 `x=192`，随后终态变为 `1` 并到达 `x=660`；收回时同样在稳定值仍为 `1` 时提前向左移动。`window_mode=0` 且歌词原位时，左 Dock 令底边 `900 -> 570 -> 900`；`window_mode=1` 且歌词位于 `x=660` 时，中间 Dock 令底边 `900 -> 570 -> 900`。自动证据已覆盖早期响应与裁剪归属；用户完成多轮操作后授权提交。
 
 ## 2026-09-03 蓝牙字段语义恢复为平台无关的唯一解释（已完成）
 
@@ -607,10 +616,10 @@
 
 ## 当前工程事实
 
-1. 当前版本：`1.14-icar03`（versionCode `114`）。
+1. 当前版本：`1.0.3-icar03`（versionCode `117`）；Debug/staging 显示为 `1.0.3-icar03-test`，共用同一版本码。
 2. 当前包名：`com.ninepointnine.desktoplyrics`。
 3. 目标车机：Android 9、`1920 x 1080`、`S56_HQX`、高通 8155。
-4. 最近业务提交：`022fcea feat: refine lyrics settings, matching, and branding`；该提交尚未推送。
+4. 最近业务提交：`34a7812 feat: 添加壁纸歌词动态避让与左右位置`；该提交尚未推送。
 
 ## 已知文档差异
 
