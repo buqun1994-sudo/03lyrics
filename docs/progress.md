@@ -8,7 +8,7 @@
 4. 已通过 `cmd notification allow_listener` 幂等追加诊断通知监听授权，原 `03歌词.test` 监听组件保持不变；系统对诊断 `MediaListenerService` 的绑定为 `requested=true / received=true / hasBound=true`。授权后报告确认直接活动会话为 `1` 个并选中 `com.android.bluetooth`，Framework 与 AndroidX Browser 均连接成功并读取《火力全开》的歌名、歌手、专辑和毫秒时长。
 5. 车机报告同时确认当前 `03投屏.test` 包含 Main/Fullscreen Activity、CastService 和四个预期 arm64 native 库，设备支持 arm64，Wi-Fi 多播锁可获取，SSDP 和 `_airplay._tcp` / `_raop._tcp` 发现链可工作。真实 03T Android 11 和正式版 03投屏的最终兼容结论仍需在目标用户设备上按同一流程采集，不以 Android 9 样机冒充通过。
 6. 根据诊断流程复核，APK 界面已移除不能自行完成授权的系统设置跳转和非必要分享面板；授权统一由 ADB 命令完成，报告仍写入车机本地目录，并由 `collect-desktopcast-diagnostics.mjs` 自动拉取 JSON/TXT。
-7. 最终去冗余版本已重新构建、保留数据覆盖安装并完成真实页面冒烟；APK 为 `com.ninepointnine.desktoplyrics.diagnostic / 03歌词诊断 / 1.0.8-icar03-diagnostic / versionCode 122`，桌面副本文件名为 `03lyrics-03cast-diagnostic.apk`；本轮重新构建后的哈希和签名信息以最终产物核验为准。诊断 APK 进程、Activity、通知监听绑定和完整报告生成均通过；ADB 脚本成功拉回车机 JSON/TXT 并完成 03投屏启动取证。
+7. 最终去冗余版本已重新构建；APK 为 `com.ninepointnine.desktoplyrics.diagnostic / 03歌词诊断 / 1.0.8-icar03-diagnostic / versionCode 122`，v2 单 signer，桌面副本文件名为 `03lyrics-03cast-diagnostic.apk`，SHA-256 为 `6d4b1950594c7fbabe6ded40f7ddc0a061c44d0c2ffb77b0a4afc1a4a0e2668e`。此前版本的诊断 APK 进程、Activity、通知监听绑定和完整报告生成均已通过；本轮新增 Browser 扫描尚未重新覆盖安装验证，目标车机当前 ADB 状态为 `offline`。
 8. 本轮按网易云适配取证需求扩展诊断媒体契约：扫描所有公开 `MediaBrowserService`，记录组件、实际包名、版本、导出状态、权限并对最多 `8` 个公开服务做 Framework / AndroidX 有界连接探测；活动 MediaSession 增加实际包名集合和 `sessionKey`，动态采样可判断同一会话是否发生字段串线。本机诊断变体编译、单测和 lint 通过；目标车机新增实机验证待无线 ADB 从 `offline` 恢复后补做，未将该项写成已通过。
 
 ## 2026-09-04 顶栏歌词双行字号五档设置（已完成）
