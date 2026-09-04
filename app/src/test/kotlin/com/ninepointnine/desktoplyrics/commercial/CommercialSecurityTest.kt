@@ -52,15 +52,16 @@ class CommercialSecurityTest {
     }
 
     @Test
-    fun `device fingerprint uses android id package and signing digest with nul separators`() {
+    fun `device fingerprint hashes only android id`() {
         assertEquals(
-            "d04786d0526522dbc0bf0415c79b88545fe92cba0a6383cccd94c5cdf133e239",
-            CommercialDigests.deviceFingerprint(
-                androidId = "android-id",
-                packageName = "com.ninepointnine.desktoplyrics",
-                packageSignatureSha256 = "abcdef"
-            )
+            "df9356f532e1bbc39c579ecee7dc082cd4f9ea46810ffc28b9f68aa0e4b3655a",
+            CommercialDigests.deviceFingerprint(androidId = "android-id")
         )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `device fingerprint rejects missing android id`() {
+        CommercialDigests.deviceFingerprint(androidId = "")
     }
 
     @Test

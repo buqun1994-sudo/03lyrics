@@ -191,9 +191,7 @@ class AndroidDeviceIdentityManager(
                 androidId = Settings.Secure.getString(
                     appContext.contentResolver,
                     Settings.Secure.ANDROID_ID
-                ).orEmpty(),
-                packageName = appContext.packageName,
-                packageSignatureSha256 = signingCertSha256
+                ).orEmpty()
             ),
             signingCertSha256 = signingCertSha256,
             attestationStatus = if (keyStore.getCertificateChain(alias)?.size.orZero() > 1) {

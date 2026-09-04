@@ -37,19 +37,9 @@ object CommercialDigests {
         "%02x".format(byte.toInt() and 0xff)
     }
 
-    fun deviceFingerprint(
-        androidId: String,
-        packageName: String,
-        packageSignatureSha256: String
-    ): String {
-        val source = buildString {
-            append(androidId)
-            append('\u0000')
-            append(packageName)
-            append('\u0000')
-            append(packageSignatureSha256)
-        }
-        return sha256Hex(source.toByteArray(StandardCharsets.UTF_8))
+    fun deviceFingerprint(androidId: String): String {
+        require(androidId.isNotBlank()) { "ANDROID_ID must be available" }
+        return sha256Hex(androidId.toByteArray(StandardCharsets.UTF_8))
     }
 }
 
