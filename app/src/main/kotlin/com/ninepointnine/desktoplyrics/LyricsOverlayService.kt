@@ -173,7 +173,9 @@ class LyricsOverlayService : Service() {
     private var lyricsTranslationEnabled = LYRICS_TRANSLATION_DEFAULT
     private var translationAvailable = false
     private var backgroundMode = BACKGROUND_DEFAULT
-    private var topbarFontScalePercent = FONT_SCALE_DEFAULT_PERCENT
+    private var topbarSingleLineFontSizePx = LyricsTopbarFontSizePolicy.PRIMARY_DEFAULT_PX
+    private var topbarFirstLineFontSizePx = LyricsTopbarFontSizePolicy.PRIMARY_DEFAULT_PX
+    private var topbarSecondLineFontSizePx = LyricsTopbarFontSizePolicy.SECONDARY_DEFAULT_PX
     private var wallpaperFontScalePercent = FONT_SCALE_DEFAULT_PERCENT
     private var wallpaperBlurEnabled = WALLPAPER_BLUR_DEFAULT
     private var wallpaperShadowEnabled = WALLPAPER_SHADOW_DEFAULT
@@ -670,14 +672,18 @@ class LyricsOverlayService : Service() {
         }
 
         if (intent?.action == ACTION_SET_FONT_SCALE) {
-            val normalized = normalizedFontScale(
+            val legacyScale = normalizedFontScale(
                 intent.getIntExtra(EXTRA_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
             )
-            topbarFontScalePercent = normalized
-            wallpaperFontScalePercent = normalized
+            topbarSingleLineFontSizePx = LyricsTopbarFontSizePolicy.primaryFromLegacyScale(legacyScale)
+            topbarFirstLineFontSizePx = topbarSingleLineFontSizePx
+            topbarSecondLineFontSizePx = LyricsTopbarFontSizePolicy.secondaryFromLegacyScale(legacyScale)
+            wallpaperFontScalePercent = legacyScale
             prefs.edit()
-                .putInt(PREF_TOPBAR_FONT_SCALE_PERCENT, normalized)
-                .putInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, normalized)
+                .putInt(PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX, topbarSingleLineFontSizePx)
+                .putInt(PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX, topbarFirstLineFontSizePx)
+                .putInt(PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX, topbarSecondLineFontSizePx)
+                .putInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, wallpaperFontScalePercent)
                 .apply()
             applyDisplayPreferencesToWeb()
             refreshTopbarPresentationGeometry()
@@ -685,11 +691,61 @@ class LyricsOverlayService : Service() {
         }
 
         if (intent?.action == ACTION_SET_TOPBAR_FONT_SCALE) {
-            topbarFontScalePercent = normalizedFontScale(
+            val legacyScale = normalizedFontScale(
                 intent.getIntExtra(EXTRA_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
             )
+            topbarSingleLineFontSizePx = LyricsTopbarFontSizePolicy.primaryFromLegacyScale(legacyScale)
+            topbarFirstLineFontSizePx = topbarSingleLineFontSizePx
+            topbarSecondLineFontSizePx = LyricsTopbarFontSizePolicy.secondaryFromLegacyScale(legacyScale)
             prefs.edit()
-                .putInt(PREF_TOPBAR_FONT_SCALE_PERCENT, topbarFontScalePercent)
+                .putInt(PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX, topbarSingleLineFontSizePx)
+                .putInt(PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX, topbarFirstLineFontSizePx)
+                .putInt(PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX, topbarSecondLineFontSizePx)
+                .apply()
+            applyDisplayPreferencesToWeb()
+            refreshTopbarPresentationGeometry()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_TOPBAR_SINGLE_LINE_FONT_SIZE) {
+            topbarSingleLineFontSizePx = LyricsTopbarFontSizePolicy.normalizePrimary(
+                intent.getIntExtra(
+                    EXTRA_TOPBAR_SINGLE_LINE_FONT_SIZE_PX,
+                    LyricsTopbarFontSizePolicy.PRIMARY_DEFAULT_PX
+                )
+            )
+            prefs.edit()
+                .putInt(PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX, topbarSingleLineFontSizePx)
+                .apply()
+            applyDisplayPreferencesToWeb()
+            refreshTopbarPresentationGeometry()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_TOPBAR_FIRST_LINE_FONT_SIZE) {
+            topbarFirstLineFontSizePx = LyricsTopbarFontSizePolicy.normalizePrimary(
+                intent.getIntExtra(
+                    EXTRA_TOPBAR_FIRST_LINE_FONT_SIZE_PX,
+                    LyricsTopbarFontSizePolicy.PRIMARY_DEFAULT_PX
+                )
+            )
+            prefs.edit()
+                .putInt(PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX, topbarFirstLineFontSizePx)
+                .apply()
+            applyDisplayPreferencesToWeb()
+            refreshTopbarPresentationGeometry()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_TOPBAR_SECOND_LINE_FONT_SIZE) {
+            topbarSecondLineFontSizePx = LyricsTopbarFontSizePolicy.normalizeSecondary(
+                intent.getIntExtra(
+                    EXTRA_TOPBAR_SECOND_LINE_FONT_SIZE_PX,
+                    LyricsTopbarFontSizePolicy.SECONDARY_DEFAULT_PX
+                )
+            )
+            prefs.edit()
+                .putInt(PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX, topbarSecondLineFontSizePx)
                 .apply()
             applyDisplayPreferencesToWeb()
             refreshTopbarPresentationGeometry()
@@ -761,7 +817,18 @@ class LyricsOverlayService : Service() {
             topbarLines = normalizedTopbarLines(
                 intent.getIntExtra(EXTRA_TOPBAR_LINES, TOPBAR_LINES_DEFAULT)
             )
-            prefs.edit().putInt(PREF_TOPBAR_LINES, topbarLines).apply()
+            val (nextSingle, nextFirst) = LyricsTopbarFontSizePolicy.synchronizeLineMode(
+                topbarLines,
+                topbarSingleLineFontSizePx,
+                topbarFirstLineFontSizePx
+            )
+            topbarSingleLineFontSizePx = nextSingle
+            topbarFirstLineFontSizePx = nextFirst
+            prefs.edit()
+                .putInt(PREF_TOPBAR_LINES, topbarLines)
+                .putInt(PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX, topbarSingleLineFontSizePx)
+                .putInt(PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX, topbarFirstLineFontSizePx)
+                .apply()
             applyTopbarLines()
             refreshTopbarPresentationGeometry()
             if (overlayRoot != null) return START_STICKY
@@ -873,8 +940,26 @@ class LyricsOverlayService : Service() {
         val legacyFontScale = normalizedFontScale(
             prefs.getInt(PREF_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
         )
-        topbarFontScalePercent = normalizedFontScale(
+        val legacyTopbarFontScale = normalizedFontScale(
             prefs.getInt(PREF_TOPBAR_FONT_SCALE_PERCENT, legacyFontScale)
+        )
+        topbarSingleLineFontSizePx = LyricsTopbarFontSizePolicy.normalizePrimary(
+            prefs.getInt(
+                PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX,
+                LyricsTopbarFontSizePolicy.primaryFromLegacyScale(legacyTopbarFontScale)
+            )
+        )
+        topbarFirstLineFontSizePx = LyricsTopbarFontSizePolicy.normalizePrimary(
+            prefs.getInt(
+                PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX,
+                LyricsTopbarFontSizePolicy.primaryFromLegacyScale(legacyTopbarFontScale)
+            )
+        )
+        topbarSecondLineFontSizePx = LyricsTopbarFontSizePolicy.normalizeSecondary(
+            prefs.getInt(
+                PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX,
+                LyricsTopbarFontSizePolicy.secondaryFromLegacyScale(legacyTopbarFontScale)
+            )
         )
         wallpaperFontScalePercent = normalizedFontScale(
             prefs.getInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, legacyFontScale)
@@ -911,7 +996,9 @@ class LyricsOverlayService : Service() {
         )
         prefs.edit()
             .putString(PREF_BACKGROUND_MODE, BACKGROUND_TRANSPARENT)
-            .putInt(PREF_TOPBAR_FONT_SCALE_PERCENT, topbarFontScalePercent)
+            .putInt(PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX, topbarSingleLineFontSizePx)
+            .putInt(PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX, topbarFirstLineFontSizePx)
+            .putInt(PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX, topbarSecondLineFontSizePx)
             .putInt(PREF_WALLPAPER_FONT_SCALE_PERCENT, wallpaperFontScalePercent)
             .apply()
     }
@@ -2315,7 +2402,6 @@ class LyricsOverlayService : Service() {
 
     private fun topbarWindowHeight(): Int {
         val baseHeight = statusBarHeight()
-        if (!lyricsTranslationEnabled || !translationAvailable) return baseHeight
         val realMetrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealMetrics(realMetrics)
@@ -2330,7 +2416,13 @@ class LyricsOverlayService : Service() {
                 dp(
                     LyricsTopbarHeightPolicy.requiredHeightDp(
                         topbarLines,
-                        topbarFontScalePercent
+                        if (topbarLines == 1) topbarSingleLineFontSizePx else topbarFirstLineFontSizePx,
+                        if (topbarLines == 1) {
+                            LyricsTopbarFontSizePolicy.secondaryForSingleLine(topbarSingleLineFontSizePx)
+                        } else {
+                            topbarSecondLineFontSizePx
+                        },
+                        lyricsTranslationEnabled && translationAvailable
                     )
                 )
             )
@@ -2370,7 +2462,9 @@ class LyricsOverlayService : Service() {
     private fun applyDisplayPreferencesToWeb() {
         if (!webReady) return
         val value = JSONObject()
-            .put("topbarFontScale", topbarFontScalePercent)
+            .put("topbarSingleLineFontSize", topbarSingleLineFontSizePx)
+            .put("topbarFirstLineFontSize", topbarFirstLineFontSizePx)
+            .put("topbarSecondLineFontSize", topbarSecondLineFontSizePx)
             .put("wallpaperFontScale", wallpaperFontScalePercent)
             .put("wallpaperBlur", wallpaperBlurEnabled)
             .put("wallpaperShadow", wallpaperShadowEnabled)
@@ -3305,6 +3399,12 @@ class LyricsOverlayService : Service() {
         const val ACTION_SET_FONT_SCALE = "com.ninepointnine.desktoplyrics.action.SET_LYRICS_FONT_SCALE"
         const val ACTION_SET_TOPBAR_FONT_SCALE =
             "com.ninepointnine.desktoplyrics.action.SET_TOPBAR_FONT_SCALE"
+        const val ACTION_SET_TOPBAR_SINGLE_LINE_FONT_SIZE =
+            "com.ninepointnine.desktoplyrics.action.SET_TOPBAR_SINGLE_LINE_FONT_SIZE"
+        const val ACTION_SET_TOPBAR_FIRST_LINE_FONT_SIZE =
+            "com.ninepointnine.desktoplyrics.action.SET_TOPBAR_FIRST_LINE_FONT_SIZE"
+        const val ACTION_SET_TOPBAR_SECOND_LINE_FONT_SIZE =
+            "com.ninepointnine.desktoplyrics.action.SET_TOPBAR_SECOND_LINE_FONT_SIZE"
         const val ACTION_SET_WALLPAPER_FONT_SCALE =
             "com.ninepointnine.desktoplyrics.action.SET_WALLPAPER_FONT_SCALE"
         const val ACTION_SET_WALLPAPER_BLUR =
@@ -3340,6 +3440,9 @@ class LyricsOverlayService : Service() {
         const val EXTRA_BACKGROUND_MODE = "background_mode"
         const val EXTRA_FONT_SCALE_PERCENT = "font_scale_percent"
         const val EXTRA_TOPBAR_LINES = "topbar_lines"
+        const val EXTRA_TOPBAR_SINGLE_LINE_FONT_SIZE_PX = "topbar_single_line_font_size_px"
+        const val EXTRA_TOPBAR_FIRST_LINE_FONT_SIZE_PX = "topbar_first_line_font_size_px"
+        const val EXTRA_TOPBAR_SECOND_LINE_FONT_SIZE_PX = "topbar_second_line_font_size_px"
         const val EXTRA_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled"
         const val EXTRA_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled"
         const val EXTRA_WALLPAPER_BLUR_ENABLED = "wallpaper_blur_enabled"
@@ -3357,6 +3460,9 @@ class LyricsOverlayService : Service() {
         const val PREF_BACKGROUND_MODE = "background_mode"
         const val PREF_FONT_SCALE_PERCENT = "font_scale_percent"
         const val PREF_TOPBAR_FONT_SCALE_PERCENT = "topbar_font_scale_percent_v1"
+        const val PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX = "topbar_single_line_font_size_px_v2"
+        const val PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX = "topbar_first_line_font_size_px_v2"
+        const val PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX = "topbar_second_line_font_size_px_v2"
         const val PREF_WALLPAPER_FONT_SCALE_PERCENT = "wallpaper_font_scale_percent_v1"
         const val PREF_AUTO_START = "auto_start"
         const val PREF_TOPBAR_LINES = "topbar_lines_v1"
@@ -3429,10 +3535,9 @@ class LyricsOverlayService : Service() {
 
 internal object LyricsTopbarHeightPolicy {
     private const val BASE_HEIGHT_DP = 72
+    private const val MAX_HEIGHT_DP = 90
     private const val VERTICAL_ALLOWANCE_DP = 10f
-    private const val CURRENT_LINE_SIZE_DP = 32f
     private const val CURRENT_LINE_HEIGHT = 1.05f
-    private const val SECONDARY_LINE_SIZE_DP = 20f
     private const val SECONDARY_LINE_HEIGHT = 1.12f
 
     fun requiredHeightDp(topbarLines: Int, fontScalePercent: Int): Int {
@@ -3441,11 +3546,29 @@ internal object LyricsTopbarHeightPolicy {
             LyricsOverlayService.FONT_SCALE_MAX_PERCENT
         ) / 100f
         val secondaryRows = if (topbarLines == 1) 1 else 2
-        val contentHeight = VERTICAL_ALLOWANCE_DP + scale * (
-            CURRENT_LINE_SIZE_DP * CURRENT_LINE_HEIGHT +
-                secondaryRows * SECONDARY_LINE_SIZE_DP * SECONDARY_LINE_HEIGHT
+        val contentHeight = 10f + scale * (32f * 1.05f + secondaryRows * 20f * 1.12f)
+        return min(MAX_HEIGHT_DP, max(BASE_HEIGHT_DP, ceil(contentHeight).toInt()))
+    }
+
+    fun requiredHeightDp(
+        topbarLines: Int,
+        primaryFontSizePx: Int,
+        secondaryFontSizePx: Int,
+        translationAvailable: Boolean
+    ): Int {
+        val primary = LyricsTopbarFontSizePolicy.normalizePrimary(primaryFontSizePx).toFloat()
+        val secondary = LyricsTopbarFontSizePolicy.normalizeSecondary(secondaryFontSizePx).toFloat()
+        val secondaryRows = when {
+            topbarLines == 1 && translationAvailable -> 1
+            topbarLines == 2 && translationAvailable -> 2
+            topbarLines == 2 -> 1
+            else -> 0
+        }
+        val contentHeight = VERTICAL_ALLOWANCE_DP + (
+            primary * CURRENT_LINE_HEIGHT +
+                secondaryRows * secondary * SECONDARY_LINE_HEIGHT
             )
-        return max(BASE_HEIGHT_DP, ceil(contentHeight).toInt())
+        return min(MAX_HEIGHT_DP, max(BASE_HEIGHT_DP, ceil(contentHeight).toInt()))
     }
 }
 

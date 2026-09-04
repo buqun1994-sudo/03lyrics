@@ -19,7 +19,9 @@ import kotlin.math.roundToInt
 
 internal data class LyricsSettingsPreferences(
     val topbarLines: Int,
-    val topbarFontScale: Int,
+    val topbarSingleLineFontSize: Int,
+    val topbarFirstLineFontSize: Int,
+    val topbarSecondLineFontSize: Int,
     val wallpaperEnabled: Boolean,
     val wallpaperFontScale: Int,
     val wallpaperBlur: Boolean,
@@ -33,7 +35,9 @@ internal data class LyricsSettingsPreferences(
 
 internal data class LyricsSettingsActions(
     val onTopbarLinesChanged: (Int) -> Unit,
-    val onTopbarFontScaleChanged: (Int) -> Unit,
+    val onTopbarSingleLineFontSizeChanged: (Int) -> Unit,
+    val onTopbarFirstLineFontSizeChanged: (Int) -> Unit,
+    val onTopbarSecondLineFontSizeChanged: (Int) -> Unit,
     val onWallpaperEnabledChanged: (Boolean) -> Unit,
     val onWallpaperFontScaleChanged: (Int) -> Unit,
     val onWallpaperBlurChanged: (Boolean) -> Unit,
@@ -58,10 +62,22 @@ internal class LyricsSettingsRenderer(
     private val context = root.context
     private val currentLineOption: TextView = root.findViewById(R.id.topbar_lines_current)
     private val currentAndNextOption: TextView = root.findViewById(R.id.topbar_lines_current_next)
-    private val topbarSizeOptions = listOf(
-        root.findViewById<TextView>(R.id.topbar_font_size_small) to FONT_SCALE_SMALL,
-        root.findViewById<TextView>(R.id.topbar_font_size_standard) to FONT_SCALE_STANDARD,
-        root.findViewById<TextView>(R.id.topbar_font_size_large) to FONT_SCALE_LARGE
+    private val topbarPrimarySizeLabel: TextView = root.findViewById(R.id.topbar_primary_font_size_label)
+    private val topbarSecondarySizeLabel: TextView = root.findViewById(R.id.topbar_secondary_font_size_label)
+    private val topbarSecondarySizeGroup: View = root.findViewById(R.id.topbar_secondary_font_size_group)
+    private val topbarPrimarySizeOptions = listOf(
+        root.findViewById<TextView>(R.id.topbar_font_size_small) to LyricsTopbarFontSizePolicy.primaryOptionsPx[0],
+        root.findViewById<TextView>(R.id.topbar_font_size_slightly_small) to LyricsTopbarFontSizePolicy.primaryOptionsPx[1],
+        root.findViewById<TextView>(R.id.topbar_font_size_standard) to LyricsTopbarFontSizePolicy.primaryOptionsPx[2],
+        root.findViewById<TextView>(R.id.topbar_font_size_slightly_large) to LyricsTopbarFontSizePolicy.primaryOptionsPx[3],
+        root.findViewById<TextView>(R.id.topbar_font_size_large) to LyricsTopbarFontSizePolicy.primaryOptionsPx[4]
+    )
+    private val topbarSecondarySizeOptions = listOf(
+        root.findViewById<TextView>(R.id.topbar_secondary_font_size_small) to LyricsTopbarFontSizePolicy.secondaryOptionsPx[0],
+        root.findViewById<TextView>(R.id.topbar_secondary_font_size_slightly_small) to LyricsTopbarFontSizePolicy.secondaryOptionsPx[1],
+        root.findViewById<TextView>(R.id.topbar_secondary_font_size_standard) to LyricsTopbarFontSizePolicy.secondaryOptionsPx[2],
+        root.findViewById<TextView>(R.id.topbar_secondary_font_size_slightly_large) to LyricsTopbarFontSizePolicy.secondaryOptionsPx[3],
+        root.findViewById<TextView>(R.id.topbar_secondary_font_size_large) to LyricsTopbarFontSizePolicy.secondaryOptionsPx[4]
     )
     private val wallpaperSizeOptions = listOf(
         root.findViewById<TextView>(R.id.wallpaper_font_size_small) to FONT_SCALE_SMALL,
@@ -125,8 +141,17 @@ internal class LyricsSettingsRenderer(
     init {
         currentLineOption.setOnClickListener { actions.onTopbarLinesChanged(1) }
         currentAndNextOption.setOnClickListener { actions.onTopbarLinesChanged(2) }
-        topbarSizeOptions.forEach { (view, value) ->
-            view.setOnClickListener { actions.onTopbarFontScaleChanged(value) }
+        topbarPrimarySizeOptions.forEach { (view, value) ->
+            view.setOnClickListener {
+                if (preferences?.topbarLines == 1) {
+                    actions.onTopbarSingleLineFontSizeChanged(value)
+                } else {
+                    actions.onTopbarFirstLineFontSizeChanged(value)
+                }
+            }
+        }
+        topbarSecondarySizeOptions.forEach { (view, value) ->
+            view.setOnClickListener { actions.onTopbarSecondLineFontSizeChanged(value) }
         }
         wallpaperSizeOptions.forEach { (view, value) ->
             view.setOnClickListener { actions.onWallpaperFontScaleChanged(value) }
@@ -200,8 +225,19 @@ internal class LyricsSettingsRenderer(
         try {
             currentLineOption.renderSelected(value.topbarLines == 1)
             currentAndNextOption.renderSelected(value.topbarLines != 1)
-            val topbarScale = scaleOption(value.topbarFontScale)
-            topbarSizeOptions.forEach { (view, scale) -> view.renderSelected(scale == topbarScale) }
+            val twoLines = value.topbarLines != 1
+            topbarPrimarySizeLabel.text = context.getString(
+                if (twoLines) R.string.settings_topbar_first_line_size else R.string.settings_lyrics_size
+            )
+            topbarSecondarySizeLabel.text = context.getString(R.string.settings_topbar_second_line_size)
+            topbarSecondarySizeLabel.visibility = if (twoLines) View.VISIBLE else View.GONE
+            topbarSecondarySizeGroup.visibility = if (twoLines) View.VISIBLE else View.GONE
+            val primarySize = LyricsTopbarFontSizePolicy.normalizePrimary(
+                if (twoLines) value.topbarFirstLineFontSize else value.topbarSingleLineFontSize
+            )
+            topbarPrimarySizeOptions.forEach { (view, size) -> view.renderSelected(size == primarySize) }
+            val secondarySize = LyricsTopbarFontSizePolicy.normalizeSecondary(value.topbarSecondLineFontSize)
+            topbarSecondarySizeOptions.forEach { (view, size) -> view.renderSelected(size == secondarySize) }
             val wallpaperScale = scaleOption(value.wallpaperFontScale)
             wallpaperSizeOptions.forEach { (view, scale) ->
                 view.renderSelected(scale == wallpaperScale)

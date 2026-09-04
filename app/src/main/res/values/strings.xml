@@ -15,8 +15,12 @@
     <string name="settings_topbar_one_line">一行</string>
     <string name="settings_topbar_two_lines">两行</string>
     <string name="settings_lyrics_size">歌词字号</string>
+    <string name="settings_topbar_first_line_size">一行歌词字号</string>
+    <string name="settings_topbar_second_line_size">二行歌词字号</string>
     <string name="settings_size_small">小</string>
+    <string name="settings_size_slightly_small">略小</string>
     <string name="settings_size_standard">标准</string>
+    <string name="settings_size_slightly_large">微大</string>
     <string name="settings_size_large">大</string>
     <string name="settings_wallpaper_lyrics_section">壁纸歌词</string>
     <string name="settings_wallpaper_lyrics_section_summary">仅在壁纸模式下生效。</string>

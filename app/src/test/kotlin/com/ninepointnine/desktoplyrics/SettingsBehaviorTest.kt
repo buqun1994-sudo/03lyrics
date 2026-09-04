@@ -509,7 +509,9 @@ class SettingsBehaviorTest {
         ).readText()
 
         assertTrue(overlay.contains("function setDisplayPreferences(value)"))
-        assertTrue(overlay.contains("topbarLyricFontScale"))
+        assertTrue(overlay.contains("topbarSingleLineFontSize"))
+        assertTrue(overlay.contains("topbarFirstLineFontSize"))
+        assertTrue(overlay.contains("topbarSecondLineFontSize"))
         assertTrue(overlay.contains("wallpaperLyricFontScale"))
         assertTrue(overlay.contains("desktopFocusRatio=settings.wallpaperFocus==='top' ? .15 : .48"))
         assertTrue(overlay.contains("desktop-position-left"))
@@ -590,6 +592,44 @@ class SettingsBehaviorTest {
             LyricsTopbarHeightPolicy.requiredHeightDp(2, 108) >
                 LyricsTopbarHeightPolicy.requiredHeightDp(2, 100)
         )
+    }
+
+    @Test
+    fun `topbar font size policy exposes five readable steps and preserves hierarchy`() {
+        assertEquals(listOf(26, 29, 32, 35, 37), LyricsTopbarFontSizePolicy.primaryOptionsPx.toList())
+        assertEquals(listOf(16, 18, 20, 22, 23), LyricsTopbarFontSizePolicy.secondaryOptionsPx.toList())
+        assertEquals(32, LyricsTopbarFontSizePolicy.normalizePrimary(32))
+        assertEquals(20, LyricsTopbarFontSizePolicy.normalizeSecondary(20))
+        assertTrue(
+            LyricsTopbarFontSizePolicy.secondaryOptionsPx.zip(
+                LyricsTopbarFontSizePolicy.primaryOptionsPx.asIterable()
+            ).all { (secondary, primary) -> secondary < primary }
+        )
+        assertEquals(20, LyricsTopbarFontSizePolicy.secondaryForSingleLine(32))
+        assertEquals(23, LyricsTopbarFontSizePolicy.secondaryForSingleLine(37))
+        assertEquals(
+            29 to 29,
+            LyricsTopbarFontSizePolicy.synchronizeLineMode(2, 29, 37)
+        )
+        assertEquals(
+            37 to 37,
+            LyricsTopbarFontSizePolicy.synchronizeLineMode(1, 29, 37)
+        )
+    }
+
+    @Test
+    fun `topbar height policy keeps every two line preset within safe topbar boundary`() {
+        LyricsTopbarFontSizePolicy.primaryOptionsPx.forEach { primary ->
+            LyricsTopbarFontSizePolicy.secondaryOptionsPx.forEach { secondary ->
+                assertTrue(
+                    LyricsTopbarHeightPolicy.requiredHeightDp(2, primary, secondary, true) <= 90
+                )
+                assertTrue(
+                    "height fell below the base for $primary/$secondary",
+                    LyricsTopbarHeightPolicy.requiredHeightDp(2, primary, secondary, true) >= 72
+                )
+            }
+        }
     }
 
     private class CommercialRuntimeAccessHarness(

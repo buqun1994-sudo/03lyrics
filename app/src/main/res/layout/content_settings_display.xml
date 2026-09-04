@@ -54,6 +54,7 @@
     </LinearLayout>
 
     <TextView
+        android:id="@+id/topbar_primary_font_size_label"
         style="@style/SettingsText.Body2.Emphasis"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -80,6 +81,17 @@
             android:text="@string/settings_size_small" />
 
         <TextView
+            android:id="@+id/topbar_font_size_slightly_small"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_slightly_small" />
+
+        <TextView
             android:id="@+id/topbar_font_size_standard"
             style="@style/SettingsText.Option"
             android:layout_width="0dp"
@@ -91,7 +103,91 @@
             android:text="@string/settings_size_standard" />
 
         <TextView
+            android:id="@+id/topbar_font_size_slightly_large"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_slightly_large" />
+
+        <TextView
             android:id="@+id/topbar_font_size_large"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_large" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/topbar_secondary_font_size_label"
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_topbar_second_line_size" />
+
+    <LinearLayout
+        android:id="@+id/topbar_secondary_font_size_group"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_segment_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_segment_track"
+        android:orientation="horizontal"
+        android:padding="@dimen/settings_segment_padding">
+
+        <TextView
+            android:id="@+id/topbar_secondary_font_size_small"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_small" />
+
+        <TextView
+            android:id="@+id/topbar_secondary_font_size_slightly_small"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_slightly_small" />
+
+        <TextView
+            android:id="@+id/topbar_secondary_font_size_standard"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_standard" />
+
+        <TextView
+            android:id="@+id/topbar_secondary_font_size_slightly_large"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_size_slightly_large" />
+
+        <TextView
+            android:id="@+id/topbar_secondary_font_size_large"
             style="@style/SettingsText.Option"
             android:layout_width="0dp"
             android:layout_height="match_parent"

@@ -136,7 +136,9 @@ class MainActivity : AppCompatActivity() {
             root = findViewById(android.R.id.content),
             actions = LyricsSettingsActions(
                 onTopbarLinesChanged = ::setTopbarLines,
-                onTopbarFontScaleChanged = ::setTopbarFontScale,
+                onTopbarSingleLineFontSizeChanged = ::setTopbarSingleLineFontSize,
+                onTopbarFirstLineFontSizeChanged = ::setTopbarFirstLineFontSize,
+                onTopbarSecondLineFontSizeChanged = ::setTopbarSecondLineFontSize,
                 onWallpaperEnabledChanged = ::setWallpaperLyricsEnabled,
                 onWallpaperFontScaleChanged = ::setWallpaperFontScale,
                 onWallpaperBlurChanged = ::setWallpaperBlurEnabled,
@@ -274,8 +276,33 @@ class MainActivity : AppCompatActivity() {
 
     private fun setTopbarLines(lines: Int) {
         val normalized = if (lines == 1) 1 else 2
+        val currentSingle = LyricsTopbarFontSizePolicy.normalizePrimary(
+            overlayPrefs.getInt(
+                LyricsOverlayService.PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX,
+                LyricsTopbarFontSizePolicy.PRIMARY_DEFAULT_PX
+            )
+        )
+        val currentFirst = LyricsTopbarFontSizePolicy.normalizePrimary(
+            overlayPrefs.getInt(
+                LyricsOverlayService.PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX,
+                currentSingle
+            )
+        )
+        val (nextSingle, nextFirst) = LyricsTopbarFontSizePolicy.synchronizeLineMode(
+            normalized,
+            currentSingle,
+            currentFirst
+        )
         overlayPrefs.edit()
             .putInt(LyricsOverlayService.PREF_TOPBAR_LINES, normalized)
+            .putInt(
+                if (normalized == 1) {
+                    LyricsOverlayService.PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX
+                } else {
+                    LyricsOverlayService.PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX
+                },
+                if (normalized == 1) nextSingle else nextFirst
+            )
             .apply()
         updateOptions()
 
@@ -287,20 +314,47 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setTopbarFontScale(percent: Int) {
-        val normalized = percent.coerceIn(
-            LyricsOverlayService.FONT_SCALE_MIN_PERCENT,
-            LyricsOverlayService.FONT_SCALE_MAX_PERCENT
-        )
+    private fun setTopbarSingleLineFontSize(sizePx: Int) {
+        val normalized = LyricsTopbarFontSizePolicy.normalizePrimary(sizePx)
         overlayPrefs.edit()
-            .putInt(LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT, normalized)
+            .putInt(LyricsOverlayService.PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX, normalized)
             .apply()
         updateOptions()
 
         if (LyricsOverlayService.isRunning) {
             startService(Intent(this, LyricsOverlayService::class.java).apply {
-                action = LyricsOverlayService.ACTION_SET_TOPBAR_FONT_SCALE
-                putExtra(LyricsOverlayService.EXTRA_FONT_SCALE_PERCENT, normalized)
+                action = LyricsOverlayService.ACTION_SET_TOPBAR_SINGLE_LINE_FONT_SIZE
+                putExtra(LyricsOverlayService.EXTRA_TOPBAR_SINGLE_LINE_FONT_SIZE_PX, normalized)
+            })
+        }
+    }
+
+    private fun setTopbarFirstLineFontSize(sizePx: Int) {
+        val normalized = LyricsTopbarFontSizePolicy.normalizePrimary(sizePx)
+        overlayPrefs.edit()
+            .putInt(LyricsOverlayService.PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX, normalized)
+            .apply()
+        updateOptions()
+
+        if (LyricsOverlayService.isRunning) {
+            startService(Intent(this, LyricsOverlayService::class.java).apply {
+                action = LyricsOverlayService.ACTION_SET_TOPBAR_FIRST_LINE_FONT_SIZE
+                putExtra(LyricsOverlayService.EXTRA_TOPBAR_FIRST_LINE_FONT_SIZE_PX, normalized)
+            })
+        }
+    }
+
+    private fun setTopbarSecondLineFontSize(sizePx: Int) {
+        val normalized = LyricsTopbarFontSizePolicy.normalizeSecondary(sizePx)
+        overlayPrefs.edit()
+            .putInt(LyricsOverlayService.PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX, normalized)
+            .apply()
+        updateOptions()
+
+        if (LyricsOverlayService.isRunning) {
+            startService(Intent(this, LyricsOverlayService::class.java).apply {
+                action = LyricsOverlayService.ACTION_SET_TOPBAR_SECOND_LINE_FONT_SIZE
+                putExtra(LyricsOverlayService.EXTRA_TOPBAR_SECOND_LINE_FONT_SIZE_PX, normalized)
             })
         }
     }
@@ -414,12 +468,24 @@ class MainActivity : AppCompatActivity() {
             LyricsOverlayService.FONT_SCALE_MIN_PERCENT,
             LyricsOverlayService.FONT_SCALE_MAX_PERCENT
         )
+        val legacyTopbarFontScale = overlayPrefs.getInt(
+            LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT,
+            legacyFontScale
+        )
         lyricsSettingsRenderer.renderPreferences(
             LyricsSettingsPreferences(
                 topbarLines = lines,
-                topbarFontScale = overlayPrefs.getInt(
-                    LyricsOverlayService.PREF_TOPBAR_FONT_SCALE_PERCENT,
-                    legacyFontScale
+                topbarSingleLineFontSize = overlayPrefs.getInt(
+                    LyricsOverlayService.PREF_TOPBAR_SINGLE_LINE_FONT_SIZE_PX,
+                    LyricsTopbarFontSizePolicy.primaryFromLegacyScale(legacyTopbarFontScale)
+                ),
+                topbarFirstLineFontSize = overlayPrefs.getInt(
+                    LyricsOverlayService.PREF_TOPBAR_FIRST_LINE_FONT_SIZE_PX,
+                    LyricsTopbarFontSizePolicy.primaryFromLegacyScale(legacyTopbarFontScale)
+                ),
+                topbarSecondLineFontSize = overlayPrefs.getInt(
+                    LyricsOverlayService.PREF_TOPBAR_SECOND_LINE_FONT_SIZE_PX,
+                    LyricsTopbarFontSizePolicy.secondaryFromLegacyScale(legacyTopbarFontScale)
                 ),
                 wallpaperEnabled = overlayPrefs.getBoolean(
                     LyricsOverlayService.PREF_WALLPAPER_LYRICS_ENABLED,

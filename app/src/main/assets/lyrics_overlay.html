@@ -431,8 +431,9 @@
       volume: $('volume-chip'), device: $('device-chip'), compactLyric: $('compact-lyric')
     };
     let backgroundMode = 'transparent';
-    let lyricFontScale=1;
-    let topbarLyricFontScale=1;
+    let topbarSingleLineFontSize=32;
+    let topbarFirstLineFontSize=32;
+    let topbarSecondLineFontSize=20;
     let wallpaperLyricFontScale=1;
     let desktopFocusRatio=.48;
     const playback = {
@@ -703,8 +704,8 @@
           if(!content)return;
           const isSecondary=viewport.classList.contains('compact-next-line') ||
             viewport.classList.contains('compact-translation-line');
-          const baseSize=(isSecondary?20:32)*lyricFontScale;
-          const minimumSize=(isSecondary?14:24)*lyricFontScale;
+          const baseSize=isSecondary?compactSecondaryFontSize():compactPrimaryFontSize();
+          const minimumSize=baseSize*(isSecondary?.7:.75);
           content.style.fontSize=baseSize.toFixed(2)+'px';
           const overflow = Math.ceil(content.scrollWidth - viewport.clientWidth);
           if (overflow <= 4) return;
@@ -1489,21 +1490,18 @@
       const translationRows=lyricsTranslationEnabled&&resolvedTranslationAvailable?1:0;
       const secondaryRows=translationRows+(compactLineCount===2?1:0);
       const twoLineMinimum=Math.ceil(
-        10+(32*1.05+secondaryRows*20*1.12)*topbarLyricFontScale
+        10+(compactPrimaryFontSize()*1.05+secondaryRows*compactSecondaryFontSize()*1.12)
       );
       const twoLines = document.body.classList.contains('compact') && compactLineCount===2 && innerHeight >= twoLineMinimum;
       document.body.classList.toggle('compact-two', twoLines);
     }
 
     function applyFontScales() {
-      lyricFontScale=document.body.classList.contains('surface-desktop')
-        ? wallpaperLyricFontScale
-        : topbarLyricFontScale;
       const root=document.documentElement.style;
       root.setProperty('--lyric-font-size',(28*wallpaperLyricFontScale).toFixed(2)+'px');
       root.setProperty('--lyric-active-size',(34*wallpaperLyricFontScale).toFixed(2)+'px');
-      root.setProperty('--compact-font-size',(32*topbarLyricFontScale).toFixed(2)+'px');
-      root.setProperty('--compact-next-size',(20*topbarLyricFontScale).toFixed(2)+'px');
+      root.setProperty('--compact-font-size',compactPrimaryFontSize().toFixed(2)+'px');
+      root.setProperty('--compact-next-size',compactSecondaryFontSize().toFixed(2)+'px');
       root.setProperty('--desktop-lyric-size',(42*wallpaperLyricFontScale).toFixed(2)+'px');
       root.setProperty('--desktop-active-size',(58*wallpaperLyricFontScale).toFixed(2)+'px');
       root.setProperty('--desktop-translation-size',(28*wallpaperLyricFontScale).toFixed(2)+'px');
@@ -1515,9 +1513,13 @@
     function setDisplayPreferences(value) {
       finishDesktopLineMotion();
       const settings=value||{};
-      const topbarPercent=Math.max(75,Math.min(150,Number(settings.topbarFontScale)||100));
+      const legacyPercent=Math.max(75,Math.min(150,Number(settings.topbarFontScale)||100));
       const wallpaperPercent=Math.max(75,Math.min(150,Number(settings.wallpaperFontScale)||100));
-      topbarLyricFontScale=topbarPercent/100;
+      const legacyPrimary=32*legacyPercent/100;
+      const legacySecondary=20*legacyPercent/100;
+      topbarSingleLineFontSize=clampNumber(settings.topbarSingleLineFontSize,legacyPrimary,26,37);
+      topbarFirstLineFontSize=clampNumber(settings.topbarFirstLineFontSize,legacyPrimary,26,37);
+      topbarSecondLineFontSize=clampNumber(settings.topbarSecondLineFontSize,legacySecondary,16,23);
       wallpaperLyricFontScale=wallpaperPercent/100;
       const spacing=settings.wallpaperSpacing==='dense'
         ? 8
@@ -1528,6 +1530,22 @@
       document.body.classList.toggle('desktop-blur',settings.wallpaperBlur!==false);
       document.body.classList.toggle('desktop-all-shadow',settings.wallpaperShadow===true);
       applyFontScales();
+    }
+
+    function clampNumber(value,fallback,min,max) {
+      const numeric=Number(value);
+      return Math.max(min,Math.min(max,Number.isFinite(numeric)?numeric:fallback));
+    }
+
+    function compactPrimaryFontSize() {
+      return compactLineCount===1?topbarSingleLineFontSize:topbarFirstLineFontSize;
+    }
+
+    function compactSecondaryFontSize() {
+      if (compactLineCount===1) {
+        return Math.round(topbarSingleLineFontSize*20/32);
+      }
+      return topbarSecondLineFontSize;
     }
 
     function setDesktopVisibleRatio(value) {
@@ -1597,6 +1615,7 @@
       },
       setCompactLines(value) {
         compactLineCount=Number(value)===1?1:2;
+        applyFontScales();
         updateCompactLayout();
         recenterAfterLayout();
       },

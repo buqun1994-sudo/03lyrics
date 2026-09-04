@@ -3,6 +3,7 @@ package com.ninepointnine.desktoplyrics
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 internal enum class WallpaperLyricsSpacing(val preferenceValue: String) {
     DENSE("dense"),
@@ -33,6 +34,38 @@ internal enum class WallpaperLyricsPosition(val preferenceValue: String) {
         fun fromPreference(value: String?): WallpaperLyricsPosition =
             entries.firstOrNull { it.preferenceValue == value } ?: RIGHT
     }
+}
+
+internal object LyricsTopbarFontSizePolicy {
+    val primaryOptionsPx = intArrayOf(26, 29, 32, 35, 37)
+    val secondaryOptionsPx = intArrayOf(16, 18, 20, 22, 23)
+
+    const val PRIMARY_DEFAULT_PX = 32
+    const val SECONDARY_DEFAULT_PX = 20
+
+    fun normalizePrimary(value: Int): Int = nearest(value, primaryOptionsPx)
+
+    fun normalizeSecondary(value: Int): Int = nearest(value, secondaryOptionsPx)
+
+    fun primaryFromLegacyScale(percent: Int): Int =
+        normalizePrimary((32 * percent.coerceIn(75, 150) / 100f).roundToInt())
+
+    fun secondaryFromLegacyScale(percent: Int): Int =
+        normalizeSecondary((20 * percent.coerceIn(75, 150) / 100f).roundToInt())
+
+    fun secondaryForSingleLine(primaryPx: Int): Int {
+        val index = primaryOptionsPx.indexOf(normalizePrimary(primaryPx)).coerceAtLeast(0)
+        return secondaryOptionsPx[index]
+    }
+
+    fun synchronizeLineMode(targetLines: Int, singleLinePx: Int, firstLinePx: Int): Pair<Int, Int> {
+        val single = normalizePrimary(singleLinePx)
+        val first = normalizePrimary(firstLinePx)
+        return if (targetLines == 1) first to first else single to single
+    }
+
+    private fun nearest(value: Int, options: IntArray): Int =
+        options.minByOrNull { kotlin.math.abs(it - value) } ?: options[0]
 }
 
 internal enum class LyricsCacheSelection {
