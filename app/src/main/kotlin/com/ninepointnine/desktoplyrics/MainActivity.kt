@@ -157,6 +157,9 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (lyricsSettingsRenderer.dismissMessageDialog()) return
+                if (selectedSection == SettingsSection.COMMERCIAL &&
+                    commercialRenderer.consumeBack()
+                ) return
                 isEnabled = false
                 onBackPressedDispatcher.onBackPressed()
             }

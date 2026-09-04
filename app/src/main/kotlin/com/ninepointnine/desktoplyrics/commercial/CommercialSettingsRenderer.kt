@@ -109,7 +109,10 @@ class CommercialSettingsRenderer(
         summary.setOnClickListener { actions.onOpenEntitlement() }
         largeCheckoutAction.setOnClickListener { view ->
             view.post {
-                if (latestState.entitlement is EntitlementState.Error) {
+                val error = latestState.entitlement as? EntitlementState.Error
+                if (error != null &&
+                    error.reason != CommercialFailure.ENTITLEMENT_REVOKED
+                ) {
                     actions.onRetryEntitlement()
                 } else {
                     actions.onCheckout()
@@ -172,8 +175,19 @@ class CommercialSettingsRenderer(
         renderSummaryVisibility(latestState.entitlement)
     }
 
+    /** Returns true when the commercial sub-page consumed the back action. */
+    fun consumeBack(): Boolean {
+        if (CommercialPagePolicy.pageFor(latestState.checkout) == CommercialPage.ENTITLEMENT) {
+            return false
+        }
+        actions.onOpenEntitlement()
+        return true
+    }
+
     private fun renderEntitlement(state: CommercialUiState) {
         val entitlement = state.entitlement
+        val entitlementRevoked = entitlement is EntitlementState.Error &&
+            entitlement.reason == CommercialFailure.ENTITLEMENT_REVOKED
         renderSummaryVisibility(entitlement)
         val showProState = entitlement is EntitlementState.Pro ||
             state.checkout is CheckoutState.Paid
@@ -260,17 +274,24 @@ class CommercialSettingsRenderer(
         largeStatus.text = entitlementDetail.orEmpty()
 
         val canPurchase = state.quote != null && entitlement !is EntitlementState.Pro &&
-            entitlement !is EntitlementState.Checking && entitlement !is EntitlementState.Error
+            entitlement !is EntitlementState.Checking &&
+            (entitlement !is EntitlementState.Error || entitlementRevoked)
         largePriceArea.visibility = if (canPurchase) View.VISIBLE else View.GONE
         placeEntitlementStatusGroup(hasMarketingContent = canPurchase)
-        largeCheckoutAction.visibility = if (canPurchase || entitlement is EntitlementState.Error) {
+        val showCheckoutAction = canPurchase || entitlementRevoked
+        largeCheckoutAction.visibility = if (showCheckoutAction) {
             View.VISIBLE
         } else {
             View.GONE
         }
+        largeCheckoutAction.isEnabled = !state.quoteRefreshing
+        largeCheckoutAction.alpha = if (largeCheckoutAction.isEnabled) 1f else 0.55f
         largeCheckoutAction.setText(
-            if (entitlement is EntitlementState.Error) R.string.commercial_retry
-            else R.string.commercial_checkout
+            when {
+                entitlementRevoked -> R.string.commercial_reacquire_pro
+                entitlement is EntitlementState.Error -> R.string.commercial_retry
+                else -> R.string.commercial_checkout
+            }
         )
     }
 

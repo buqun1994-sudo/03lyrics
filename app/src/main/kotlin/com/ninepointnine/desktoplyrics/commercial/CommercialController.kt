@@ -35,6 +35,7 @@ class CommercialController(
     )
     private var operation: Job? = null
     private var paymentPolling: Job? = null
+    private var paymentPollingGeneration = 0L
     private val removeSnapshotListener: () -> Unit
 
     init {
@@ -44,21 +45,24 @@ class CommercialController(
     val state: CommercialUiState
         get() = stateMachine.state
 
-    /** Settings entry is an entitlement lifecycle boundary, so it always
-     * starts an asynchronous online recheck alongside the local read. */
+    /**
+     * Starts the asynchronous online check for the owning Activity lifecycle.
+     * Embedded page navigation must use page actions instead of starting a
+     * second entitlement operation.
+     */
     fun start() = reloadEntitlement(forceRemote = true)
 
     fun close() {
         removeSnapshotListener()
         operation?.cancel()
-        paymentPolling?.cancel()
+        stopPaymentPolling()
         scope.cancel()
     }
 
     fun reloadEntitlement() = reloadEntitlement(forceRemote = true)
 
     private fun reloadEntitlement(forceRemote: Boolean) {
-        paymentPolling?.cancel()
+        stopPaymentPolling()
         launchOperation(
             startingAction = CommercialAction.QueryStarted,
             failureAction = CommercialAction.QueryFailed(CommercialFailure.UNKNOWN)
@@ -94,10 +98,24 @@ class CommercialController(
     }
 
     fun showCheckout() {
-        publish(CommercialAction.CheckoutRequested)
+        val entitlement = state.entitlement
+        if (entitlement is EntitlementState.Pro ||
+            entitlement is EntitlementState.Checking ||
+            (entitlement is EntitlementState.Error &&
+                entitlement.reason != CommercialFailure.ENTITLEMENT_REVOKED)
+        ) {
+            return
+        }
+        if (state.quoteRefreshing) return
+        if (state.quote == null) {
+            requestQuote(state.discountCode, notice = null)
+        } else {
+            publish(CommercialAction.CheckoutRequested)
+        }
     }
 
     fun showEntitlementPage() {
+        stopPaymentPolling()
         publish(CommercialAction.EntitlementPageRequested)
     }
 
@@ -116,7 +134,7 @@ class CommercialController(
     fun createPayment() {
         val quote = state.quote ?: return
         val method = state.selectedPaymentMethod
-        paymentPolling?.cancel()
+        stopPaymentPolling()
         launchOperation(
             startingAction = CommercialAction.PaymentCreationStarted,
             failureAction = CommercialAction.PaymentCreationFailed(CommercialFailure.UNKNOWN)
@@ -151,12 +169,14 @@ class CommercialController(
 
     fun refreshPayment() {
         val session = (state.checkout as? CheckoutState.AwaitingPayment)?.session ?: return
-        paymentPolling?.cancel()
-        paymentPolling = scope.launch { pollOnceAndContinue(session) }
+        stopPaymentPolling()
+        if (state.navigationIntent != CommercialNavigationIntent.QR) return
+        val generation = ++paymentPollingGeneration
+        paymentPolling = scope.launch { pollOnceAndContinue(session, generation) }
     }
 
     fun restorePurchase() {
-        paymentPolling?.cancel()
+        stopPaymentPolling()
         launchOperation(
             startingAction = CommercialAction.RecoveryStarted,
             failureAction = CommercialAction.RecoveryNetworkFailed
@@ -213,49 +233,79 @@ class CommercialController(
     }
 
     private fun startPaymentPolling(session: PaymentSession) {
-        paymentPolling?.cancel()
-        paymentPolling = scope.launch { runPaymentPollingLoop(session) }
-    }
-
-    private suspend fun pollOnceAndContinue(session: PaymentSession) {
-        val shouldContinue = pollOnce(session)
-        if (shouldContinue) runPaymentPollingLoop(session)
-    }
-
-    private suspend fun runPaymentPollingLoop(session: PaymentSession) {
-        while (currentCoroutineContext().isActive) {
-            val remaining = session.expiresAtEpochMs - nowEpochMs()
-            if (remaining <= 0) {
-                publish(CommercialAction.PaymentExpired)
-                break
-            }
-            delay(minOf(session.pollAfterMillis, remaining))
-            if (!pollOnce(session)) break
+        val current = state
+        val ownsQr = current.navigationIntent == CommercialNavigationIntent.QR &&
+            (current.checkout as? CheckoutState.AwaitingPayment)?.session == session
+        val mayRestore = current.navigationIntent == null
+        if (!ownsQr && !mayRestore) return
+        stopPaymentPolling()
+        val generation = ++paymentPollingGeneration
+        paymentPolling = scope.launch {
+            runPaymentPollingLoop(session, generation)
         }
     }
 
-    private suspend fun pollOnce(session: PaymentSession): Boolean {
+    private fun stopPaymentPolling() {
+        paymentPolling?.cancel()
+        paymentPolling = null
+        paymentPollingGeneration += 1
+    }
+
+    private suspend fun pollOnceAndContinue(session: PaymentSession, generation: Long) {
+        val shouldContinue = pollOnce(session, generation)
+        if (shouldContinue && isCurrentPaymentPolling(generation, session)) {
+            runPaymentPollingLoop(session, generation)
+        }
+    }
+
+    private suspend fun runPaymentPollingLoop(session: PaymentSession, generation: Long) {
+        while (currentCoroutineContext().isActive && isCurrentPaymentPolling(generation, session)) {
+            val remaining = session.expiresAtEpochMs - nowEpochMs()
+            if (remaining <= 0) {
+                publishIfCurrentPaymentPolling(generation, session, CommercialAction.PaymentExpired)
+                break
+            }
+            delay(minOf(session.pollAfterMillis, remaining))
+            if (!pollOnce(session, generation)) break
+        }
+    }
+
+    private suspend fun pollOnce(session: PaymentSession, generation: Long): Boolean {
         return when (val result = withContext(workDispatcher) {
             gateway.refreshPayment(session, nowEpochMs())
         }) {
             PaymentStatusResult.Pending -> {
-                publish(CommercialAction.PaymentPending)
-                true
+                if (!publishIfCurrentPaymentPolling(
+                        generation,
+                        session,
+                        CommercialAction.PaymentPending
+                    )
+                ) {
+                    false
+                } else {
+                    true
+                }
             }
             PaymentStatusResult.Paid -> {
-                publish(CommercialAction.PaymentPaid)
+                if (!isCurrentPaymentPolling(generation, session)) return false
+                publishIfCurrentPaymentPolling(generation, session, CommercialAction.PaymentPaid)
                 notifyAccessChangedFromOperation(CommercialAccessUpdate.RECHECK)
                 false
             }
             PaymentStatusResult.Expired -> {
-                publish(CommercialAction.PaymentExpired)
+                publishIfCurrentPaymentPolling(generation, session, CommercialAction.PaymentExpired)
                 false
             }
             is PaymentStatusResult.Failure -> {
+                if (!isCurrentPaymentPolling(generation, session)) return false
                 if (result.reason == CommercialFailure.ENTITLEMENT_REVOKED) {
                     notifyAccessChangedFromOperation(CommercialAccessUpdate.REVOKED)
                 }
-                publish(CommercialAction.PaymentRefreshFailed(result.reason))
+                publishIfCurrentPaymentPolling(
+                    generation,
+                    session,
+                    CommercialAction.PaymentRefreshFailed(result.reason)
+                )
                 result.reason == CommercialFailure.NETWORK ||
                     result.reason == CommercialFailure.RATE_LIMITED
             }
@@ -298,18 +348,46 @@ class CommercialController(
     private fun onEntitlementSnapshot(snapshot: EntitlementSnapshot) {
         scope.launch {
             applySnapshotFromOperation(snapshot)
-            val pendingPayment = snapshot.pendingPayment
-            if (pendingPayment == null) {
+            val sessionToPoll = withContext(mainDispatcher) {
+                val state = state
+                when (state.navigationIntent) {
+                    CommercialNavigationIntent.QR -> {
+                        (state.checkout as? CheckoutState.AwaitingPayment)?.session
+                    }
+                    null -> snapshot.pendingPayment
+                    CommercialNavigationIntent.ENTITLEMENT,
+                    CommercialNavigationIntent.ORDER -> null
+                }
+            }
+            if (sessionToPoll == null) {
                 // A service-side entitlement refresh can clear an old purchase
                 // session while this controller is still displaying the page.
                 // Stop that session's poller as soon as the shared snapshot
                 // says there is no pending payment left.
-                paymentPolling?.cancel()
-                paymentPolling = null
+                stopPaymentPolling()
             } else {
-                startPaymentPolling(pendingPayment)
+                startPaymentPolling(sessionToPoll)
             }
         }
+    }
+
+    private fun isCurrentPaymentPolling(generation: Long, session: PaymentSession): Boolean {
+        if (paymentPollingGeneration != generation) return false
+        val current = state
+        val ownsQr = current.navigationIntent == CommercialNavigationIntent.QR ||
+            (current.navigationIntent == null && current.checkout is CheckoutState.AwaitingPayment)
+        return ownsQr &&
+            (current.checkout as? CheckoutState.AwaitingPayment)?.session == session
+    }
+
+    private fun publishIfCurrentPaymentPolling(
+        generation: Long,
+        session: PaymentSession,
+        action: CommercialAction
+    ): Boolean {
+        if (!isCurrentPaymentPolling(generation, session)) return false
+        publish(action)
+        return true
     }
 
     private suspend fun applySnapshotFromOperation(snapshot: EntitlementSnapshot) {

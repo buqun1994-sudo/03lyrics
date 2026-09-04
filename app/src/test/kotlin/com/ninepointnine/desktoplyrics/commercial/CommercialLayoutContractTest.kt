@@ -225,6 +225,31 @@ class CommercialLayoutContractTest {
         assertFalse(colors.contains("#345C66BF"))
     }
 
+    @Test
+    fun `revoked entitlement keeps the proven repurchase and navigation path`() {
+        val strings = File(appDirectory, "src/main/res/values/strings.xml").readText()
+        val renderer = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/commercial/CommercialSettingsRenderer.kt"
+        ).readText()
+        val controller = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/commercial/CommercialController.kt"
+        ).readText()
+        val activity = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/MainActivity.kt"
+        ).readText()
+
+        assertTrue(strings.contains("权益已撤销，需重新获取Pro"))
+        assertTrue(renderer.contains("error.reason != CommercialFailure.ENTITLEMENT_REVOKED"))
+        assertTrue(renderer.contains("val showCheckoutAction = canPurchase || entitlementRevoked"))
+        assertTrue(renderer.contains("R.string.commercial_reacquire_pro"))
+        assertTrue(controller.contains("if (state.quote == null)"))
+        assertTrue(controller.contains("requestQuote(state.discountCode, notice = null)"))
+        assertTrue(activity.contains("commercialRenderer.consumeBack()"))
+    }
+
     private fun findAppDirectory(): File {
         var current = File(requireNotNull(System.getProperty("user.dir")))
         while (!File(current, "src/main").isDirectory) {

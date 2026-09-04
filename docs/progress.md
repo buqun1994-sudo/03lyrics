@@ -1,5 +1,13 @@
 # 项目进度
 
+## 2026-09-04 退款后重新获取 Pro：staging 车机复验（客户端完成，待 Cloud staging 修正）
+
+1. 已按用户要求通过 Cloud 03 APP 统一入口重新构建最终 staging 测试包；包名为 `com.ninepointnine.desktoplyrics.test`，版本为 `1.0.3-icar03-test` / `versionCode 117`，staging 证书摘要为 `1eb136fffd3f1e4c204d0933cab66c51ee4536a29e949b9c080925c01563b51d`，APK SHA-256 为 `8877140f94114ef11c250570fe4a3caae879fc1cafc284795f0dfc0f6fc89e0b`，统一入口校验了单 signer、APK v2 和 ZIP 单 APK 条目。
+2. 已保留数据覆盖安装最终 staging APK；车机安装版本、测试包身份、系统授权、服务绑定和页面启动检查通过，基础 smoke 按预期停在当前退款基线的商业门禁恢复态，未清数据、未卸载、未重启、未运行商业 instrumentation。
+3. 已确认客户端发送的 staging challenge 身份为测试包名；当前线上 `api-staging.9studio.fun` 却按正式包名校验 03lyrics。相同 staging 证书下，`com.ninepointnine.desktoplyrics.test` 返回 `403 app_signature_mismatch`，正式包名才返回 `200`；公开 staging trust bundle 也返回正式包名。这与 Cloud 源码、双轨登记和 03 APP 协议要求的 `.test` staging 身份不一致。
+4. 因服务端身份配置漂移，车机尚未取得权威 `revoked` 响应，不能据此验收“权益已撤销 / 获取Pro / 最新报价 / 订单 / 二维码 / 返回后不重入”真实闭环；未把普通 `challenge 403` 映射为撤权，也未把正式包名临时写入客户端绕过服务端门禁。
+5. 客户端本轮改动、定向商业状态机 / 布局测试、全量 `testDebugUnitTest`、`lintDebug`、`assembleDebug`、staging 统一打包、保留数据覆盖安装和最简车机 smoke 均已完成；待 Cloud staging 按双轨规则部署正确的 03lyrics `.test` 包名配置后，继续从当前退款状态复验真实购买入口闭环。
+
 ## 2026-09-03 1.0.3 双轨产物打包（已完成）
 
 1. Release 版本真值由 `1.0.2-icar03 / versionCode 116` 升级为 `1.0.3-icar03 / versionCode 117`；Debug/staging 按统一规则显示为 `1.0.3-icar03-test / versionCode 117`。

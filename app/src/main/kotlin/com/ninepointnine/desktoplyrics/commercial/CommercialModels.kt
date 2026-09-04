@@ -165,6 +165,18 @@ enum class CommercialPage {
     QR
 }
 
+/**
+ * Navigation owner that must survive a lifecycle query completing late.
+ * Entitlement and order are explicit page selections; QR is owned by the
+ * active payment operation. A null value is reserved for a fresh lifecycle,
+ * where a persisted pending payment may be restored from the snapshot.
+ */
+enum class CommercialNavigationIntent {
+    ENTITLEMENT,
+    ORDER,
+    QR
+}
+
 object CommercialPagePolicy {
     fun pageFor(checkout: CheckoutState): CommercialPage = when (checkout) {
         CheckoutState.Hidden, is CheckoutState.Paid -> CommercialPage.ENTITLEMENT
@@ -200,7 +212,14 @@ data class CommercialUiState(
     val recovery: RecoveryState = RecoveryState.Idle,
     val queryRefreshing: Boolean = false,
     val quoteRefreshing: Boolean = false,
-    val quoteNotice: QuoteNotice? = null
+    val quoteNotice: QuoteNotice? = null,
+    /**
+     * Lifecycle queries clear this before starting, so a late result cannot
+     * undo a navigation made in the same lifecycle. Payment creation sets QR
+     * explicitly because the active payment operation owns that page; a fresh
+     * lifecycle uses null to allow a persisted pending session to be restored.
+     */
+    val navigationIntent: CommercialNavigationIntent? = null
 )
 
 sealed interface EntitlementQueryResult {

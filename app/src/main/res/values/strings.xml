@@ -150,7 +150,8 @@
     <string name="commercial_restore_not_found">未找到可恢复的购买</string>
     <string name="commercial_restore_network_error">网络异常，暂时无法恢复购买</string>
     <string name="commercial_restore_device_mismatch">当前设备与原购买设备不一致，无法恢复</string>
-    <string name="commercial_entitlement_revoked">权益已撤销，当前无法继续使用</string>
+    <string name="commercial_entitlement_revoked">权益已撤销，需重新获取Pro</string>
+    <string name="commercial_reacquire_pro">获取Pro</string>
     <string name="commercial_accessibility_status">当前权益：%1$s</string>
     <string name="commercial_accessibility_ad">查看权益，%1$s</string>
     <string name="notification_recovery_title">03歌词需要恢复授权</string>
