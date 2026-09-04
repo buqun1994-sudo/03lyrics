@@ -182,6 +182,7 @@ class LyricsOverlayService : Service() {
     private var wallpaperSpacing = WallpaperLyricsSpacing.STANDARD
     private var wallpaperFocus = WallpaperLyricsFocus.CENTER
     private var wallpaperPosition = WallpaperLyricsPosition.RIGHT
+    private var lyricsColorMode = LyricsColorMode.SYSTEM
     private var nightTheme = true
     private var surfaceMode = LyricsSurfaceMode.TOPBAR
     private var surfaceHandoffTarget: LyricsSurfaceMode? = null
@@ -393,7 +394,7 @@ class LyricsOverlayService : Service() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val nextNightTheme = isNightTheme(newConfig)
+        val nextNightTheme = lyricsColorMode.resolve(isNightTheme(newConfig))
         if (nightTheme == nextNightTheme) return
         nightTheme = nextNightTheme
         applyThemeToWeb()
@@ -847,6 +848,21 @@ class LyricsOverlayService : Service() {
             if (overlayRoot != null) return START_STICKY
         }
 
+        if (intent?.action == ACTION_SET_LYRICS_COLOR_MODE) {
+            lyricsColorMode = LyricsColorMode.fromPreference(
+                intent.getStringExtra(EXTRA_LYRICS_COLOR_MODE)
+            )
+            prefs.edit()
+                .putString(PREF_LYRICS_COLOR_MODE, lyricsColorMode.preferenceValue)
+                .apply()
+            val nextNightTheme = lyricsColorMode.resolve(isNightTheme(resources.configuration))
+            if (nightTheme != nextNightTheme) {
+                nightTheme = nextNightTheme
+                applyThemeToWeb()
+            }
+            if (overlayRoot != null) return START_STICKY
+        }
+
         if (intent?.action == ACTION_SET_WALLPAPER_LYRICS) {
             wallpaperLyricsEnabled = intent.getBooleanExtra(
                 EXTRA_WALLPAPER_LYRICS_ENABLED,
@@ -935,7 +951,10 @@ class LyricsOverlayService : Service() {
     }
 
     private fun loadRuntimePreferences() {
-        nightTheme = isNightTheme(resources.configuration)
+        lyricsColorMode = LyricsColorMode.fromPreference(
+            prefs.getString(PREF_LYRICS_COLOR_MODE, LyricsColorMode.SYSTEM.preferenceValue)
+        )
+        nightTheme = lyricsColorMode.resolve(isNightTheme(resources.configuration))
         backgroundMode = BACKGROUND_TRANSPARENT
         val legacyFontScale = normalizedFontScale(
             prefs.getInt(PREF_FONT_SCALE_PERCENT, FONT_SCALE_DEFAULT_PERCENT)
@@ -3420,6 +3439,8 @@ class LyricsOverlayService : Service() {
         const val ACTION_SET_TOPBAR_LINES = "com.ninepointnine.desktoplyrics.action.SET_TOPBAR_LINES"
         const val ACTION_SET_LYRICS_TRANSLATION =
             "com.ninepointnine.desktoplyrics.action.SET_LYRICS_TRANSLATION"
+        const val ACTION_SET_LYRICS_COLOR_MODE =
+            "com.ninepointnine.desktoplyrics.action.SET_LYRICS_COLOR_MODE"
         const val ACTION_SET_WALLPAPER_LYRICS =
             "com.ninepointnine.desktoplyrics.action.SET_WALLPAPER_LYRICS"
         const val ACTION_SETTINGS_OPENED = "com.ninepointnine.desktoplyrics.action.SETTINGS_OPENED"
@@ -3444,6 +3465,7 @@ class LyricsOverlayService : Service() {
         const val EXTRA_TOPBAR_FIRST_LINE_FONT_SIZE_PX = "topbar_first_line_font_size_px"
         const val EXTRA_TOPBAR_SECOND_LINE_FONT_SIZE_PX = "topbar_second_line_font_size_px"
         const val EXTRA_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled"
+        const val EXTRA_LYRICS_COLOR_MODE = "lyrics_color_mode"
         const val EXTRA_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled"
         const val EXTRA_WALLPAPER_BLUR_ENABLED = "wallpaper_blur_enabled"
         const val EXTRA_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled"
@@ -3467,6 +3489,7 @@ class LyricsOverlayService : Service() {
         const val PREF_AUTO_START = "auto_start"
         const val PREF_TOPBAR_LINES = "topbar_lines_v1"
         const val PREF_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled_v1"
+        const val PREF_LYRICS_COLOR_MODE = "lyrics_color_mode_v1"
         const val PREF_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled_v1"
         const val PREF_WALLPAPER_BLUR_ENABLED = "wallpaper_blur_enabled_v1"
         const val PREF_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled_v1"

@@ -41,6 +41,10 @@
     <string name="settings_position_left">左侧</string>
     <string name="settings_position_right">右侧</string>
     <string name="settings_general">通用</string>
+    <string name="settings_lyrics_color">歌词颜色</string>
+    <string name="settings_lyrics_color_dark">深色</string>
+    <string name="settings_lyrics_color_light">浅色</string>
+    <string name="settings_lyrics_color_system">跟随系统</string>
     <string name="settings_auto_start">开机自启动</string>
     <string name="settings_auto_start_summary">车机启动或应用升级后自动恢复歌词服务</string>
     <string name="settings_lyrics_translation">逐句翻译</string>

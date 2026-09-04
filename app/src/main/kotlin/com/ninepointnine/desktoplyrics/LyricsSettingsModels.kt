@@ -5,6 +5,23 @@ import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+internal enum class LyricsColorMode(val preferenceValue: String) {
+    DARK("dark"),
+    LIGHT("light"),
+    SYSTEM("system");
+
+    companion object {
+        fun fromPreference(value: String?): LyricsColorMode =
+            entries.firstOrNull { it.preferenceValue == value } ?: SYSTEM
+    }
+
+    fun resolve(systemNight: Boolean): Boolean = when (this) {
+        DARK -> true
+        LIGHT -> false
+        SYSTEM -> systemNight
+    }
+}
+
 internal enum class WallpaperLyricsSpacing(val preferenceValue: String) {
     DENSE("dense"),
     STANDARD("standard"),

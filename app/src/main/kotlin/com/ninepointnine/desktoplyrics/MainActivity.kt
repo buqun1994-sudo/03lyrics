@@ -146,6 +146,7 @@ class MainActivity : AppCompatActivity() {
                 onWallpaperSpacingChanged = ::setWallpaperSpacing,
                 onWallpaperFocusChanged = ::setWallpaperFocus,
                 onWallpaperPositionChanged = ::setWallpaperPosition,
+                onLyricsColorModeChanged = ::setLyricsColorMode,
                 onAutoStartChanged = ::setAutoStartEnabled,
                 onTranslationChanged = ::setLyricsTranslationEnabled,
                 onServiceRunningChanged = ::setServiceRunning,
@@ -440,6 +441,16 @@ class MainActivity : AppCompatActivity() {
         updateOptions()
     }
 
+    private fun setLyricsColorMode(mode: LyricsColorMode) {
+        overlayPrefs.edit()
+            .putString(LyricsOverlayService.PREF_LYRICS_COLOR_MODE, mode.preferenceValue)
+            .apply()
+        updateOptions()
+        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_LYRICS_COLOR_MODE) {
+            putExtra(LyricsOverlayService.EXTRA_LYRICS_COLOR_MODE, mode.preferenceValue)
+        }
+    }
+
     private fun setLyricsTranslationEnabled(enabled: Boolean) {
         overlayPrefs.edit()
             .putBoolean(LyricsOverlayService.PREF_LYRICS_TRANSLATION_ENABLED, enabled)
@@ -519,6 +530,12 @@ class MainActivity : AppCompatActivity() {
                     overlayPrefs.getString(
                         LyricsOverlayService.PREF_WALLPAPER_POSITION,
                         WallpaperLyricsPosition.RIGHT.preferenceValue
+                    )
+                ),
+                lyricsColorMode = LyricsColorMode.fromPreference(
+                    overlayPrefs.getString(
+                        LyricsOverlayService.PREF_LYRICS_COLOR_MODE,
+                        LyricsColorMode.SYSTEM.preferenceValue
                     )
                 ),
                 autoStart = overlayPrefs.getBoolean(

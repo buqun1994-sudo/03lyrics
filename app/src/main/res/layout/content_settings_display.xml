@@ -531,6 +531,55 @@
         android:layout_marginTop="@dimen/settings_section_spacing"
         android:text="@string/settings_general" />
 
+    <TextView
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_lyrics_color" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_segment_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_segment_track"
+        android:orientation="horizontal"
+        android:padding="@dimen/settings_segment_padding">
+
+        <TextView
+            android:id="@+id/lyrics_color_dark"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_lyrics_color_dark" />
+
+        <TextView
+            android:id="@+id/lyrics_color_light"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_lyrics_color_light" />
+
+        <TextView
+            android:id="@+id/lyrics_color_system"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_lyrics_color_system" />
+    </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

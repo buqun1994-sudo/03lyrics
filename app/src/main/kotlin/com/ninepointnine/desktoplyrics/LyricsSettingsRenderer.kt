@@ -29,6 +29,7 @@ internal data class LyricsSettingsPreferences(
     val wallpaperSpacing: WallpaperLyricsSpacing,
     val wallpaperFocus: WallpaperLyricsFocus,
     val wallpaperPosition: WallpaperLyricsPosition,
+    val lyricsColorMode: LyricsColorMode,
     val autoStart: Boolean,
     val translationEnabled: Boolean
 )
@@ -45,6 +46,7 @@ internal data class LyricsSettingsActions(
     val onWallpaperSpacingChanged: (WallpaperLyricsSpacing) -> Unit,
     val onWallpaperFocusChanged: (WallpaperLyricsFocus) -> Unit,
     val onWallpaperPositionChanged: (WallpaperLyricsPosition) -> Unit,
+    val onLyricsColorModeChanged: (LyricsColorMode) -> Unit,
     val onAutoStartChanged: (Boolean) -> Unit,
     val onTranslationChanged: (Boolean) -> Unit,
     val onServiceRunningChanged: (Boolean) -> Unit,
@@ -96,6 +98,11 @@ internal class LyricsSettingsRenderer(
     private val positionOptions = listOf(
         root.findViewById<TextView>(R.id.wallpaper_position_left) to WallpaperLyricsPosition.LEFT,
         root.findViewById<TextView>(R.id.wallpaper_position_right) to WallpaperLyricsPosition.RIGHT
+    )
+    private val lyricsColorOptions = listOf(
+        root.findViewById<TextView>(R.id.lyrics_color_dark) to LyricsColorMode.DARK,
+        root.findViewById<TextView>(R.id.lyrics_color_light) to LyricsColorMode.LIGHT,
+        root.findViewById<TextView>(R.id.lyrics_color_system) to LyricsColorMode.SYSTEM
     )
 
     private val wallpaperSwitch: IcarSwitch = root.findViewById(R.id.wallpaper_lyrics_switch)
@@ -164,6 +171,9 @@ internal class LyricsSettingsRenderer(
         }
         positionOptions.forEach { (view, value) ->
             view.setOnClickListener { actions.onWallpaperPositionChanged(value) }
+        }
+        lyricsColorOptions.forEach { (view, value) ->
+            view.setOnClickListener { actions.onLyricsColorModeChanged(value) }
         }
         bindSwitch(
             root.findViewById(R.id.wallpaper_lyrics_setting),
@@ -250,6 +260,9 @@ internal class LyricsSettingsRenderer(
             }
             positionOptions.forEach { (view, position) ->
                 view.renderSelected(position == value.wallpaperPosition)
+            }
+            lyricsColorOptions.forEach { (view, mode) ->
+                view.renderSelected(mode == value.lyricsColorMode)
             }
             renderSwitch(wallpaperSwitch, value.wallpaperEnabled)
             renderSwitch(wallpaperBlurSwitch, value.wallpaperBlur)
