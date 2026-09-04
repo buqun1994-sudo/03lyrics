@@ -252,6 +252,12 @@ android {
                 debugUserAgreementUrl.asBuildConfigString()
             )
         }
+        create("diagnostic") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".diagnostic"
+            versionNameSuffix = "-diagnostic"
+            matchingFallbacks += listOf("debug")
+        }
         release {
             signingConfigs.findByName("release")?.let { signingConfig = it }
             isDebuggable = false
@@ -287,6 +293,11 @@ android {
                 productionUserAgreementUrl.asBuildConfigString()
             )
         }
+    }
+
+    sourceSets.getByName("diagnostic") {
+        java.srcDir("src/debug/kotlin")
+        res.srcDir("src/debug/res")
     }
 
     buildFeatures {
@@ -335,6 +346,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.google.zxing:core:3.5.3")
+    "diagnosticImplementation"("androidx.media:media:1.7.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
