@@ -13,6 +13,158 @@
         style="@style/SettingsText.Body1.Emphasis"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="@string/settings_general" />
+
+    <LinearLayout
+        android:id="@+id/general_settings_cards"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:id="@+id/auto_start_setting"
+            android:layout_width="@dimen/settings_switch_card_width"
+            android:layout_height="@dimen/settings_switch_card_height"
+            android:background="@drawable/bg_settings_card"
+            android:clickable="true"
+            android:focusable="false"
+            android:gravity="center_vertical"
+            android:importantForAccessibility="no"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/settings_switch_card_padding_start"
+            android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+            <com.ninepointnine.desktoplyrics.IcarSwitch
+                android:id="@+id/auto_start_switch"
+                android:layout_width="@dimen/settings_switch_width"
+                android:layout_height="@dimen/settings_switch_height"
+                android:clickable="true"
+                android:contentDescription="@string/settings_auto_start" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/settings_switch_label_spacing"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_auto_start" />
+
+                <TextView
+                    style="@style/SettingsText.Caption2"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/settings_switch_caption_spacing"
+                    android:maxLines="2"
+                    android:text="@string/settings_auto_start_summary" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/lyrics_translation_setting"
+            android:layout_width="@dimen/settings_switch_card_width"
+            android:layout_height="@dimen/settings_switch_card_height"
+            android:layout_marginStart="@dimen/settings_switch_card_gap"
+            android:background="@drawable/bg_settings_card"
+            android:clickable="true"
+            android:focusable="false"
+            android:gravity="center_vertical"
+            android:importantForAccessibility="no"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/settings_switch_card_padding_start"
+            android:paddingEnd="@dimen/settings_switch_card_padding_start">
+
+            <com.ninepointnine.desktoplyrics.IcarSwitch
+                android:id="@+id/lyrics_translation_switch"
+                android:layout_width="@dimen/settings_switch_width"
+                android:layout_height="@dimen/settings_switch_height"
+                android:clickable="true"
+                android:contentDescription="@string/settings_lyrics_translation" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/settings_switch_label_spacing"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/SettingsText.Body2.Emphasis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_lyrics_translation" />
+
+                <TextView
+                    style="@style/SettingsText.Caption2"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/settings_switch_caption_spacing"
+                    android:maxLines="1"
+                    android:text="@string/settings_lyrics_translation_summary" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        style="@style/SettingsText.Body2.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_subgroup_spacing"
+        android:text="@string/settings_lyrics_color" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/settings_segment_height"
+        android:layout_marginTop="@dimen/settings_control_spacing"
+        android:background="@drawable/bg_settings_segment_track"
+        android:orientation="horizontal"
+        android:padding="@dimen/settings_segment_padding">
+
+        <TextView
+            android:id="@+id/lyrics_color_dark"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_lyrics_color_dark" />
+
+        <TextView
+            android:id="@+id/lyrics_color_light"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_lyrics_color_light" />
+
+        <TextView
+            android:id="@+id/lyrics_color_system"
+            style="@style/SettingsText.Option"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_lyrics_color_system" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/settings_topbar_section"
+        style="@style/SettingsText.Body1.Emphasis"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/settings_section_spacing"
         android:text="@string/settings_topbar_display" />
 
     <TextView
@@ -524,153 +676,4 @@
             android:text="@string/settings_position_right" />
     </LinearLayout>
 
-    <TextView
-        style="@style/SettingsText.Body1.Emphasis"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/settings_section_spacing"
-        android:text="@string/settings_general" />
-
-    <TextView
-        style="@style/SettingsText.Body2.Emphasis"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/settings_subgroup_spacing"
-        android:text="@string/settings_lyrics_color" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/settings_segment_height"
-        android:layout_marginTop="@dimen/settings_control_spacing"
-        android:background="@drawable/bg_settings_segment_track"
-        android:orientation="horizontal"
-        android:padding="@dimen/settings_segment_padding">
-
-        <TextView
-            android:id="@+id/lyrics_color_dark"
-            style="@style/SettingsText.Option"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="@string/settings_lyrics_color_dark" />
-
-        <TextView
-            android:id="@+id/lyrics_color_light"
-            style="@style/SettingsText.Option"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="@string/settings_lyrics_color_light" />
-
-        <TextView
-            android:id="@+id/lyrics_color_system"
-            style="@style/SettingsText.Option"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="@string/settings_lyrics_color_system" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/settings_control_spacing"
-        android:orientation="horizontal">
-
-        <LinearLayout
-            android:id="@+id/auto_start_setting"
-            android:layout_width="@dimen/settings_switch_card_width"
-            android:layout_height="@dimen/settings_switch_card_height"
-            android:background="@drawable/bg_settings_card"
-            android:clickable="true"
-            android:focusable="false"
-            android:gravity="center_vertical"
-            android:importantForAccessibility="no"
-            android:orientation="horizontal"
-            android:paddingStart="@dimen/settings_switch_card_padding_start"
-            android:paddingEnd="@dimen/settings_switch_card_padding_start">
-
-            <com.ninepointnine.desktoplyrics.IcarSwitch
-                android:id="@+id/auto_start_switch"
-                android:layout_width="@dimen/settings_switch_width"
-                android:layout_height="@dimen/settings_switch_height"
-                android:clickable="true"
-                android:contentDescription="@string/settings_auto_start" />
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/settings_switch_label_spacing"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    style="@style/SettingsText.Body2.Emphasis"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_auto_start" />
-
-                <TextView
-                    style="@style/SettingsText.Caption2"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/settings_switch_caption_spacing"
-                    android:maxLines="2"
-                    android:text="@string/settings_auto_start_summary" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/lyrics_translation_setting"
-            android:layout_width="@dimen/settings_switch_card_width"
-            android:layout_height="@dimen/settings_switch_card_height"
-            android:layout_marginStart="@dimen/settings_switch_card_gap"
-            android:background="@drawable/bg_settings_card"
-            android:clickable="true"
-            android:focusable="false"
-            android:gravity="center_vertical"
-            android:importantForAccessibility="no"
-            android:orientation="horizontal"
-            android:paddingStart="@dimen/settings_switch_card_padding_start"
-            android:paddingEnd="@dimen/settings_switch_card_padding_start">
-
-            <com.ninepointnine.desktoplyrics.IcarSwitch
-                android:id="@+id/lyrics_translation_switch"
-                android:layout_width="@dimen/settings_switch_width"
-                android:layout_height="@dimen/settings_switch_height"
-                android:clickable="true"
-                android:contentDescription="@string/settings_lyrics_translation" />
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/settings_switch_label_spacing"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    style="@style/SettingsText.Body2.Emphasis"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_lyrics_translation" />
-
-                <TextView
-                    style="@style/SettingsText.Caption2"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/settings_switch_caption_spacing"
-                    android:maxLines="1"
-                    android:text="@string/settings_lyrics_translation_summary" />
-            </LinearLayout>
-        </LinearLayout>
-    </LinearLayout>
 </LinearLayout>

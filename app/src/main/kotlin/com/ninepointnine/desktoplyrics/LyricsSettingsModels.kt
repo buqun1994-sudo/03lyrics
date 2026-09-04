@@ -16,8 +16,8 @@ internal enum class LyricsColorMode(val preferenceValue: String) {
     }
 
     fun resolve(systemNight: Boolean): Boolean = when (this) {
-        DARK -> true
-        LIGHT -> false
+        DARK -> false
+        LIGHT -> true
         SYSTEM -> systemNight
     }
 }
