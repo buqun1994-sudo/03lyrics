@@ -57,7 +57,7 @@ class DiagnosticActivity : AppCompatActivity() {
             setTextColor(Color.rgb(20, 28, 38))
         }, fullWidth(64))
         root.addView(TextView(this).apply {
-            text = "用于 03T：媒体会话、03投屏能力基座、启动闪退和网络发现取证。报告写入车机本地目录，由 ADB 取出。"
+            text = "用于 03T：媒体会话、公开媒体 Browser、03投屏能力基座、启动闪退和网络发现取证。请先在待测媒体应用（如车机网易云）播放歌曲。报告写入车机本地目录，由 ADB 取出。"
             textSize = 16f
             setTextColor(Color.rgb(70, 80, 94))
         }, fullWidth(90))
@@ -68,9 +68,9 @@ class DiagnosticActivity : AppCompatActivity() {
         root.addView(mediaAccessStatus, fullWidth(48))
         root.addView(actionButton("执行完整诊断") { runFullDiagnostic() }, fullWidth(58))
         root.addView(actionButton("启动 03投屏并采集启动证据") { launchCastAndCollect() }, fullWidth(58))
-        root.addView(actionButton("开始 30 秒媒体动态采样") { runMediaSampling() }, fullWidth(58))
+        root.addView(actionButton("开始 30 秒媒体动态采样（播放待测应用）") { runMediaSampling() }, fullWidth(58))
         status = TextView(this).apply {
-            text = "尚未开始。建议先播放一首歌，再执行完整诊断；如需复现闪退，点击启动按钮。"
+            text = "尚未开始。建议先在待测媒体应用中播放一首歌，再执行完整诊断；随后可做 30 秒动态采样。如需复现闪退，点击启动按钮。"
             textSize = 15f
             setTextColor(Color.rgb(30, 42, 56))
             setPadding(0, 20, 0, 0)

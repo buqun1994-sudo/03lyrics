@@ -229,7 +229,7 @@ internal class MediaContractDiagnosticCollector(
     private fun publicBrowserDescriptors(): List<PublicBrowserDescriptor> = runCatching {
         @Suppress("DEPRECATION")
         context.packageManager.queryIntentServices(
-            Intent(MediaBrowser.SERVICE_INTERFACE),
+            Intent(BluetoothMediaBrowserServiceResolver.ACTION),
             PackageManager.GET_META_DATA,
         ).mapNotNull { resolvePublicBrowserDescriptor(it.serviceInfo) }
     }.getOrDefault(emptyList())
