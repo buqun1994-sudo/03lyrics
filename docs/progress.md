@@ -1,6 +1,16 @@
 # 项目进度
 
-## 2026-09-05 媒体来源仲裁与爱趣听状态收敛（施工完成）
+## 2026-09-05 03T 网易云代理与 iCAR03 时间线修复（本机完成，待实车验证）
+
+1. 已根据 03T（`S56_HQX_03T`、Android 11 / SDK 30）诊断报告确认：内置网易云不以独立网易云包名发布，而是由 `com.tencent.wecarflow` 的公开 `MediaPlaybackService` 代理；同一包还公开 HDD / USB 服务。原始 `TITLE` 会在播放中轮换“作词 / 编曲 / 演唱 / 混音 / 监制”等制作信息，`DISPLAY_TITLE` / `DISPLAY_SUBTITLE` 才保持歌曲名和歌手。
+2. `MediaSessionMetadataPolicy` 现优先使用 `DISPLAY_TITLE` / `DISPLAY_SUBTITLE`，再回退 `MediaDescription` 与原始字段；所有通道仍走同一公开 MediaSession、Browser、录音和歌词主链，因此 03T 网易云与爱趣听不增加来源专用分支，制作信息变化不会触发切歌或重复查词。
+3. 公开 Browser 注册表不再把蓝牙输出路由作为硬门槛；路由只作唤醒提示，最终仍由媒体语义和新鲜进度仲裁。控制器 Token 与录音身份分离：录音代际、时间线和同源重绑定使用包级逻辑来源，同包 Token 重建在 `5000ms` 窗口内保留歌词；无法精确匹配 Browser Token 时不任意改写上次稳定 service 偏好。
+4. `MediaSessionTimelineTracker` 对新录音首帧超过 `2500ms` 的旧大位置保持 `timelineReady=false`，直到后续位置证据到达；未知位置不再伪造为可信 `0ms`。服务新增包级来源、歌名、歌手、专辑、时长和保存时间的 `24h` 播放检查点，仅在实时位置未知且时长差不超过 `2000ms` 时恢复，并由同一时间线 owner 锚定后续进度；用户主动停止仍清除检查点。
+5. 已补充元数据优先级、03T 制作信息稳定代际、公开 Browser 无路由发现、新录音旧位置隔离、检查点兼容性与恢复锚定测试；完整 `testDebugUnitTest` 为 `341` 项，其中 `339` 项通过、`2` 项既有公网测试按设计跳过，`assembleDebug` 通过。
+6. Debug 包已准备完成：`com.ninepointnine.desktoplyrics.test`，版本 `1.0.9-icar03-test`、`versionCode 123`，产物为 `app/build/outputs/apk/debug/app-debug.apk`，SHA-256 为 `fddc4806ec5fbcb449f9ed326cfa511f79e04b55d7d492779fd29779ac50a8c4`。本轮按用户要求未安装车机、未运行 ADB、未截图、未执行车机 smoke，待用户回到车上后再开始自动化非截图式验证。
+7. `check-project-docs.mjs`、`check-skills.mjs`、`bump-release-version.mjs --check` 和 `git diff --check` 均通过；`check-03app-repository.mjs` 仅因共享登记快照仍指向前一提交 `54d8cf6` 而实际仓库为 `194d6d8` 失败，未改写共享登记库。
+
+## 2026-09-05 媒体来源仲裁与爱趣听状态收敛（前序基线）
 
 1. 已根据目标车机公开 `MediaSession` / `MediaBrowserService` 取证，将原蓝牙专用 Browser 桥接器重构为 `PublicMediaBrowserSessionRegistry`：爱趣听、本机、U 盘和蓝牙统一经过公开服务发现、Token 去重、超时 / 重试 / 断开，再交给同一个 `MediaSessionArbiter`；不增加播放器包名白名单或第二套选源状态机。
 2. 当前来源以公开 Browser 组件作为稳定身份持久化；服务冷启动先用 `1500ms` 收集会话证据，已有稳定来源最多等待 `3500ms` 恢复。稳定运行只连接当前活动包和上次来源，首次冷发现最多连接 `8` 个公开服务；蓝牙仍受 A2DP / BLE 路由门槛限制。Android 11 包可见性通过标准 Browser intent query 声明，不新增运行时权限。

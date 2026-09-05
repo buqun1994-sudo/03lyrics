@@ -43,23 +43,24 @@ internal data class MediaRecordingMetadata(
 /**
  * Normalizes public MediaSession metadata before it enters lyrics state.
  * Each field has one semantic meaning regardless of transport: the media
- * description and raw keys are only ordered fallbacks for that same field.
+ * display fields are preferred because some car media centers overload raw
+ * title with production-credit text; description and raw keys remain fallbacks.
  * Bluetooth transport affects duration units, never title/artist/album meaning.
  */
 internal object MediaSessionMetadataPolicy {
     fun normalize(fields: MediaSessionMetadataFields): MediaRecordingMetadata =
         MediaRecordingMetadata(
             track = firstText(
-                fields.descriptionTitle,
                 fields.displayTitle,
+                fields.descriptionTitle,
                 fields.title
             ),
             artist = firstText(
+                fields.displaySubtitle,
                 fields.descriptionSubtitle,
                 fields.artist,
                 fields.albumArtist,
-                fields.author,
-                fields.displaySubtitle
+                fields.author
             ),
             album = firstText(
                 fields.album,

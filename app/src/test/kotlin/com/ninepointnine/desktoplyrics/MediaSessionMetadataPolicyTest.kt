@@ -137,7 +137,7 @@ class MediaSessionMetadataPolicyTest {
     }
 
     @Test
-    fun `media description stays the controller facing fallback contract`() {
+    fun `display fields take precedence over description fallbacks`() {
         val metadata = MediaSessionMetadataPolicy.normalize(
             MediaSessionMetadataFields(
                 descriptionTitle = "Published Song", descriptionSubtitle = "Published Artist",
@@ -147,9 +147,39 @@ class MediaSessionMetadataPolicyTest {
                 transport = MediaSessionTransport.BLUETOOTH_AVRCP
             )
         )
-        assertEquals("Published Song", metadata.track)
-        assertEquals("Published Artist", metadata.artist)
+        assertEquals("Display Song", metadata.track)
+        assertEquals("Display Artist", metadata.artist)
         assertEquals("Raw Album", metadata.album)
+    }
+
+    @Test
+    fun `display title keeps production credits from becoming a new recording`() {
+        val tracker = MediaRecordingStateTracker()
+        val generations = listOf(
+            "这一百次挣扎的刺痛",
+            "作词：潋蝶",
+            "编曲：罗宇",
+            "演唱：椒椒 JMJ",
+            "混音：漆柚",
+            "监制：潋蝶"
+        ).map { rawTitle ->
+            val state = tracker.update(
+                sourceIdentity = "com.tencent.wecarflow",
+                incoming = MediaSessionMetadataPolicy.normalize(
+                    MediaSessionMetadataFields(
+                        title = rawTitle,
+                        displayTitle = "蝶渡",
+                        artist = "椒椒JMJ",
+                        displaySubtitle = "椒椒JMJ",
+                        album = "早春晴朗 影视原声带",
+                        durationMs = 230_016L
+                    )
+                )
+            )
+            assertEquals("蝶渡", state?.metadata?.track)
+            state?.recordingGeneration
+        }
+        assertEquals(setOf(1L), generations.toSet())
     }
 
     @Test

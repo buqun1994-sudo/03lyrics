@@ -118,13 +118,15 @@ internal object PublicMediaBrowserRegistryPolicy {
         descriptor: PublicMediaBrowserServiceDescriptor,
         eligiblePackages: Set<String>,
         preferredSourceId: String?,
-        bluetoothRoutePresent: Boolean,
+        @Suppress("UNUSED_PARAMETER") bluetoothRoutePresent: Boolean,
         discoverAllSources: Boolean
-    ): Boolean = when {
-        descriptor.packageName == PublicMediaBrowserServiceResolver.BLUETOOTH_PACKAGE ->
-            bluetoothRoutePresent
-        discoverAllSources -> true
-        else -> descriptor.packageName in eligiblePackages ||
+    ): Boolean {
+        // The car can expose a Bluetooth MediaBrowser while routing audio through
+        // its own media center. Route enumeration is therefore only a wake-up
+        // hint; it cannot be a hard admission gate for the public contract.
+        return discoverAllSources ||
+            descriptor.packageName == PublicMediaBrowserServiceResolver.BLUETOOTH_PACKAGE ||
+            descriptor.packageName in eligiblePackages ||
             descriptor.sourceKey == preferredSourceId
     }
 

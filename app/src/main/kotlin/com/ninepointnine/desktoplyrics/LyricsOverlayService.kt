@@ -190,6 +190,18 @@ class LyricsOverlayService : Service() {
     private var audioPlaybackMonitorStarted = false
     private var avrcpEventMonitorStarted = false
     private var currentController: MediaController? = null
+    private var currentLogicalSourceId: String? = null
+    private data class PendingSessionRebind(
+        val token: MediaSession.Token,
+        val sourceId: String,
+        val deadlineElapsedRealtime: Long
+    )
+
+    private var pendingSessionRebind: PendingSessionRebind? = null
+    private var playbackCheckpoint: MediaPlaybackCheckpoint? = null
+    private var checkpointRestoredGeneration: Long? = null
+    private var lastCheckpointWriteElapsedRealtime = Long.MIN_VALUE
+    private var lastCheckpointSignature = ""
     private val mediaSessionArbiter = MediaSessionArbiter()
     private val observedControllerCallbacks = linkedMapOf<
         MediaSession.Token,
@@ -259,6 +271,9 @@ class LyricsOverlayService : Service() {
     }
     private val sessionArbitrationRefreshRunnable = Runnable {
         if (monitorStarted) refreshActiveSessions()
+    }
+    private val sessionRebindTimeoutRunnable = Runnable {
+        onSessionRebindTimeout()
     }
     private val sessionRetryRunnable = Runnable {
         if (isRunning && !monitorStarted) startMediaMonitor()
@@ -407,6 +422,7 @@ class LyricsOverlayService : Service() {
             if (systemDecision.clearsAutoStart) {
                 prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
             }
+            clearPlaybackCheckpoint()
             invalidatePendingCommercialChecks()
             commercialRuntimeAccess.clear()
             clearRecoveryNotification()
@@ -2596,6 +2612,7 @@ class LyricsOverlayService : Service() {
             monitorStarted = true
             lastMediaSourceId = prefs.getString(PREF_LAST_MEDIA_SOURCE_ID, null)
             mediaSessionArbiter.restorePreferredSource(lastMediaSourceId)
+            loadPlaybackCheckpoint()
             coldMediaDiscoveryDeadlineMs = SystemClock.elapsedRealtime() +
                 PublicMediaBrowserRegistryPolicy.COLD_DISCOVERY_WINDOW_MS
             refreshActiveSessions()
@@ -2612,6 +2629,8 @@ class LyricsOverlayService : Service() {
     }
 
     private fun stopMediaMonitor() {
+        mainHandler.removeCallbacks(sessionRebindTimeoutRunnable)
+        pendingSessionRebind = null
         mainHandler.removeCallbacks(sessionRefreshRunnable)
         mainHandler.removeCallbacks(sessionSelectionRefreshRunnable)
         mainHandler.removeCallbacks(sessionConvergenceRefreshRunnable)
@@ -2637,6 +2656,11 @@ class LyricsOverlayService : Service() {
         }
         observedControllerCallbacks.clear()
         currentController = null
+        currentLogicalSourceId = null
+        playbackCheckpoint = null
+        checkpointRestoredGeneration = null
+        lastCheckpointWriteElapsedRealtime = Long.MIN_VALUE
+        lastCheckpointSignature = ""
         mediaSessionArbiter.reset()
         resetBluetoothTimeline()
         standardTimelineTracker.reset()
@@ -2732,6 +2756,14 @@ class LyricsOverlayService : Service() {
                 publicBrowserSessions.none { it.descriptor.sourceKey == sourceId } &&
                     publicMediaBrowserRegistry.activeConnectionCount > 0
             } == true
+            currentController?.let { retained ->
+                val retainedToken = retained.sessionToken
+                if (systemControllers.none { it.sessionToken == retainedToken } &&
+                    publicBrowserSessions.none { it.controller.sessionToken == retainedToken }
+                ) {
+                    scheduleSessionRebind(retained)
+                }
+            }
             val controllers = mergeMediaControllers(
                 systemControllers,
                 publicBrowserSessions.map(PublicMediaBrowserSession::controller),
@@ -2818,7 +2850,7 @@ class LyricsOverlayService : Service() {
     ) {
         updateControllerCallbacks(controllers)
         val candidates = controllers.mapIndexed { index, controller ->
-            val playback = controller.playbackState
+            val playback = runCatching { controller.playbackState }.getOrNull()
             val playbackInfo = runCatching { controller.playbackInfo }.getOrNull()
             MediaSessionCandidate(
                 index = index,
@@ -2867,12 +2899,26 @@ class LyricsOverlayService : Service() {
                 "reason=${decision.reason} package=${best?.packageName ?: "none"} " +
                 "state=${best?.playbackState?.state ?: -1} candidateCount=${controllers.size}"
         )
+        val previousController = currentController
+        val previousSourceId = previousController?.let(::mediaRecordingSourceId)
+        val bestSourceId = best?.let(::mediaRecordingSourceId)
+        val sameLogicalSource = previousController != null && best != null &&
+            previousSourceId == bestSourceId
+        if (best != null && previousController?.sessionToken != best.sessionToken) {
+            cancelSessionRebindIfReplaced(best)
+        } else if (best == null) {
+            cancelPendingSessionRebind()
+        }
         currentController = best
+        if (best != null) currentLogicalSourceId = bestSourceId
+        else currentLogicalSourceId = null
         best?.let(::rememberMediaSource)
-        resetBluetoothTimeline()
-        standardTimelineTracker.reset()
-        cachedArtworkKey = ""
-        cachedArtworkDataUrl = ""
+        if (!sameLogicalSource) {
+            resetBluetoothTimeline()
+            standardTimelineTracker.reset()
+            cachedArtworkKey = ""
+            cachedArtworkDataUrl = ""
+        }
         updateCurrentRecordingState(best)
         scheduleSessionConvergenceRefreshes()
         scheduleSnapshot()
@@ -2886,7 +2932,16 @@ class LyricsOverlayService : Service() {
             .firstOrNull { it.controller.sessionToken == controller.sessionToken }
             ?.descriptor
             ?.sourceKey
-            ?: "${controller.packageName}/${controller.sessionToken}"
+            ?: controller.packageName
+
+    /** Stable recording owner; controller tokens and Browser service names are excluded. */
+    private fun mediaRecordingSourceId(controller: MediaController): String =
+        controller.packageName.trim().ifBlank {
+            currentLogicalSourceId ?: mediaSessionSourceId(controller)
+        }
+
+    private fun checkpointSourceId(controller: MediaController): String =
+        controller.packageName.trim()
 
     private fun rememberMediaSource(controller: MediaController) {
         val sourceId = publicBrowserSessions
@@ -2894,7 +2949,14 @@ class LyricsOverlayService : Service() {
             ?.descriptor
             ?.sourceKey
         if (sourceId == null) {
-            if (lastMediaSourceId != null) {
+            val hasSamePackageBrowser = publicBrowserSessions.any {
+                it.descriptor.packageName == controller.packageName
+            }
+            val preferredPackage = lastMediaSourceId?.substringBefore('/')
+            if (!hasSamePackageBrowser &&
+                lastMediaSourceId != null &&
+                preferredPackage != controller.packageName
+            ) {
                 lastMediaSourceId = null
                 prefs.edit().remove(PREF_LAST_MEDIA_SOURCE_ID).apply()
             }
@@ -2903,6 +2965,61 @@ class LyricsOverlayService : Service() {
         if (sourceId == lastMediaSourceId) return
         lastMediaSourceId = sourceId
         prefs.edit().putString(PREF_LAST_MEDIA_SOURCE_ID, sourceId).apply()
+    }
+
+    private fun scheduleSessionRebind(controller: MediaController) {
+        val sourceId = mediaRecordingSourceId(controller)
+        val pending = pendingSessionRebind
+        if (pending?.token == controller.sessionToken &&
+            pending.sourceId == sourceId
+        ) return
+        val deadline = SystemClock.elapsedRealtime() + SESSION_REBIND_GRACE_MS
+        pendingSessionRebind = PendingSessionRebind(
+            token = controller.sessionToken,
+            sourceId = sourceId,
+            deadlineElapsedRealtime = deadline
+        )
+        mainHandler.removeCallbacks(sessionRebindTimeoutRunnable)
+        mainHandler.postDelayed(sessionRebindTimeoutRunnable, SESSION_REBIND_GRACE_MS)
+        Log.i(LOG_TAG, "MediaSession rebind window opened source=$sourceId")
+    }
+
+    private fun cancelPendingSessionRebind() {
+        if (pendingSessionRebind == null) return
+        pendingSessionRebind = null
+        mainHandler.removeCallbacks(sessionRebindTimeoutRunnable)
+    }
+
+    private fun cancelSessionRebindIfReplaced(controller: MediaController) {
+        val pending = pendingSessionRebind ?: return
+        if (pending.sourceId == mediaRecordingSourceId(controller) &&
+            pending.token != controller.sessionToken
+        ) {
+            cancelPendingSessionRebind()
+            Log.i(LOG_TAG, "MediaSession rebind completed source=${pending.sourceId}")
+        }
+    }
+
+    private fun onSessionRebindTimeout() {
+        val pending = pendingSessionRebind ?: return
+        if (pending.deadlineElapsedRealtime > SystemClock.elapsedRealtime()) {
+            mainHandler.postDelayed(
+                sessionRebindTimeoutRunnable,
+                pending.deadlineElapsedRealtime - SystemClock.elapsedRealtime()
+            )
+            return
+        }
+        pendingSessionRebind = null
+        val current = currentController
+        if (current == null || current.sessionToken != pending.token ||
+            mediaRecordingSourceId(current) != pending.sourceId
+        ) return
+        currentController = null
+        currentLogicalSourceId = null
+        updateCurrentRecordingState(null)
+        Log.i(LOG_TAG, "MediaSession rebind expired source=${pending.sourceId}")
+        scheduleSnapshot()
+        if (monitorStarted) refreshActiveSessions()
     }
 
     private fun scheduleSessionConvergenceRefreshes() {
@@ -2926,12 +3043,18 @@ class LyricsOverlayService : Service() {
 
     private fun updateCurrentRecordingState(controller: MediaController?) {
         val previous = currentRecordingState
+        if (controller == null && pendingSessionRebind != null &&
+            SystemClock.elapsedRealtime() < pendingSessionRebind!!.deadlineElapsedRealtime
+        ) {
+            currentRecordingState = previous?.copy(recordingChanged = false, queryChanged = false)
+            return
+        }
         val next = if (controller == null) {
             recordingStateTracker.clear()
             null
         } else {
             recordingStateTracker.update(
-                sourceIdentity = controller.sessionToken,
+                sourceIdentity = mediaRecordingSourceId(controller),
                 incoming = normalizedRecordingMetadata(controller)
             )
         }
@@ -2939,6 +3062,7 @@ class LyricsOverlayService : Service() {
         val recordingChanged = next?.recordingChanged == true ||
             (previous != null && next == null)
         if (recordingChanged) {
+            checkpointRestoredGeneration = null
             resetBluetoothTimeline()
             standardTimelineTracker.reset()
         }
@@ -3027,11 +3151,12 @@ class LyricsOverlayService : Service() {
 
             override fun onSessionDestroyed() {
                 publicMediaBrowserRegistry.onSessionDestroyed(token)
-                mediaSessionArbiter.forgetSession(token.toString())
                 if (currentController?.sessionToken == token) {
-                    currentController = null
-                    updateCurrentRecordingState(null)
+                    scheduleSessionRebind(currentController!!)
+                    mediaSessionArbiter.forgetSession(token.toString())
                     scheduleSnapshot()
+                } else {
+                    mediaSessionArbiter.forgetSession(token.toString())
                 }
                 if (monitorStarted) refreshActiveSessions()
             }
@@ -3052,10 +3177,9 @@ class LyricsOverlayService : Service() {
     private fun dispatchSnapshot() {
         val controller = currentController
         updateCurrentRecordingState(controller)
-        val snapshot = if (controller == null) {
-            JSONObject().put("hasSession", false).put("permissionRequired", false)
-        } else {
-            buildSnapshot(controller)
+        val snapshot = when {
+            controller != null -> buildSnapshot(controller)
+            else -> JSONObject().put("hasSession", false).put("permissionRequired", false)
         }
         pendingSnapshot = snapshot
         deliverToWeb(snapshot)
@@ -3065,7 +3189,7 @@ class LyricsOverlayService : Service() {
     private fun buildSnapshot(controller: MediaController): JSONObject {
         val recordingState = currentRecordingState
         val metadata = recordingState?.metadata
-        val playback = controller.playbackState
+        val playback = runCatching { controller.playbackState }.getOrNull()
         val title = metadata?.track.orEmpty()
         val artist = metadata?.artist.orEmpty()
         val album = metadata?.album.orEmpty()
@@ -3084,27 +3208,60 @@ class LyricsOverlayService : Service() {
         } else {
             mediaSessionState
         }
+        val reportedPositionMs = playback?.position ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN
+        val sourceId = checkpointSourceId(controller)
         val timeline = if (controller.packageName == BLUETOOTH_PACKAGE) {
-            bluetoothTimeline(
+            val currentTimeline = bluetoothTimeline(
                 "recording:$recordingGeneration",
                 state,
-                playback?.position ?: 0L,
+                reportedPositionMs,
                 duration
+            )
+            maybeRestorePlaybackCheckpoint(
+                sourceId = sourceId,
+                metadata = metadata,
+                recordingGeneration = recordingGeneration,
+                reportedPositionMs = reportedPositionMs,
+                timeline = currentTimeline,
+                restore = { position ->
+                    restoreBluetoothTimelinePosition(position, duration, state == "playing")
+                }
             )
         } else {
             val standardTimeline = standardTimelineTracker.update(
                 trackKey = "recording:$recordingGeneration",
                 playbackState = playback?.state,
-                reportedPositionMs = playback?.position ?: 0L,
+                reportedPositionMs = reportedPositionMs,
                 playbackSpeed = playback?.playbackSpeed ?: 0f,
                 publisherPositionTime = playback?.lastPositionUpdateTime ?: 0L,
                 durationMs = duration
             )
-            PlaybackTimeline(
+            val currentTimeline = PlaybackTimeline(
                 positionMs = standardTimeline.positionMs,
                 speed = standardTimeline.speed,
                 timelineReady = standardTimeline.timelineReady
             )
+            maybeRestorePlaybackCheckpoint(
+                sourceId = sourceId,
+                metadata = metadata,
+                recordingGeneration = recordingGeneration,
+                reportedPositionMs = reportedPositionMs,
+                timeline = currentTimeline,
+                restore = { position ->
+                    standardTimelineTracker.restorePosition(
+                        "recording:$recordingGeneration",
+                        position,
+                        duration
+                    )?.let {
+                        PlaybackTimeline(it.positionMs, it.speed, it.timelineReady)
+                    }
+                }
+            )
+        }
+        if (state == "stopped") {
+            clearPlaybackCheckpoint()
+        } else {
+            savePlaybackCheckpoint(sourceId, metadata, timeline, state)
         }
         return JSONObject()
             .put("hasSession", title.isNotBlank() || playback != null)
@@ -3121,6 +3278,137 @@ class LyricsOverlayService : Service() {
             .put("speed", if (timeline.speed.isFinite()) timeline.speed else 1.0)
             .put("timelineReady", timeline.timelineReady)
             .put("capturedAtMs", System.currentTimeMillis())
+    }
+
+    private fun maybeRestorePlaybackCheckpoint(
+        sourceId: String,
+        metadata: MediaRecordingMetadata?,
+        recordingGeneration: Long,
+        reportedPositionMs: Long,
+        timeline: PlaybackTimeline,
+        restore: (Long) -> PlaybackTimeline?
+    ): PlaybackTimeline {
+        if (metadata?.hasTrack != true || checkpointRestoredGeneration == recordingGeneration ||
+            reportedPositionMs >= 0L
+        ) {
+            return timeline
+        }
+        val checkpoint = playbackCheckpoint ?: return timeline
+        if (!MediaPlaybackCheckpointPolicy.matches(
+                checkpoint = checkpoint,
+                sourceId = sourceId,
+                track = metadata.track,
+                artist = metadata.artist,
+                album = metadata.album,
+                durationMs = metadata.durationMs,
+                nowEpochMs = System.currentTimeMillis()
+            )
+        ) return timeline
+        val restored = restore(checkpoint.positionMs) ?: return timeline
+        checkpointRestoredGeneration = recordingGeneration
+        Log.i(
+            LOG_TAG,
+            "Playback checkpoint restored source=$sourceId generation=$recordingGeneration " +
+                "position=${restored.positionMs}"
+        )
+        return restored
+    }
+
+    private fun loadPlaybackCheckpoint() {
+        val sourceId = prefs.getString(PREF_CHECKPOINT_SOURCE_ID, null).orEmpty()
+        val track = prefs.getString(PREF_CHECKPOINT_TRACK, null).orEmpty()
+        val artist = prefs.getString(PREF_CHECKPOINT_ARTIST, null).orEmpty()
+        val album = prefs.getString(PREF_CHECKPOINT_ALBUM, null).orEmpty()
+        val durationMs = prefs.getLong(PREF_CHECKPOINT_DURATION_MS, -1L)
+        val positionMs = prefs.getLong(PREF_CHECKPOINT_POSITION_MS, -1L)
+        val savedAtEpochMs = prefs.getLong(PREF_CHECKPOINT_SAVED_AT_MS, -1L)
+        val candidate = if (sourceId.isNotBlank() && track.isNotBlank()) {
+            MediaPlaybackCheckpoint(
+                sourceId = sourceId,
+                track = track,
+                artist = artist,
+                album = album,
+                durationMs = durationMs,
+                positionMs = positionMs,
+                savedAtEpochMs = savedAtEpochMs
+            )
+        } else {
+            null
+        }
+        if (candidate != null && MediaPlaybackCheckpointPolicy.isValid(
+                candidate,
+                System.currentTimeMillis()
+            )
+        ) {
+            playbackCheckpoint = candidate
+        } else {
+            playbackCheckpoint = null
+            clearPlaybackCheckpoint()
+        }
+    }
+
+    private fun savePlaybackCheckpoint(
+        sourceId: String,
+        metadata: MediaRecordingMetadata?,
+        timeline: PlaybackTimeline,
+        state: String
+    ) {
+        if (metadata?.hasTrack != true || sourceId.isBlank() || !timeline.timelineReady) return
+        if (state != "playing" && state != "paused" && state != "buffering") return
+        val nowElapsed = SystemClock.elapsedRealtime()
+        if (state == "playing" &&
+            lastCheckpointWriteElapsedRealtime != Long.MIN_VALUE &&
+            nowElapsed - lastCheckpointWriteElapsedRealtime < CHECKPOINT_WRITE_INTERVAL_MS
+        ) return
+        val checkpoint = MediaPlaybackCheckpoint(
+            sourceId = sourceId,
+            track = metadata.track,
+            artist = metadata.artist,
+            album = metadata.album,
+            durationMs = metadata.durationMs,
+            positionMs = timeline.positionMs,
+            savedAtEpochMs = System.currentTimeMillis()
+        )
+        if (!MediaPlaybackCheckpointPolicy.isValid(checkpoint, checkpoint.savedAtEpochMs)) return
+        val signature = listOf(
+            checkpoint.sourceId,
+            checkpoint.track,
+            checkpoint.artist,
+            checkpoint.album,
+            checkpoint.durationMs,
+            checkpoint.positionMs
+        ).joinToString("\u0000")
+        if (signature == lastCheckpointSignature &&
+            lastCheckpointWriteElapsedRealtime != Long.MIN_VALUE &&
+            nowElapsed - lastCheckpointWriteElapsedRealtime < CHECKPOINT_WRITE_INTERVAL_MS
+        ) return
+        prefs.edit()
+            .putString(PREF_CHECKPOINT_SOURCE_ID, checkpoint.sourceId)
+            .putString(PREF_CHECKPOINT_TRACK, checkpoint.track)
+            .putString(PREF_CHECKPOINT_ARTIST, checkpoint.artist)
+            .putString(PREF_CHECKPOINT_ALBUM, checkpoint.album)
+            .putLong(PREF_CHECKPOINT_DURATION_MS, checkpoint.durationMs)
+            .putLong(PREF_CHECKPOINT_POSITION_MS, checkpoint.positionMs)
+            .putLong(PREF_CHECKPOINT_SAVED_AT_MS, checkpoint.savedAtEpochMs)
+            .apply()
+        playbackCheckpoint = checkpoint
+        lastCheckpointSignature = signature
+        lastCheckpointWriteElapsedRealtime = nowElapsed
+    }
+
+    private fun clearPlaybackCheckpoint() {
+        prefs.edit()
+            .remove(PREF_CHECKPOINT_SOURCE_ID)
+            .remove(PREF_CHECKPOINT_TRACK)
+            .remove(PREF_CHECKPOINT_ARTIST)
+            .remove(PREF_CHECKPOINT_ALBUM)
+            .remove(PREF_CHECKPOINT_DURATION_MS)
+            .remove(PREF_CHECKPOINT_POSITION_MS)
+            .remove(PREF_CHECKPOINT_SAVED_AT_MS)
+            .apply()
+        playbackCheckpoint = null
+        lastCheckpointSignature = ""
+        lastCheckpointWriteElapsedRealtime = Long.MIN_VALUE
     }
 
     private fun mediaVolumePercent(): Int {
@@ -3310,6 +3598,36 @@ class LyricsOverlayService : Service() {
         )
     }
 
+    private fun restoreBluetoothTimelinePosition(
+        positionMs: Long,
+        durationMs: Long,
+        isPlaying: Boolean
+    ): PlaybackTimeline? {
+        if (bluetoothTrackKey.isBlank() || positionMs < 0L) return null
+        bluetoothPositionMs = if (durationMs > 0L) {
+            positionMs.coerceIn(0L, durationMs)
+        } else {
+            positionMs
+        }
+        bluetoothPositionCapturedAtRealtime = SystemClock.elapsedRealtime()
+        bluetoothLastReportedPositionMs = bluetoothPositionMs
+        bluetoothWasPlaying = isPlaying
+        bluetoothTimelineReady = true
+        var position = bluetoothPositionMs
+        if (isPlaying) {
+            position += max(
+                0L,
+                SystemClock.elapsedRealtime() - bluetoothPositionCapturedAtRealtime
+            )
+        }
+        if (durationMs > 0L) position = min(position, durationMs)
+        return PlaybackTimeline(
+            positionMs = max(0L, position),
+            speed = if (isPlaying) 1.0 else 0.0,
+            timelineReady = true
+        )
+    }
+
     private fun resetBluetoothTimeline() {
         bluetoothTrackKey = ""
         bluetoothPositionMs = 0L
@@ -3349,7 +3667,8 @@ class LyricsOverlayService : Service() {
     }?.takeIf { it in PlaybackState.STATE_NONE..PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM }
 
     private fun normalizedRecordingMetadata(controller: MediaController?): MediaRecordingMetadata? {
-        val metadata = controller?.metadata ?: return null
+        val sourceController = controller ?: return null
+        val metadata = runCatching { sourceController.metadata }.getOrNull() ?: return null
         val description = runCatching { metadata.description }.getOrNull()
         return MediaSessionMetadataPolicy.normalize(
             MediaSessionMetadataFields(
@@ -3371,13 +3690,14 @@ class LyricsOverlayService : Service() {
                 author = metadata.getString(MediaMetadata.METADATA_KEY_AUTHOR).orEmpty(),
                 album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty(),
                 durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION),
-                transport = if (controller.packageName == BLUETOOTH_PACKAGE) {
+                transport = if (sourceController.packageName == BLUETOOTH_PACKAGE) {
                     MediaSessionTransport.BLUETOOTH_AVRCP
                 } else {
                     MediaSessionTransport.STANDARD
                 },
-                durationUnit = durationUnitForController(controller),
-                reportedPositionMs = controller.playbackState?.position ?: -1L
+                durationUnit = durationUnitForController(sourceController),
+                reportedPositionMs = runCatching { sourceController.playbackState?.position }
+                    .getOrNull() ?: -1L
             )
         ).takeIf(MediaRecordingMetadata::hasTrack)
     }
@@ -3534,6 +3854,13 @@ class LyricsOverlayService : Service() {
         const val EXTRA_RUNNING = "running"
         const val PREFS_NAME = "lyrics_overlay_prefs"
         private const val PREF_LAST_MEDIA_SOURCE_ID = "last_media_source_id_v1"
+        private const val PREF_CHECKPOINT_SOURCE_ID = "playback_checkpoint_source_v1"
+        private const val PREF_CHECKPOINT_TRACK = "playback_checkpoint_track_v1"
+        private const val PREF_CHECKPOINT_ARTIST = "playback_checkpoint_artist_v1"
+        private const val PREF_CHECKPOINT_ALBUM = "playback_checkpoint_album_v1"
+        private const val PREF_CHECKPOINT_DURATION_MS = "playback_checkpoint_duration_ms_v1"
+        private const val PREF_CHECKPOINT_POSITION_MS = "playback_checkpoint_position_ms_v1"
+        private const val PREF_CHECKPOINT_SAVED_AT_MS = "playback_checkpoint_saved_at_ms_v1"
         const val PREF_BACKGROUND_MODE = "background_mode"
         const val PREF_FONT_SCALE_PERCENT = "font_scale_percent"
         const val PREF_TOPBAR_FONT_SCALE_PERCENT = "topbar_font_scale_percent_v1"
@@ -3581,6 +3908,8 @@ class LyricsOverlayService : Service() {
         private const val COMMERCIAL_RECOVERY_NOTIFICATION_ID = 4204
         private const val COMMERCIAL_RECOVERY_SETTINGS_REQUEST_CODE = 3
         private const val BLUETOOTH_POSITION_RESET_TOLERANCE_MS = 2_500L
+        private const val SESSION_REBIND_GRACE_MS = 5_000L
+        private const val CHECKPOINT_WRITE_INTERVAL_MS = 750L
         private const val TOPBAR_LINES_DEFAULT = 2
         private const val DESIGN_WIDTH = 1920
         private const val DESIGN_HEIGHT = 1080

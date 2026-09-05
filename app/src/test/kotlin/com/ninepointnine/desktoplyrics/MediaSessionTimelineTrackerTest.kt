@@ -243,4 +243,133 @@ class MediaSessionTimelineTrackerTest {
             tracker.update("second", PlaybackState.STATE_PLAYING, 200L, 1f, 0L, 20_000L).positionMs
         )
     }
+
+    @Test
+    fun `a new track does not trust the previous track position`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("first", PlaybackState.STATE_PLAYING, 5_000L, 1f, 0L, 20_000L)
+
+        now = 2_000L
+        val firstFrame = tracker.update(
+            "second",
+            PlaybackState.STATE_PLAYING,
+            18_000L,
+            1f,
+            0L,
+            20_000L
+        )
+        assertEquals(0L, firstFrame.positionMs)
+        assertEquals(false, firstFrame.timelineReady)
+
+        now = 2_500L
+        val progressed = tracker.update(
+            "second",
+            PlaybackState.STATE_PLAYING,
+            18_400L,
+            1f,
+            0L,
+            20_000L
+        )
+        assertEquals(true, progressed.timelineReady)
+        assertEquals(18_400L, progressed.positionMs)
+    }
+
+    @Test
+    fun `restored position remains anchored while publisher position is unknown`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("track", PlaybackState.STATE_PLAYING, 4_000L, 1f, 0L, 20_000L)
+
+        now = 2_000L
+        assertEquals(9_000L, tracker.restorePosition("track", 9_000L, 20_000L)?.positionMs)
+
+        now = 2_500L
+        val unknown = tracker.update(
+            "track",
+            PlaybackState.STATE_PLAYING,
+            PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+            1f,
+            0L,
+            20_000L
+        )
+        assertEquals(9_500L, unknown.positionMs)
+        assertEquals(true, unknown.timelineReady)
+
+        now = 2_600L
+        assertEquals(
+            9_600L,
+            tracker.update("track", PlaybackState.STATE_PLAYING, 9_600L, 1f, 0L, 20_000L).positionMs
+        )
+    }
+
+    @Test
+    fun `checkpoint policy accepts same recording within duration tolerance`() {
+        val checkpoint = MediaPlaybackCheckpoint(
+            sourceId = "com.tencent.wecarflow",
+            track = "Song",
+            artist = "Artist",
+            album = "Album",
+            durationMs = 180_000L,
+            positionMs = 32_000L,
+            savedAtEpochMs = 1_000_000L
+        )
+
+        assertEquals(
+            true,
+            MediaPlaybackCheckpointPolicy.matches(
+                checkpoint,
+                sourceId = "com.tencent.wecarflow",
+                track = " song ",
+                artist = "Artist",
+                album = "Album",
+                durationMs = 181_500L,
+                nowEpochMs = 1_000_000L + 60_000L
+            )
+        )
+        assertEquals(
+            false,
+            MediaPlaybackCheckpointPolicy.matches(
+                checkpoint,
+                sourceId = "com.tencent.wecarflow",
+                track = "Other",
+                artist = "Artist",
+                album = "Album",
+                durationMs = 180_000L,
+                nowEpochMs = 1_000_000L + 60_000L
+            )
+        )
+    }
+
+    @Test
+    fun `checkpoint policy rejects stale and incompatible checkpoints`() {
+        val checkpoint = MediaPlaybackCheckpoint(
+            sourceId = "source",
+            track = "Song",
+            artist = "Artist",
+            album = "Album",
+            durationMs = 180_000L,
+            positionMs = 32_000L,
+            savedAtEpochMs = 1_000_000L
+        )
+        assertEquals(
+            false,
+            MediaPlaybackCheckpointPolicy.isValid(
+                checkpoint,
+                1_000_000L + MediaPlaybackCheckpointPolicy.MAX_AGE_MS + 1L
+            )
+        )
+        assertEquals(
+            false,
+            MediaPlaybackCheckpointPolicy.matches(
+                checkpoint,
+                sourceId = "source",
+                track = "Song",
+                artist = "Artist",
+                album = "Album",
+                durationMs = 184_001L,
+                nowEpochMs = 1_000_000L
+            )
+        )
+    }
 }

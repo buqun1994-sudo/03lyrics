@@ -80,10 +80,10 @@ class PublicMediaBrowserSessionRegistryTest {
     }
 
     @Test
-    fun `bluetooth connections keep the route gate while other sources use public discovery`() {
+    fun `bluetooth browser remains discoverable without an output route`() {
         val bluetooth = descriptor("com.android.bluetooth", ".A2dpMediaBrowserService")
         val aqt = descriptor("com.tencent.wecarflow", ".player.MediaPlaybackService")
-        assertFalse(
+        assertTrue(
             PublicMediaBrowserRegistryPolicy.shouldInclude(
                 bluetooth,
                 eligiblePackages = setOf("com.android.bluetooth"),
@@ -158,9 +158,8 @@ class PublicMediaBrowserSessionRegistryTest {
             discoverAllSources = false
         )
 
-        assertEquals(setOf(aqt, podcast), clients.keys)
+        assertEquals(setOf(aqt, bluetooth, podcast), clients.keys)
         assertTrue(clients.values.all { it.connectCount == 1 })
-        assertFalse(clients.containsKey(bluetooth))
     }
 
     @Test
