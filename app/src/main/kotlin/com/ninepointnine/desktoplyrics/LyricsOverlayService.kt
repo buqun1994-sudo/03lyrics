@@ -227,6 +227,7 @@ class LyricsOverlayService : Service() {
     private var pendingBluetoothPositionCapturedAtRealtime = 0L
     private var bluetoothTimelineGenerationStartedAtRealtime = 0L
     private var bluetoothTimelineReady = false
+    private var deferNextBluetoothPosition = false
     private var bluetoothReportedPlaybackState: Int? = null
     private var lastLyricsUsageKey = ""
     private var activeLyricsRequestJob: Job? = null
@@ -2896,6 +2897,15 @@ class LyricsOverlayService : Service() {
         val bestSourceId = best?.let(::mediaRecordingSourceId)
         val sameLogicalSource = previousController != null && best != null &&
             previousSourceId == bestSourceId
+        val controllerTokenChanged = previousController != null && best != null &&
+            previousController.sessionToken != best.sessionToken
+        if (sameLogicalSource && controllerTokenChanged) {
+            if (best?.packageName == BLUETOOTH_PACKAGE) {
+                deferNextBluetoothReportedPosition()
+            } else {
+                standardTimelineTracker.deferNextReportedPosition()
+            }
+        }
         if (best != null && previousController?.sessionToken != best.sessionToken) {
             cancelSessionRebindIfReplaced(best)
         } else if (best == null) {
@@ -3537,6 +3547,10 @@ class LyricsOverlayService : Service() {
         val eventPosition = pendingBluetoothPositionMs
         val eventPositionCapturedAt = pendingBluetoothPositionCapturedAtRealtime
         pendingBluetoothPositionMs = null
+        val deferPositionFrame = deferNextBluetoothPosition
+        deferNextBluetoothPosition = false
+        val ignoreEventPosition = deferPositionFrame && eventPosition != null
+        val ignoreReportedPosition = deferPositionFrame && reportedPositionMs >= 0L
 
         if (trackKey != bluetoothTrackKey) {
             bluetoothTrackKey = trackKey
@@ -3549,18 +3563,20 @@ class LyricsOverlayService : Service() {
             bluetoothWasPlaying = isPlaying
             bluetoothTimelineGenerationStartedAtRealtime = now
             bluetoothTimelineReady = false
+            deferNextBluetoothPosition = false
         } else {
             if (eventPosition != null) {
                 val eventBelongsToGeneration = eventPositionCapturedAt >=
                     bluetoothTimelineGenerationStartedAtRealtime
-                if (bluetoothTimelineReady || eventBelongsToGeneration ||
-                    eventPosition <= BLUETOOTH_POSITION_RESET_TOLERANCE_MS
+                if (!ignoreEventPosition &&
+                    (bluetoothTimelineReady || eventBelongsToGeneration ||
+                        eventPosition <= BLUETOOTH_POSITION_RESET_TOLERANCE_MS)
                 ) {
                     bluetoothPositionMs = eventPosition
                     bluetoothPositionCapturedAtRealtime = eventPositionCapturedAt
                     bluetoothTimelineReady = true
                 }
-            } else if (reportedPositionMs >= 0L &&
+            } else if (!ignoreReportedPosition && reportedPositionMs >= 0L &&
                 reportedPositionMs != bluetoothLastReportedPositionMs
             ) {
                 if (bluetoothTimelineReady || reportedPositionMs <= BLUETOOTH_POSITION_RESET_TOLERANCE_MS) {
@@ -3605,6 +3621,7 @@ class LyricsOverlayService : Service() {
         bluetoothLastReportedPositionMs = bluetoothPositionMs
         bluetoothWasPlaying = isPlaying
         bluetoothTimelineReady = true
+        deferNextBluetoothPosition = false
         var position = bluetoothPositionMs
         if (isPlaying) {
             position += max(
@@ -3630,7 +3647,12 @@ class LyricsOverlayService : Service() {
         pendingBluetoothPositionCapturedAtRealtime = 0L
         bluetoothTimelineGenerationStartedAtRealtime = 0L
         bluetoothTimelineReady = false
+        deferNextBluetoothPosition = false
         bluetoothReportedPlaybackState = null
+    }
+
+    private fun deferNextBluetoothReportedPosition() {
+        deferNextBluetoothPosition = true
     }
 
     private fun bluetoothPlaybackState(fallback: String): String = when (bluetoothReportedPlaybackState) {

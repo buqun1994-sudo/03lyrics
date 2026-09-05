@@ -304,6 +304,64 @@ class MediaSessionTimelineTrackerTest {
     }
 
     @Test
+    fun `controller replacement ignores one stale position then accepts the next real position`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("track", PlaybackState.STATE_PLAYING, 1_000L, 1f, 0L, 20_000L)
+
+        now = 3_000L
+        tracker.deferNextReportedPosition()
+        val stale = tracker.update(
+            "track",
+            PlaybackState.STATE_PLAYING,
+            0L,
+            1f,
+            0L,
+            20_000L
+        )
+        assertEquals(3_000L, stale.positionMs)
+        assertEquals(true, stale.timelineReady)
+
+        now = 3_500L
+        val real = tracker.update(
+            "track",
+            PlaybackState.STATE_PLAYING,
+            3_500L,
+            1f,
+            0L,
+            20_000L
+        )
+        assertEquals(3_500L, real.positionMs)
+    }
+
+    @Test
+    fun `controller replacement consumes an unknown first frame without swallowing the next position`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("track", PlaybackState.STATE_PLAYING, 1_000L, 1f, 0L, 20_000L)
+
+        now = 3_000L
+        tracker.deferNextReportedPosition()
+        assertEquals(
+            3_000L,
+            tracker.update(
+                "track",
+                PlaybackState.STATE_PLAYING,
+                PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                1f,
+                0L,
+                20_000L
+            ).positionMs
+        )
+
+        now = 3_500L
+        assertEquals(
+            3_500L,
+            tracker.update("track", PlaybackState.STATE_PLAYING, 3_500L, 1f, 0L, 20_000L).positionMs
+        )
+    }
+
+    @Test
     fun `checkpoint policy accepts same recording within duration tolerance`() {
         val checkpoint = MediaPlaybackCheckpoint(
             sourceId = "com.tencent.wecarflow",

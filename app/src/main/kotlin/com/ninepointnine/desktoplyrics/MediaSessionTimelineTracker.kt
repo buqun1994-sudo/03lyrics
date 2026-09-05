@@ -81,6 +81,7 @@ internal class MediaSessionTimelineTracker(
     private var lastSpeed = 0.0
     private var wasPlaying = false
     private var timelineReady = false
+    private var deferNextReportedPosition = false
 
     fun update(
         trackKey: String,
@@ -116,11 +117,16 @@ internal class MediaSessionTimelineTracker(
             wasPlaying = playing
             timelineReady = trustedInitialPosition
             hasObservedTrack = true
+            deferNextReportedPosition = false
         } else {
             val currentPosition = positionAt(now)
-            val reportedChanged = hasReportedPosition && reported != lastReportedPositionMs
+            val deferPositionFrame = deferNextReportedPosition
+            deferNextReportedPosition = false
+            val ignoreReportedPosition = deferPositionFrame && hasReportedPosition
+            val reportedChanged = !ignoreReportedPosition &&
+                hasReportedPosition && reported != lastReportedPositionMs
             val publisherChanged = publisherPositionTime != lastObservedPublisherPositionTime
-            val usablePublisherChange = hasReportedPosition &&
+            val usablePublisherChange = !ignoreReportedPosition && hasReportedPosition &&
                 publisherChanged &&
                 validPublisherTime != null
             val playbackModeChanged = playing != wasPlaying
@@ -148,7 +154,9 @@ internal class MediaSessionTimelineTracker(
                 capturedAtElapsedRealtime = now
             }
 
-            if (hasReportedPosition && timelineReady) lastReportedPositionMs = reported
+            if (hasReportedPosition && timelineReady && !ignoreReportedPosition) {
+                lastReportedPositionMs = reported
+            }
             lastObservedPublisherPositionTime = publisherPositionTime
             lastSpeed = speed
             wasPlaying = playing
@@ -162,6 +170,15 @@ internal class MediaSessionTimelineTracker(
         )
     }
 
+    /**
+     * A replacement controller can expose one stale position frame. Keep the
+     * established local timeline for that frame, then accept the next concrete
+     * publisher position as normal (including a real seek).
+     */
+    fun deferNextReportedPosition() {
+        deferNextReportedPosition = true
+    }
+
     fun restorePosition(
         trackKey: String,
         positionMs: Long,
@@ -172,6 +189,7 @@ internal class MediaSessionTimelineTracker(
         basePositionMs = clamp(positionMs, durationMs)
         capturedAtElapsedRealtime = now
         lastReportedPositionMs = basePositionMs
+        deferNextReportedPosition = false
         timelineReady = true
         return MediaSessionTimeline(
             positionMs = clamp(positionAt(now), durationMs),
@@ -191,6 +209,7 @@ internal class MediaSessionTimelineTracker(
         lastSpeed = 0.0
         wasPlaying = false
         timelineReady = false
+        deferNextReportedPosition = false
     }
 
     private fun positionAt(now: Long): Long {
