@@ -1,5 +1,15 @@
 # 项目进度
 
+## 2026-09-05 媒体来源仲裁与爱趣听状态收敛（施工完成）
+
+1. 已根据目标车机公开 `MediaSession` / `MediaBrowserService` 取证，将原蓝牙专用 Browser 桥接器重构为 `PublicMediaBrowserSessionRegistry`：爱趣听、本机、U 盘和蓝牙统一经过公开服务发现、Token 去重、超时 / 重试 / 断开，再交给同一个 `MediaSessionArbiter`；不增加播放器包名白名单或第二套选源状态机。
+2. 当前来源以公开 Browser 组件作为稳定身份持久化；服务冷启动先用 `1500ms` 收集会话证据，已有稳定来源最多等待 `3500ms` 恢复。稳定运行只连接当前活动包和上次来源，首次冷发现最多连接 `8` 个公开服务；蓝牙仍受 A2DP / BLE 路由门槛限制。Android 11 包可见性通过标准 Browser intent query 声明，不新增运行时权限。
+3. `MediaSessionArbiter` 保留当前控制器，即使提供者发布 `active=false + PAUSED` 或暂时不在活动列表；新的播放中挑战者必须经过 `250ms`，并以位置 / `lastPositionUpdateTime` 进度确认交接。旧蓝牙只谎报 `PLAYING` 但进度静止时不会抢回；明确停止或会话销毁才清空并允许新来源立即进入。
+4. WebView 继续按同一录音代际保留暂停歌词。新增 / 扩展纯规则测试覆盖公开服务准入与上限、蓝牙画像与路由门槛、连接超时 / 一次重试 / 断开、冷启动恢复、静止旧蓝牙、暂停保留、真实进度交接、语音排除和销毁替换。媒体定向测试 `51` 项通过；完整 `testDebugUnitTest` 共 `336` 项通过、`2` 项既有公网测试跳过，`assembleDebug` 通过。歌词来源、缓存、窗口避让和商业主链未改动。
+5. 已按用户授权卸载正式包 `com.ninepointnine.desktoplyrics`，安装 Debug 包 `com.ninepointnine.desktoplyrics.test`，版本为 `1.0.8-icar03-test`（versionCode `122`），并恢复通知监听授权和悬浮窗 app-op。设置页与歌词服务启动成功；前台歌词服务、`MediaListenerService`、无障碍服务和两类表面租约均可发现，未发现应用致命日志。
+6. Android 9 目标车机代码 / 日志级专项 smoke 确认：安装前爱趣听 `MusicService` 的控制器数为 `0`，安装后为 `1`；公开注册表同时连接爱趣听、本机音乐和 U 盘公开服务，最近稳定来源已保存为 `com.tencent.wecarflow/.player.MediaPlaybackService`。标准媒体 pause / play 指令下，爱趣听发布 `active=false + PAUSED` 时控制器继续保留，恢复后回到 `PLAYING`。本轮按用户要求未截图、未运行 instrumentation、未清数据或重启车机。
+7. 验证矩阵和产品基线已同步改为统一公开 Browser 恢复契约，不再把蓝牙专用桥接器作为主链入口；旧桥接器及其重复测试已删除，Android 标准 Browser intent query 已写入 Manifest。项目文档检查、Skill 检查和 `git diff --check` 均通过。
+
 ## 2026-09-04 03T 独立诊断 APK 与 03投屏能力取证
 
 1. 已完成 Debug-only 诊断入口和能力采集主链设计落地：独立诊断 Activity、设备/网络/mDNS/SSDP/端口/MediaCodec/Automotive/窗口采集、Framework 与 AndroidX MediaBrowser 采集，以及本地 JSON/TXT 报告写入。诊断 APK 不加载 03投屏 native 库、不启动投屏服务、不进入 Release 主链。

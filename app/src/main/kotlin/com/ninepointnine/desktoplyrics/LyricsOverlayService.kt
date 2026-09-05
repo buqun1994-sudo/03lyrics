@@ -93,36 +93,27 @@ class LyricsOverlayService : Service() {
     private val sessionManager by lazy { getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager }
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private val listenerComponent by lazy { ComponentName(this, MediaListenerService::class.java) }
-    private var bluetoothBrowserSession: BluetoothMediaBrowserSession? = null
-    private val bluetoothBrowserProfiles = linkedMapOf<MediaSession.Token, BluetoothMediaBrowserProfile>()
-    private var systemBluetoothProfile = BluetoothMediaBrowserProfile.ANDROID_9_A2DP
-    private val bluetoothBrowserBridge by lazy {
-        BluetoothMediaBrowserSessionBridge(
+    private var publicBrowserSessions: List<PublicMediaBrowserSession> = emptyList()
+    private var lastMediaSourceId: String? = null
+    private var coldMediaDiscoveryDeadlineMs = 0L
+    private val publicMediaBrowserRegistry by lazy {
+        PublicMediaBrowserSessionRegistry(
             context = this,
             mainHandler = mainHandler,
-            listener = object : BluetoothMediaBrowserSessionBridge.Listener {
-                override fun onSessionChanged(session: BluetoothMediaBrowserSession?) {
-                    bluetoothBrowserSession = session
-                    if (session == null) {
-                        bluetoothBrowserProfiles.clear()
-                    } else {
-                        bluetoothBrowserProfiles[session.controller.sessionToken] = session.profile
-                    }
-                    if (monitorStarted) scheduleSessionSelectionRefresh()
-                }
-
-                override fun onConnectionSuspended() {
+            listener = object : PublicMediaBrowserSessionRegistry.Listener {
+                override fun onSessionsChanged(sessions: List<PublicMediaBrowserSession>) {
+                    publicBrowserSessions = sessions
                     if (monitorStarted) scheduleSessionSelectionRefresh()
                 }
 
                 override fun onStateChanged(
-                    state: BluetoothMediaBrowserBridgeState,
-                    descriptor: BluetoothMediaBrowserServiceDescriptor?
+                    descriptor: PublicMediaBrowserServiceDescriptor,
+                    state: PublicMediaBrowserConnectionState
                 ) {
                     Log.i(
                         LOG_TAG,
-                        "Bluetooth Browser state=${state.name.lowercase()} " +
-                            "component=${descriptor?.componentName?.flattenToShortString() ?: "none"}"
+                        "Public Browser state=${state.name.lowercase()} " +
+                            "component=${descriptor.sourceKey}"
                     )
                 }
             }
@@ -199,7 +190,7 @@ class LyricsOverlayService : Service() {
     private var audioPlaybackMonitorStarted = false
     private var avrcpEventMonitorStarted = false
     private var currentController: MediaController? = null
-    private var hasMediaControllerSelection = false
+    private val mediaSessionArbiter = MediaSessionArbiter()
     private val observedControllerCallbacks = linkedMapOf<
         MediaSession.Token,
         Pair<MediaController, MediaController.Callback>
@@ -266,6 +257,9 @@ class LyricsOverlayService : Service() {
     private val sessionConvergenceRefreshRunnable = Runnable {
         if (monitorStarted) refreshActiveSessions()
     }
+    private val sessionArbitrationRefreshRunnable = Runnable {
+        if (monitorStarted) refreshActiveSessions()
+    }
     private val sessionRetryRunnable = Runnable {
         if (isRunning && !monitorStarted) startMediaMonitor()
     }
@@ -321,10 +315,8 @@ class LyricsOverlayService : Service() {
 
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
             if (!monitorStarted) return
-            // Drop a Browser binding as soon as the last Bluetooth output is
-            // gone; the debounced session refresh then performs normal
-            // controller selection and snapshot convergence.
-            if (!hasBluetoothBrowserRoute()) bluetoothBrowserBridge.disconnect()
+            // The debounced refresh removes only the Bluetooth Browser entry
+            // when its route disappears and keeps other public media sources.
             scheduleSessionSelectionRefresh()
         }
     }
@@ -2602,6 +2594,10 @@ class LyricsOverlayService : Service() {
         try {
             sessionManager.addOnActiveSessionsChangedListener(activeSessionsListener, listenerComponent)
             monitorStarted = true
+            lastMediaSourceId = prefs.getString(PREF_LAST_MEDIA_SOURCE_ID, null)
+            mediaSessionArbiter.restorePreferredSource(lastMediaSourceId)
+            coldMediaDiscoveryDeadlineMs = SystemClock.elapsedRealtime() +
+                PublicMediaBrowserRegistryPolicy.COLD_DISCOVERY_WINDOW_MS
             refreshActiveSessions()
             mainHandler.removeCallbacks(sessionRefreshRunnable)
             mainHandler.postDelayed(sessionRefreshRunnable, 750L)
@@ -2619,14 +2615,14 @@ class LyricsOverlayService : Service() {
         mainHandler.removeCallbacks(sessionRefreshRunnable)
         mainHandler.removeCallbacks(sessionSelectionRefreshRunnable)
         mainHandler.removeCallbacks(sessionConvergenceRefreshRunnable)
+        mainHandler.removeCallbacks(sessionArbitrationRefreshRunnable)
         sessionSelectionRefreshScheduled = false
         mainHandler.removeCallbacks(sessionRetryRunnable)
         val activeSessionsListenerRegistered = monitorStarted
         monitorStarted = false
-        bluetoothBrowserBridge.disconnect()
-        bluetoothBrowserSession = null
-        bluetoothBrowserProfiles.clear()
-        systemBluetoothProfile = BluetoothMediaBrowserProfile.ANDROID_9_A2DP
+        publicMediaBrowserRegistry.disconnect()
+        publicBrowserSessions = emptyList()
+        coldMediaDiscoveryDeadlineMs = 0L
         stopAudioRouteMonitor()
         stopAudioPlaybackMonitor()
         stopAvrcpEventMonitor()
@@ -2641,7 +2637,7 @@ class LyricsOverlayService : Service() {
         }
         observedControllerCallbacks.clear()
         currentController = null
-        hasMediaControllerSelection = false
+        mediaSessionArbiter.reset()
         resetBluetoothTimeline()
         standardTimelineTracker.reset()
         lastSessionDiagnostics = ""
@@ -2725,28 +2721,30 @@ class LyricsOverlayService : Service() {
             val systemControllers = systemControllersOverride
                 ?: sessionManager.getActiveSessions(listenerComponent).orEmpty()
             val systemPackages = systemControllers.map { it.packageName }
-            systemBluetoothProfile = if (systemPackages.contains(BLUETOOTH_PACKAGE)) {
-                bluetoothBrowserBridge.resolveProfile()
-                    ?: BluetoothMediaBrowserProfile.ANDROID_9_A2DP
-            } else {
-                BluetoothMediaBrowserProfile.ANDROID_9_A2DP
-            }
-            bluetoothBrowserBridge.refresh(
+            publicMediaBrowserRegistry.refresh(
+                eligiblePackages = systemPackages.toSet(),
+                preferredSourceId = lastMediaSourceId,
                 bluetoothRoutePresent = hasBluetoothBrowserRoute(),
-                systemControllerPackages = systemPackages
+                discoverAllSources = lastMediaSourceId == null &&
+                    SystemClock.elapsedRealtime() < coldMediaDiscoveryDeadlineMs
             )
+            val preferredBrowserDiscoveryPending = lastMediaSourceId?.let { sourceId ->
+                publicBrowserSessions.none { it.descriptor.sourceKey == sourceId } &&
+                    publicMediaBrowserRegistry.activeConnectionCount > 0
+            } == true
             val controllers = mergeMediaControllers(
                 systemControllers,
-                bluetoothBrowserSession?.controller
+                publicBrowserSessions.map(PublicMediaBrowserSession::controller),
+                currentController
             )
-            updateBluetoothBrowserProfiles(bluetoothBrowserSession)
-            selectController(controllers)
-            logBluetoothBridgeDiagnostics(systemControllers, controllers)
+            val activeTokens = LinkedHashSet<MediaSession.Token>().apply {
+                systemControllers.forEach { add(it.sessionToken) }
+            }
+            selectController(controllers, activeTokens, preferredBrowserDiscoveryPending)
+            logMediaSessionDiagnostics(systemControllers, controllers)
         } catch (error: SecurityException) {
-            bluetoothBrowserBridge.disconnect()
-            bluetoothBrowserSession = null
-            bluetoothBrowserProfiles.clear()
-            systemBluetoothProfile = BluetoothMediaBrowserProfile.ANDROID_9_A2DP
+            publicMediaBrowserRegistry.disconnect()
+            publicBrowserSessions = emptyList()
             pendingSnapshot = JSONObject()
                 .put("hasSession", false)
                 .put("permissionRequired", true)
@@ -2756,29 +2754,28 @@ class LyricsOverlayService : Service() {
 
     private fun mergeMediaControllers(
         systemControllers: List<MediaController>,
-        browserController: MediaController?
+        publicBrowserControllers: List<MediaController>,
+        retainedController: MediaController?
     ): List<MediaController> {
         val seen = LinkedHashSet<MediaSession.Token>()
         val merged = ArrayList<MediaController>(
-            systemControllers.size + if (browserController == null) 0 else 1
+            systemControllers.size +
+                publicBrowserControllers.size +
+                (if (retainedController == null) 0 else 1)
         )
         systemControllers.forEach { controller ->
             if (seen.add(controller.sessionToken)) merged += controller
         }
-        if (browserController != null && seen.add(browserController.sessionToken)) {
-            merged += browserController
+        publicBrowserControllers.forEach { controller ->
+            if (seen.add(controller.sessionToken)) merged += controller
+        }
+        if (retainedController != null && seen.add(retainedController.sessionToken)) {
+            merged += retainedController
         }
         return merged
     }
 
-    private fun updateBluetoothBrowserProfiles(session: BluetoothMediaBrowserSession?) {
-        bluetoothBrowserProfiles.clear()
-        session?.let {
-            bluetoothBrowserProfiles[it.controller.sessionToken] = it.profile
-        }
-    }
-
-    private fun logBluetoothBridgeDiagnostics(
+    private fun logMediaSessionDiagnostics(
         systemControllers: List<MediaController>,
         mergedControllers: List<MediaController>
     ) {
@@ -2786,10 +2783,7 @@ class LyricsOverlayService : Service() {
         val metadata = selected?.let(::normalizedRecordingMetadata)
         val durationUsable = metadata?.durationMs
             ?.takeIf { it >= MediaRecordingStateTracker.MINIMUM_QUERY_DURATION_MS } != null
-        val bridgeState = bluetoothBrowserBridge.currentState
         val rejectionReason = when {
-            selected == null && bridgeState == BluetoothMediaBrowserBridgeState.UNAVAILABLE ->
-                "browser_unavailable"
             selected == null -> "no_selection"
             metadata == null -> "metadata_missing"
             !metadata.hasTrack -> "track_missing"
@@ -2799,7 +2793,7 @@ class LyricsOverlayService : Service() {
         Log.i(
             LOG_TAG,
             "MediaSession bridge systemControllerCount=${systemControllers.size} " +
-                "browserBridgeState=${bridgeState.name.lowercase()} " +
+                "browserSessionCount=${publicBrowserSessions.size} " +
                 "mergedControllerCount=${mergedControllers.size} " +
                 "selectedPackage=${selected?.packageName ?: "none"} " +
                 "durationUnit=${selected?.let(::durationUnitForController)?.name?.lowercase() ?: "none"} " +
@@ -2815,50 +2809,66 @@ class LyricsOverlayService : Service() {
     }.getOrDefault(false)
 
     private fun isBluetoothBrowserRouteType(type: Int): Boolean =
-        BluetoothMediaBrowserBridgePolicy.isBluetoothOutputType(type, Build.VERSION.SDK_INT)
+        PublicMediaBrowserRegistryPolicy.isBluetoothOutputType(type, Build.VERSION.SDK_INT)
 
-    private fun selectController(controllers: List<MediaController>) {
+    private fun selectController(
+        controllers: List<MediaController>,
+        activeTokens: Set<MediaSession.Token>,
+        preferredBrowserDiscoveryPending: Boolean
+    ) {
         updateControllerCallbacks(controllers)
-        val currentIndex = currentController?.let { current ->
-            controllers.indexOfFirst { it.sessionToken == current.sessionToken }
-                .takeIf { it >= 0 }
-        }
         val candidates = controllers.mapIndexed { index, controller ->
             val playback = controller.playbackState
             val playbackInfo = runCatching { controller.playbackInfo }.getOrNull()
             MediaSessionCandidate(
                 index = index,
+                sessionId = mediaSessionId(controller),
+                sourceId = mediaSessionSourceId(controller),
                 packageName = controller.packageName,
                 playbackState = playback?.state,
                 audioUsage = playbackInfo?.audioAttributes?.usage,
                 audioContentType = playbackInfo?.audioAttributes?.contentType,
                 playbackActions = playback?.actions ?: 0L,
-                hasTitle = normalizedRecordingMetadata(controller)?.hasTrack == true
+                hasTitle = normalizedRecordingMetadata(controller)?.hasTrack == true,
+                activeInSystemList = controller.sessionToken in activeTokens,
+                reportedPositionMs = playback?.position ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                positionUpdateTimeMs = playback?.lastPositionUpdateTime ?: 0L
             )
         }
         logSessionCandidates(candidates)
-        val selectedIndex = MediaSessionSelectionPolicy.select(
+        val decision = mediaSessionArbiter.evaluate(
             candidates = candidates,
-            currentIndex = currentIndex,
-            hasCurrentSelection = hasMediaControllerSelection,
-            ownPackageName = packageName
+            nowMs = SystemClock.elapsedRealtime(),
+            ownPackageName = packageName,
+            discoveryPending = preferredBrowserDiscoveryPending
         )
-        val best = selectedIndex?.let(controllers::get)
+        val best = decision.sessionId?.let { id ->
+            controllers.firstOrNull { mediaSessionId(it) == id }
+        }
+        scheduleArbitrationRefresh(decision.recheckAfterMs)
 
-        if (best?.sessionToken == currentController?.sessionToken) {
+        if (decision.action == MediaSessionArbitrationAction.KEEP_CURRENT &&
+            best?.sessionToken == currentController?.sessionToken
+        ) {
+            best?.let(::rememberMediaSource)
             updateCurrentRecordingState(best)
+            scheduleSnapshot()
+            return
+        }
+
+        if (decision.action == MediaSessionArbitrationAction.KEEP_CURRENT && best == null) {
             scheduleSnapshot()
             return
         }
 
         Log.i(
             LOG_TAG,
-            "MediaSession selected package=${best?.packageName ?: "none"} " +
-                "index=${selectedIndex ?: -1} state=${best?.playbackState?.state ?: -1} " +
-                "candidateCount=${controllers.size}"
+            "MediaSession decision action=${decision.action.name.lowercase()} " +
+                "reason=${decision.reason} package=${best?.packageName ?: "none"} " +
+                "state=${best?.playbackState?.state ?: -1} candidateCount=${controllers.size}"
         )
         currentController = best
-        if (best != null) hasMediaControllerSelection = true
+        best?.let(::rememberMediaSource)
         resetBluetoothTimeline()
         standardTimelineTracker.reset()
         cachedArtworkKey = ""
@@ -2866,6 +2876,33 @@ class LyricsOverlayService : Service() {
         updateCurrentRecordingState(best)
         scheduleSessionConvergenceRefreshes()
         scheduleSnapshot()
+    }
+
+    private fun mediaSessionId(controller: MediaController): String =
+        controller.sessionToken.toString()
+
+    private fun mediaSessionSourceId(controller: MediaController): String =
+        publicBrowserSessions
+            .firstOrNull { it.controller.sessionToken == controller.sessionToken }
+            ?.descriptor
+            ?.sourceKey
+            ?: "${controller.packageName}/${controller.sessionToken}"
+
+    private fun rememberMediaSource(controller: MediaController) {
+        val sourceId = publicBrowserSessions
+            .firstOrNull { it.controller.sessionToken == controller.sessionToken }
+            ?.descriptor
+            ?.sourceKey
+        if (sourceId == null) {
+            if (lastMediaSourceId != null) {
+                lastMediaSourceId = null
+                prefs.edit().remove(PREF_LAST_MEDIA_SOURCE_ID).apply()
+            }
+            return
+        }
+        if (sourceId == lastMediaSourceId) return
+        lastMediaSourceId = sourceId
+        prefs.edit().putString(PREF_LAST_MEDIA_SOURCE_ID, sourceId).apply()
     }
 
     private fun scheduleSessionConvergenceRefreshes() {
@@ -2878,6 +2915,13 @@ class LyricsOverlayService : Service() {
             sessionConvergenceRefreshRunnable,
             SESSION_CONVERGENCE_FINAL_REFRESH_MS
         )
+    }
+
+    private fun scheduleArbitrationRefresh(delayMs: Long?) {
+        mainHandler.removeCallbacks(sessionArbitrationRefreshRunnable)
+        if (delayMs != null) {
+            mainHandler.postDelayed(sessionArbitrationRefreshRunnable, delayMs)
+        }
     }
 
     private fun updateCurrentRecordingState(controller: MediaController?) {
@@ -2928,7 +2972,10 @@ class LyricsOverlayService : Service() {
                 ":usage=${candidate.audioUsage ?: -1}" +
                 ":content=${candidate.audioContentType ?: -1}" +
                 ":actions=${candidate.playbackActions}" +
-                ":title=${candidate.hasTitle}"
+                ":title=${candidate.hasTitle}" +
+                ":active=${candidate.activeInSystemList}" +
+                ":position=${candidate.reportedPositionMs}" +
+                ":positionTime=${candidate.positionUpdateTimeMs}"
         }.ifBlank { "none" }
         if (signature == lastSessionDiagnostics) return
         lastSessionDiagnostics = signature
@@ -2979,8 +3026,12 @@ class LyricsOverlayService : Service() {
             }
 
             override fun onSessionDestroyed() {
-                if (bluetoothBrowserSession?.controller?.sessionToken == token) {
-                    bluetoothBrowserBridge.onSessionDestroyed()
+                publicMediaBrowserRegistry.onSessionDestroyed(token)
+                mediaSessionArbiter.forgetSession(token.toString())
+                if (currentController?.sessionToken == token) {
+                    currentController = null
+                    updateCurrentRecordingState(null)
+                    scheduleSnapshot()
                 }
                 if (monitorStarted) refreshActiveSessions()
             }
@@ -3335,8 +3386,11 @@ class LyricsOverlayService : Service() {
         if (controller.packageName != BLUETOOTH_PACKAGE) {
             MediaSessionDurationUnit.MILLISECONDS
         } else {
-            bluetoothBrowserProfiles[controller.sessionToken]?.durationUnit
-                ?: systemBluetoothProfile.durationUnit
+            publicBrowserSessions
+                .firstOrNull { it.controller.sessionToken == controller.sessionToken }
+                ?.descriptor
+                ?.durationUnit
+                ?: MediaSessionDurationUnit.MILLISECONDS
         }
 
     private fun artworkDataUrl(metadata: MediaMetadata?, key: String): String {
@@ -3479,6 +3533,7 @@ class LyricsOverlayService : Service() {
         const val EXTRA_SETTINGS_STATE = "settings_state"
         const val EXTRA_RUNNING = "running"
         const val PREFS_NAME = "lyrics_overlay_prefs"
+        private const val PREF_LAST_MEDIA_SOURCE_ID = "last_media_source_id_v1"
         const val PREF_BACKGROUND_MODE = "background_mode"
         const val PREF_FONT_SCALE_PERCENT = "font_scale_percent"
         const val PREF_TOPBAR_FONT_SCALE_PERCENT = "topbar_font_scale_percent_v1"

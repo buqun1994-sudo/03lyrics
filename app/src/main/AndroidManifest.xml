@@ -3,6 +3,9 @@
 
     <queries>
         <package android:name="com.android.bluetooth" />
+        <intent>
+            <action android:name="android.media.browse.MediaBrowserService" />
+        </intent>
     </queries>
 
     <uses-permission android:name="android.permission.INTERNET" />
