@@ -25,7 +25,6 @@ class SettingsBehaviorTest {
         )
 
         assertEquals(LyricsStartupOutcome.RUNNING, decision)
-        assertFalse(decision.clearsAutoStart)
     }
 
     @Test
@@ -37,7 +36,6 @@ class SettingsBehaviorTest {
         )
 
         assertEquals(LyricsStartupOutcome.RECOVERY, decision)
-        assertFalse(decision.clearsAutoStart)
     }
 
     @Test
@@ -49,7 +47,6 @@ class SettingsBehaviorTest {
         )
 
         assertEquals(LyricsStartupOutcome.RECOVERY, decision)
-        assertFalse(decision.clearsAutoStart)
     }
 
     @Test
@@ -66,7 +63,6 @@ class SettingsBehaviorTest {
             CommercialAccessDecision.Denied(CommercialAccessDenial.LICENSE_EXPIRED)
         )
         assertEquals(LyricsStartupOutcome.COMMERCIAL_RECOVERY, denied)
-        assertFalse(denied.clearsAutoStart)
     }
 
     @Test
@@ -80,7 +76,7 @@ class SettingsBehaviorTest {
     }
 
     @Test
-    fun `user stop clears auto start even when authorizations are missing`() {
+    fun `user stop keeps auto start under the settings switch`() {
         val decision = LyricsStartupPolicy.decide(
             action = LyricsOverlayService.ACTION_STOP,
             overlayAccess = false,
@@ -88,7 +84,6 @@ class SettingsBehaviorTest {
         )
 
         assertEquals(LyricsStartupOutcome.USER_STOPPED, decision)
-        assertTrue(decision.clearsAutoStart)
     }
 
     @Test
@@ -100,7 +95,6 @@ class SettingsBehaviorTest {
         )
 
         assertEquals(LyricsStartupOutcome.COMMERCIAL_RECOVERY, decision)
-        assertFalse(decision.clearsAutoStart)
     }
 
     @Test
@@ -520,7 +514,34 @@ class SettingsBehaviorTest {
         assertTrue(overlay.contains("desktop-all-shadow .line.active"))
         assertTrue(overlay.contains("desktop-blur"))
         assertFalse(service.contains("ACTION_CLEAR_ALL_LYRICS_CACHE"))
-        assertFalse(service.contains(".putBoolean(PREF_AUTO_START, true)"))
+    }
+
+    @Test
+    fun `auto start preference is written only by the settings switch`() {
+        var appDirectory = File(requireNotNull(System.getProperty("user.dir")))
+        while (!File(appDirectory, "src/main").isDirectory) {
+            appDirectory = requireNotNull(appDirectory.parentFile)
+        }
+        val service = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/LyricsOverlayService.kt"
+        ).readText()
+        val bootReceiver = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/BootReceiver.kt"
+        ).readText()
+        val mainActivity = File(
+            appDirectory,
+            "src/main/kotlin/com/ninepointnine/desktoplyrics/MainActivity.kt"
+        ).readText()
+        val autoStartWrite = Regex(
+            "\\.putBoolean\\(\\s*(?:LyricsOverlayService\\.)?PREF_AUTO_START"
+        )
+
+        assertFalse(autoStartWrite.containsMatchIn(service))
+        assertFalse(autoStartWrite.containsMatchIn(bootReceiver))
+        assertEquals(1, autoStartWrite.findAll(mainActivity).count())
+        assertTrue(mainActivity.contains("setAutoStartEnabled(enabled: Boolean)"))
     }
 
     @Test

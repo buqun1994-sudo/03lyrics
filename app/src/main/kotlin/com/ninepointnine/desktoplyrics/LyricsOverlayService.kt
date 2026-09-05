@@ -419,9 +419,6 @@ class LyricsOverlayService : Service() {
         )
 
         if (systemDecision == LyricsStartupOutcome.USER_STOPPED) {
-            if (systemDecision.clearsAutoStart) {
-                prefs.edit().putBoolean(PREF_AUTO_START, false).apply()
-            }
             clearPlaybackCheckpoint()
             invalidatePendingCommercialChecks()
             commercialRuntimeAccess.clear()
@@ -1095,18 +1092,13 @@ class LyricsOverlayService : Service() {
     }
 
     private fun restartRuntime() {
-        val preserveAutoStart = prefs.getBoolean(PREF_AUTO_START, AUTO_START_DEFAULT)
         releaseRuntimeResources()
         loadRuntimePreferences()
         startRuntime()
-        if (prefs.getBoolean(PREF_AUTO_START, AUTO_START_DEFAULT) != preserveAutoStart) {
-            prefs.edit().putBoolean(PREF_AUTO_START, preserveAutoStart).apply()
-            Log.w(LOG_TAG, "Restored auto-start intent after runtime restart")
-        }
         Log.i(
             LOG_TAG,
             "Lyrics overlay runtime restarted generation=${runtimeGeneration.get()} " +
-                "autoStart=$preserveAutoStart"
+                "autoStart=${prefs.getBoolean(PREF_AUTO_START, AUTO_START_DEFAULT)}"
         )
     }
 
@@ -3979,14 +3971,11 @@ internal object LyricsTopbarHeightPolicy {
     }
 }
 
-internal enum class LyricsStartupOutcome(
-    val logValue: String,
-    val clearsAutoStart: Boolean
-) {
-    RUNNING("running", false),
-    RECOVERY("recovery", false),
-    COMMERCIAL_RECOVERY("commercial_recovery", false),
-    USER_STOPPED("stopped", true)
+internal enum class LyricsStartupOutcome(val logValue: String) {
+    RUNNING("running"),
+    RECOVERY("recovery"),
+    COMMERCIAL_RECOVERY("commercial_recovery"),
+    USER_STOPPED("stopped")
 }
 
 internal object LyricsStartupPolicy {

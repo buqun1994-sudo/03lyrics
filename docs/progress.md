@@ -1,5 +1,11 @@
 # 项目进度
 
+## 2026-09-05 开机自启动意图归属修复（已完成本机验证，待车机在线复核）
+
+1. 已确认根因：`LyricsOverlayService` 处理 `ACTION_STOP` 时曾把 `PREF_AUTO_START` 写为 `false`，导致用户关闭当前“悬浮歌词服务”后，下一次车机上电被 `BootReceiver` 视为关闭自启动；运行态重启也存在多余的偏好回写。
+2. 已完成根因级修复：服务停止和运行态重启不再写入 `PREF_AUTO_START`，`LyricsStartupOutcome` 不再暴露服务可清除自启动的能力；开机自启动持久化写入收敛到 `MainActivity` 的设置页开关，`BootReceiver` 只读取该值。
+3. 已补充 `SettingsBehaviorTest` 源码契约，覆盖用户停止保持自启动意图、服务和开机接收器无 `PREF_AUTO_START` 写入以及设置页唯一写入点；产品基线、架构总纲、验证矩阵和代码规则已同步为“仅设置页开关可控制”。`testDebugUnitTest`、`assembleDebug`、项目文档检查、Skill 检查和 `git diff --check` 均通过。已按默认流程尝试保留数据覆盖安装与最小 smoke，但目标车机 `192.168.0.203:5555` 不在 ADB 列表，脚本在安装前退出，未改动车机；剩余最小车机复核为关闭“悬浮歌词服务”后确认开机自启动开关保持原值，并在开关开启时验证下一次开机或升级恢复。
+
 ## 2026-09-05 03T 网易云代理与 iCAR03 时间线修复（本机完成，待实车验证）
 
 1. 已根据 03T（`S56_HQX_03T`、Android 11 / SDK 30）诊断报告确认：内置网易云不以独立网易云包名发布，而是由 `com.tencent.wecarflow` 的公开 `MediaPlaybackService` 代理；同一包还公开 HDD / USB 服务。原始 `TITLE` 会在播放中轮换“作词 / 编曲 / 演唱 / 混音 / 监制”等制作信息，`DISPLAY_TITLE` / `DISPLAY_SUBTITLE` 才保持歌曲名和歌手。
@@ -216,7 +222,7 @@
 
 ## 2026-08-18 歌词阴影与开机自启动默认值
 
-1. 按用户要求，壁纸歌词“歌词阴影”和“开机自启动”的未保存偏好默认值均改为开启。新增 `LyricsOverlayService.AUTO_START_DEFAULT` 作为唯一默认 owner，设置页、`BootReceiver` 和运行态重启统一读取；用户已保存的关闭值以及 `ACTION_STOP` 写入的关闭意图不会被覆盖。
+1. 按用户要求，壁纸歌词“歌词阴影”和“开机自启动”的未保存偏好默认值均改为开启。新增 `LyricsOverlayService.AUTO_START_DEFAULT` 作为唯一默认 owner，设置页、`BootReceiver` 和运行态重启统一读取；用户已保存的关闭值按用户选择保留，服务停止不会覆盖该意图。
 2. `WALLPAPER_SHADOW_DEFAULT` 已改为 `true`，未保存阴影偏好时设置页和运行态均开启；已保存的关闭值仍按用户选择保留。
 3. 自动验证通过：`testDebugUnitTest assembleDebug`、`lintDebug`、`node scripts/check-project-docs.mjs`、`node scripts/check-skills.mjs` 和 `git diff --check` 均通过。
 4. 同签名 staging Debug APK 已重新构建并通过 signer 一致性检查；保留数据覆盖安装 `1.14-icar03`（versionCode `114`）和基础 smoke 通过。车机设置页位于前台、表面占用租约已发现、窗口避让无障碍与播放状态监听已绑定、歌词服务运行中，未发现应用致命日志。
@@ -443,7 +449,7 @@
 ## 2026-08-15 强制重启后的授权恢复与前台服务契约
 
 1. 根因修复：`LyricsOverlayService` 现在在 `onCreate()` 中先创建通知渠道并立即履行 `startForeground()`，所有授权判断、恢复退化、停止和运行资源创建均位于前台服务契约之后；Android 9 缺少悬浮授权时不再因提前 `stopSelf()` 触发 `RemoteServiceException`。
-2. 启动状态收敛：服务集中按双授权与动作判定 `RUNNING / RECOVERY / USER_STOPPED`。任一授权缺失时释放歌词运行资源、返回 `START_NOT_STICKY`、保留 `PREF_AUTO_START` 并留下常驻恢复通知；只有 `ACTION_STOP` 清除自动恢复意图，`ACTION_RESTART` 继续与主动停止严格分离。
+2. 启动状态收敛：服务集中按双授权与动作判定 `RUNNING / RECOVERY / USER_STOPPED`。任一授权缺失时释放歌词运行资源、返回 `START_NOT_STICKY`、保留 `PREF_AUTO_START` 并留下常驻恢复通知；服务停止不改写自动恢复意图，`ACTION_RESTART` 继续与主动停止严格分离。
 3. 恢复状态可观察：恢复通知明确区分悬浮权限、通知使用权或两者缺失，点击进入现有 `MainActivity`；授权有效的下一次合法启动清除恢复通知，并沿唯一 `LyricsOverlayService` 实例重建一套 MediaSession、车机监听、WebView 和 Overlay。启动日志只记录来源、两项授权和最终状态。
 4. 自动验证：`SettingsBehaviorTest` 共 `6` 项、`0` 失败，其中四条启动用例分别覆盖双授权有效、悬浮权限缺失、通知使用权缺失和用户主动停止；`lintDebug` 与 `assembleDebug` 通过。
 5. 车机缺权 smoke：安装后现场悬浮 AppOp 处于失效状态、通知使用权仍有效；模拟 `boot_completed` 来源并观察超过 `10` 秒，日志为 `overlayAccess=false / notificationAccess=true / outcome=recovery`，没有出现本轮新的 `RemoteServiceException`，`LyricsOverlayService` 正常结束，恢复通知存在，`PREF_AUTO_START=true`，`MediaListenerService` 持续由系统 live 绑定。随后又完成一次运行态撤权与恢复，结果一致。
