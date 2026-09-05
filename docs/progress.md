@@ -10,6 +10,12 @@
 6. Android 9 目标车机代码 / 日志级专项 smoke 确认：安装前爱趣听 `MusicService` 的控制器数为 `0`，安装后为 `1`；公开注册表同时连接爱趣听、本机音乐和 U 盘公开服务，最近稳定来源已保存为 `com.tencent.wecarflow/.player.MediaPlaybackService`。标准媒体 pause / play 指令下，爱趣听发布 `active=false + PAUSED` 时控制器继续保留，恢复后回到 `PLAYING`。本轮按用户要求未截图、未运行 instrumentation、未清数据或重启车机。
 7. 验证矩阵和产品基线已同步改为统一公开 Browser 恢复契约，不再把蓝牙专用桥接器作为主链入口；旧桥接器及其重复测试已删除，Android 标准 Browser intent query 已写入 Manifest。项目文档检查、Skill 检查和 `git diff --check` 均通过。
 
+## 2026-09-05 仪表屏目标模式诊断 APK（待停车后实机验证）
+
+1. 已在独立 `diagnostic` 变体加入手动目标模式入口：仅接受逻辑 `Display 1`、`PRESENTATION`、状态 `ON` 且物理模式为 `1920×384` 的副屏，并通过 `Presentation` 覆盖完整副屏绘制亮色背景和居中测试文字；再次点击、Activity 停止或销毁时立即关闭。
+2. 已完成本机构建：APK 为 `com.ninepointnine.desktoplyrics.diagnostic`，版本 `1.0.8-icar03-diagnostic`、`versionCode 122`，产物位于本机 `app/build/outputs/apk/diagnostic/app-diagnostic.apk`。`assembleDiagnostic`、项目文档检查、Skill 检查和 `git diff --check` 均通过。
+3. 初版小块测试已在车机留下“系统图层存在但肉眼不可见”的结果；按用户现场反馈已改为全屏强对比测试。当前待重新构建并覆盖安装后再次观察 Display 1，正式 Debug / staging / Release 主链未改动。
+
 ## 2026-09-04 03T 独立诊断 APK 与 03投屏能力取证
 
 1. 已完成 Debug-only 诊断入口和能力采集主链设计落地：独立诊断 Activity、设备/网络/mDNS/SSDP/端口/MediaCodec/Automotive/窗口采集、Framework 与 AndroidX MediaBrowser 采集，以及本地 JSON/TXT 报告写入。诊断 APK 不加载 03投屏 native 库、不启动投屏服务、不进入 Release 主链。

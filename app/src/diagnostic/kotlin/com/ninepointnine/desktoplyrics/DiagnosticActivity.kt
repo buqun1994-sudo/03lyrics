@@ -1,10 +1,15 @@
 package com.ninepointnine.desktoplyrics
 
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.hardware.display.DisplayManager
+import android.view.Display
 import android.view.Gravity
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -26,6 +31,7 @@ import org.json.JSONObject
 class DiagnosticActivity : AppCompatActivity() {
     private val scope = MainScope()
     private var job: Job? = null
+    private var clusterPresentation: ClusterPresentation? = null
     private lateinit var mediaAccessStatus: TextView
     private lateinit var status: TextView
 
@@ -40,9 +46,15 @@ class DiagnosticActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        dismissClusterPresentation()
         job?.cancel()
         scope.cancel()
         super.onDestroy()
+    }
+
+    override fun onStop() {
+        dismissClusterPresentation()
+        super.onStop()
     }
 
     private fun buildContent(): ScrollView {
@@ -69,6 +81,7 @@ class DiagnosticActivity : AppCompatActivity() {
         root.addView(actionButton("执行完整诊断") { runFullDiagnostic() }, fullWidth(58))
         root.addView(actionButton("启动 03投屏并采集启动证据") { launchCastAndCollect() }, fullWidth(58))
         root.addView(actionButton("开始 30 秒媒体动态采样（播放待测应用）") { runMediaSampling() }, fullWidth(58))
+        root.addView(actionButton("启动仪表屏目标模式") { toggleClusterPresentation() }, fullWidth(58))
         status = TextView(this).apply {
             text = "尚未开始。建议先在待测媒体应用中播放一首歌，再执行完整诊断；随后可做 30 秒动态采样。如需复现闪退，点击启动按钮。"
             textSize = 15f
@@ -79,6 +92,61 @@ class DiagnosticActivity : AppCompatActivity() {
         return ScrollView(this).apply {
             addView(root)
             isFillViewport = true
+        }
+    }
+
+    private fun toggleClusterPresentation() {
+        if (clusterPresentation != null) {
+            dismissClusterPresentation()
+            updateStatus("仪表屏目标模式已停止；未再向副屏发送内容。")
+            return
+        }
+
+        val display = findTargetDisplay()
+        if (display == null) {
+            updateStatus(
+                "未找到符合条件的仪表屏：需要 Display 1、PRESENTATION、1920×384 且处于开启状态。",
+            )
+            return
+        }
+
+        val presentation = ClusterPresentation(this, display)
+        presentation.setOnDismissListener {
+            if (clusterPresentation === presentation) {
+                clusterPresentation = null
+                updateStatus("仪表屏目标模式已结束；副屏内容已撤销。")
+            }
+        }
+        runCatching {
+            presentation.show()
+        }.onSuccess {
+            clusterPresentation = presentation
+            updateStatus(
+                "仪表屏目标模式已启动：Display 1 / HDMI / 1920×384 全屏测试。\n" +
+                    "亮色背景覆盖整块副屏；再次点击同一按钮立即停止。",
+            )
+        }.onFailure { error ->
+            presentation.dismiss()
+            updateStatus(
+                "仪表屏目标模式启动失败：${error.javaClass.simpleName}: ${error.message}",
+            )
+        }
+    }
+
+    private fun dismissClusterPresentation() {
+        clusterPresentation?.dismiss()
+        clusterPresentation = null
+    }
+
+    private fun findTargetDisplay(): Display? {
+        val manager = getSystemService(DisplayManager::class.java) ?: return null
+        return manager.getDisplays().firstOrNull { display ->
+            val mode = display.mode
+            display.displayId == TARGET_DISPLAY_ID &&
+                display.state == Display.STATE_ON &&
+                display.flags and Display.FLAG_PRESENTATION != 0 &&
+                mode.physicalWidth == TARGET_DISPLAY_WIDTH &&
+                mode.physicalHeight == TARGET_DISPLAY_HEIGHT
         }
     }
 
@@ -219,4 +287,59 @@ class DiagnosticActivity : AppCompatActivity() {
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height).apply {
             bottomMargin = 12
         }
+
+    private class ClusterPresentation(
+        context: DiagnosticActivity,
+        display: Display,
+    ) : android.app.Presentation(context, display) {
+        override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+
+            val label = TextView(context).apply {
+                text = "03歌词仪表全屏测试\nDISPLAY 1 · HDMI · 1920×384"
+                textSize = 44f
+                gravity = Gravity.CENTER
+                setTextColor(Color.BLACK)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            }
+
+            val root = FrameLayout(context).apply {
+                setBackgroundColor(TEST_BACKGROUND_COLOR)
+                addView(
+                    label,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+            }
+            setContentView(root)
+            window?.apply {
+                setBackgroundDrawable(ColorDrawable(TEST_BACKGROUND_COLOR))
+                clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                addFlags(
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                )
+                attributes = attributes.apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    x = 0
+                    y = 0
+                    dimAmount = 0f
+                }
+            }
+        }
+
+        override fun onStart() {
+            super.onStart()
+            window?.setLayout(TARGET_DISPLAY_WIDTH, TARGET_DISPLAY_HEIGHT)
+        }
+    }
+
+    private companion object {
+        const val TARGET_DISPLAY_ID = 1
+        const val TARGET_DISPLAY_WIDTH = 1920
+        const val TARGET_DISPLAY_HEIGHT = 384
+        const val TEST_BACKGROUND_COLOR = 0xff00dcff.toInt()
+    }
 }

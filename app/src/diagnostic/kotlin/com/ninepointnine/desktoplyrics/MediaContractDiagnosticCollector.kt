@@ -196,12 +196,12 @@ internal class MediaContractDiagnosticCollector(
 
     private fun browserServices(): JSONArray = JSONArray().also { array ->
         runCatching {
-            BluetoothMediaBrowserServiceResolver.discover(context.packageManager)
+            PublicMediaBrowserServiceResolver.discover(context.packageManager, emptySet())
+                .filter { it.packageName == PublicMediaBrowserServiceResolver.BLUETOOTH_PACKAGE }
                 .forEach { descriptor ->
                     array.put(JSONObject()
                         .put("component", descriptor.componentName.flattenToShortString())
-                        .put("profile", descriptor.profile.name)
-                        .put("durationUnitUsedByApp", descriptor.profile.durationUnit.name))
+                        .put("durationUnitUsedByApp", descriptor.durationUnit.name))
                 }
         }.onFailure { array.put(JSONObject().put("error", errorSummary(it))) }
     }
@@ -211,7 +211,7 @@ internal class MediaContractDiagnosticCollector(
         val outputs = JSONArray()
         var bluetooth = false
         audio.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).forEach { device ->
-            val isBluetooth = BluetoothMediaBrowserBridgePolicy.isBluetoothOutputType(
+            val isBluetooth = PublicMediaBrowserRegistryPolicy.isBluetoothOutputType(
                 device.type,
                 Build.VERSION.SDK_INT,
             )
@@ -229,7 +229,7 @@ internal class MediaContractDiagnosticCollector(
     private fun publicBrowserDescriptors(): List<PublicBrowserDescriptor> = runCatching {
         @Suppress("DEPRECATION")
         context.packageManager.queryIntentServices(
-            Intent(BluetoothMediaBrowserServiceResolver.ACTION),
+            Intent(PublicMediaBrowserServiceResolver.ACTION),
             PackageManager.GET_META_DATA,
         ).mapNotNull { resolvePublicBrowserDescriptor(it.serviceInfo) }
     }.getOrDefault(emptyList())
@@ -486,12 +486,12 @@ internal class MediaContractDiagnosticCollector(
     }
 
     private fun durationUnitFor(packageName: String): MediaSessionDurationUnit =
-        if (packageName != BluetoothMediaBrowserServiceResolver.BLUETOOTH_PACKAGE) {
+        if (packageName != PublicMediaBrowserServiceResolver.BLUETOOTH_PACKAGE) {
             MediaSessionDurationUnit.MILLISECONDS
         } else if (Build.VERSION.SDK_INT >= 29) {
-            BluetoothMediaBrowserProfile.ANDROID_10_PLUS.durationUnit
+            MediaSessionDurationUnit.SECONDS
         } else {
-            BluetoothMediaBrowserProfile.ANDROID_9_A2DP.durationUnit
+            MediaSessionDurationUnit.MILLISECONDS
         }
 
     private fun playbackStateName(value: Int?): String = when (value) {
