@@ -7,6 +7,40 @@ import org.junit.Test
 
 class MediaSessionMetadataPolicyTest {
     @Test
+    fun `public media id remains opaque while later availability does not restart a query`() {
+        val incoming = MediaSessionMetadataPolicy.normalize(
+            MediaSessionMetadataFields(title = "Song", artist = "Artist", durationMs = 180_000L, mediaId = "Item/A-42")
+        )
+        assertEquals("Item/A-42", incoming.mediaId)
+        val tracker = MediaRecordingStateTracker()
+        val first = requireNotNull(tracker.update("source", incoming.copy(mediaId = "")))
+        val enriched = requireNotNull(tracker.update("source", incoming))
+        assertEquals(first.recordingGeneration, enriched.recordingGeneration)
+        assertEquals(first.queryRevision, enriched.queryRevision)
+        assertFalse(enriched.queryChanged)
+        val partial = requireNotNull(tracker.update("source", incoming.copy(mediaId = "", durationMs = 0L)))
+        assertEquals(incoming, partial.metadata)
+    }
+
+    @Test
+    fun `different public ids separate recordings even when all display fields agree`() {
+        val tracker = MediaRecordingStateTracker()
+        val first = requireNotNull(tracker.update("source", MediaRecordingMetadata("Song", "Artist", "Album", 180_000L, "item/A")))
+        val second = requireNotNull(tracker.update("source", first.metadata.copy(mediaId = "item/a")))
+        assertTrue(second.recordingChanged)
+        assertEquals(first.recordingGeneration + 1L, second.recordingGeneration)
+        assertEquals(first.queryRevision + 1L, second.queryRevision)
+    }
+
+    @Test
+    fun `public id equality cannot erase a concrete recording field conflict`() {
+        val tracker = MediaRecordingStateTracker()
+        val first = requireNotNull(tracker.update("source", MediaRecordingMetadata("Song", "Artist", "Album", 180_000L, "item/A")))
+        val second = requireNotNull(tracker.update("source", first.metadata.copy(track = "Song (Live)")))
+        assertTrue(second.recordingChanged)
+    }
+
+    @Test
     fun `standard duration remains milliseconds by default`() {
         val metadata = MediaSessionMetadataPolicy.normalize(
             MediaSessionMetadataFields(title = "Song", artist = "Artist", durationMs = 214_000L)

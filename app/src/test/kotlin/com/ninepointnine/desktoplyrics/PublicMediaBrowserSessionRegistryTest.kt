@@ -12,6 +12,20 @@ import org.junit.Test
 
 class PublicMediaBrowserSessionRegistryTest {
     @Test
+    fun `discovery remains open until arbitration selects a source`() {
+        assertTrue(
+            PublicMediaBrowserRegistryPolicy.shouldDiscoverAllSources(
+                currentControllerPresent = false
+            )
+        )
+        assertFalse(
+            PublicMediaBrowserRegistryPolicy.shouldDiscoverAllSources(
+                currentControllerPresent = true
+            )
+        )
+    }
+
+    @Test
     fun `resolver accepts exported standard services without a player allowlist`() {
         val aqt = ServiceInfo().apply {
             packageName = "com.tencent.wecarflow"
@@ -49,6 +63,30 @@ class PublicMediaBrowserSessionRegistryTest {
 
         assertEquals(PublicMediaBrowserServiceResolver.MAX_SERVICES, selected.size)
         assertEquals(descriptors.take(8), selected)
+    }
+
+    @Test
+    fun `discovery keeps the complete public inventory before allocating connections`() {
+        val services = (0 until 10).map { index ->
+            ServiceInfo().apply {
+                packageName = "com.example.player$index"
+                name = "$packageName.MusicService"
+                exported = true
+            }
+        }
+        val privateService = ServiceInfo().apply {
+            packageName = "com.example.private"
+            name = "$packageName.MusicService"
+            exported = false
+        }
+
+        val inventory = PublicMediaBrowserServiceResolver.resolveServices(
+            services + services.first() + privateService + null
+        )
+
+        assertEquals(10, inventory.size)
+        assertEquals(services.last().packageName, inventory.last().packageName)
+        assertEquals(8, PublicMediaBrowserServiceResolver.select(inventory).size)
     }
 
     @Test
@@ -160,6 +198,60 @@ class PublicMediaBrowserSessionRegistryTest {
 
         assertEquals(setOf(aqt, bluetooth, podcast), clients.keys)
         assertTrue(clients.values.all { it.connectCount == 1 })
+    }
+
+    @Test
+    fun `connection budget preserves preferred and active sources beyond the first eight`() {
+        val clients = linkedMapOf<String, FakeClient>()
+        val others = (0 until 8).map { descriptor("com.example.player$it", "MusicService") }
+        val online = descriptor("com.tencent.wecarflow", "com.tencent.wecarflow.player.MediaPlaybackService")
+        val bluetooth = descriptor("com.android.bluetooth", "com.android.bluetooth.avrcpcontroller.BluetoothMediaBrowserService")
+        val registry = PublicMediaBrowserSessionRegistry(
+            context = ContextWrapper(null),
+            mainHandler = Handler(),
+            listener = RecordingListener(),
+            serviceResolver = {
+                PublicMediaBrowserServiceResolver.resolveServices(
+                    (others + online + bluetooth).map { descriptor ->
+                        ServiceInfo().apply {
+                            packageName = descriptor.packageName
+                            name = descriptor.serviceName
+                            exported = true
+                        }
+                    }
+                )
+            },
+            clientFactory = PublicMediaBrowserClientFactory { _, descriptor, callback ->
+                FakeClient(callback).also { clients[descriptor.sourceKey] = it }
+            },
+            scheduler = FakeScheduler()
+        )
+
+        registry.refresh(
+            eligiblePackages = setOf(online.packageName),
+            preferredSourceId = bluetooth.sourceKey,
+            bluetoothRoutePresent = false,
+            discoverAllSources = true
+        )
+
+        assertEquals(8, registry.activeConnectionCount)
+        assertTrue(online.sourceKey in clients)
+        assertTrue(bluetooth.sourceKey in clients)
+        assertEquals(listOf(bluetooth.sourceKey, online.sourceKey), clients.keys.take(2))
+
+        registry.refresh(
+            eligiblePackages = setOf(online.packageName),
+            preferredSourceId = bluetooth.sourceKey,
+            bluetoothRoutePresent = false,
+            discoverAllSources = false
+        )
+
+        assertEquals(2, registry.activeConnectionCount)
+        assertEquals(0, clients.getValue(online.sourceKey).disconnectCount)
+        assertEquals(0, clients.getValue(bluetooth.sourceKey).disconnectCount)
+        assertTrue(clients.values.all { it.connectCount == 1 })
+        val otherKeys = others.map { it.sourceKey }.toSet()
+        assertTrue(clients.filterKeys { it in otherKeys }.values.all { it.disconnectCount == 1 })
     }
 
     @Test

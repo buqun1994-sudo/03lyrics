@@ -76,9 +76,10 @@ class LyricsOverlayTimingInstrumentationTest {
             """
             window.LobstaOverlay.updatePlayback({
               hasSession:true, track:'Timing Test', artist:'Test Artist', album:'',
+              recordingGeneration:1, queryRevision:1,
               state:'playing', positionMs:0, durationMs:30000, speed:1, timelineReady:true
             });
-            window.LobstaOverlay.receiveLyrics(1, {
+            window.LobstaOverlay.receiveLyrics(1, 1, {
               lyrics:${JSONObject.quote(lyrics)}, duration:30000
             });
             true
@@ -107,9 +108,10 @@ class LyricsOverlayTimingInstrumentationTest {
             """
             window.LobstaOverlay.updatePlayback({
               hasSession:true, track:'Timing Test', artist:'Test Artist', album:'',
+              recordingGeneration:1, queryRevision:1,
               state:'playing', positionMs:0, durationMs:30000, speed:1, timelineReady:true
             });
-            window.LobstaOverlay.receiveLyrics(1, {
+            window.LobstaOverlay.receiveLyrics(1, 1, {
               lyrics:${JSONObject.quote(lyrics)}, duration:30000
             });
             true
@@ -205,9 +207,10 @@ class LyricsOverlayTimingInstrumentationTest {
             });
             window.LobstaOverlay.updatePlayback({
               hasSession:true, track:'Desktop Motion Test', artist:'Test Artist', album:'',
+              recordingGeneration:1, queryRevision:1,
               state:'playing', positionMs:0, durationMs:30000, speed:1, timelineReady:true
             });
-            window.LobstaOverlay.receiveLyrics(1, {
+            window.LobstaOverlay.receiveLyrics(1, 1, {
               lyrics:${JSONObject.quote(lyrics)},
               translatedLyrics:${JSONObject.quote(translations)},
               duration:30000
@@ -296,6 +299,7 @@ class LyricsOverlayTimingInstrumentationTest {
             """
             window.LobstaOverlay.updatePlayback({
               hasSession:true, track:'Timing Test', artist:'Test Artist', album:'',
+              recordingGeneration:1, queryRevision:1,
               state:'playing', positionMs:$positionMs, durationMs:30000, speed:$speed, timelineReady:true
             });
             true
@@ -327,6 +331,7 @@ class LyricsOverlayTimingInstrumentationTest {
                   """
                   window.LobstaOverlay.updatePlayback({
                     hasSession:true, track:'Desktop Motion Test', artist:'Test Artist', album:'',
+                    recordingGeneration:1, queryRevision:1,
                     state:'playing', positionMs:$it, durationMs:30000, speed:1, timelineReady:true
                   });
                   """.trimIndent()

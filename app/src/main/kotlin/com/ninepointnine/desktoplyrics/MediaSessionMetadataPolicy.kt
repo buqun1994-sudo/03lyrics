@@ -28,14 +28,16 @@ internal data class MediaSessionMetadataFields(
     val durationMs: Long = 0L,
     val transport: MediaSessionTransport = MediaSessionTransport.STANDARD,
     val durationUnit: MediaSessionDurationUnit = MediaSessionDurationUnit.MILLISECONDS,
-    val reportedPositionMs: Long = -1L
+    val reportedPositionMs: Long = -1L,
+    val mediaId: String = ""
 )
 
 internal data class MediaRecordingMetadata(
     val track: String,
     val artist: String,
     val album: String,
-    val durationMs: Long
+    val durationMs: Long,
+    val mediaId: String = ""
 ) {
     val hasTrack: Boolean get() = track.isNotBlank()
 }
@@ -71,7 +73,8 @@ internal object MediaSessionMetadataPolicy {
                 rawDuration = fields.durationMs,
                 unit = fields.durationUnit,
                 reportedPositionMs = fields.reportedPositionMs
-            )
+            ),
+            mediaId = fields.mediaId.takeIf(String::isNotBlank).orEmpty()
         )
 
     private fun normalizeDuration(
@@ -177,6 +180,9 @@ internal class MediaRecordingStateTracker(
         current: MediaRecordingMetadata,
         incoming: MediaRecordingMetadata
     ): Boolean {
+        if (current.mediaId.isNotBlank() && incoming.mediaId.isNotBlank() &&
+            current.mediaId != incoming.mediaId
+        ) return true
         if (normalizeText(current.track) != normalizeText(incoming.track)) return true
         if (conflicts(current.artist, incoming.artist)) return true
         return conflicts(current.album, incoming.album)
@@ -196,7 +202,8 @@ internal class MediaRecordingStateTracker(
             incoming.durationMs
         } else {
             current.durationMs
-        }
+        },
+        mediaId = incoming.mediaId.ifBlank { current.mediaId }
     )
 
     private fun queryMaterialChanged(

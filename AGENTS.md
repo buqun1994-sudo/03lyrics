@@ -35,16 +35,19 @@
 ## 4. 架构主链
 
 1. `MainActivity` 只承接用户设置和向悬浮服务发送动作。
-2. `LyricsOverlayService` 是运行态总协调者，负责 MediaSession、前台服务、窗口生命周期、车机表面切换和 WebView 桥接。
-3. `LyricsResolutionCoordinator` 只保留最新歌词请求，负责取消旧请求并仅对瞬时失败退避重试一次。
-4. `LyricsSearchPlanner` 负责有上限的来源无关搜索计划；`LyricsResolutionSession` 负责每来源独立推进、完成顺序、正文通道和失败诊断；`DirectLyricsRepository` 只负责装配、取消、关闭与封面查询。
-5. `PublicLyricsSources` 只负责外部协议解析和可断开的 HTTP 访问，不自行决定搜索变体或候选准入。
-6. `RecordingIdentity` 负责录音身份归一；`RecordingEvidence` 输出带原因的四级字段证据；`LyricsCandidateSelector` 负责显式准入、排序和入选证明，不让排序分值充当安全门槛。
-7. `LyricsCache` 负责本地歌词缓存与淘汰，并携带当前匹配策略可重放的入选证明；不把缓存策略复制到服务层。
-8. `IcarDisplayStateMonitor` 只读观察已验证的公开系统状态，不写车辆状态，不连接 CAN、无障碍或猜测的私有接口。
-9. `IcarDockAccessibilityService` 只读观察原厂 Launcher 的 SR 把手与 Dock 窗口边界，不读取文字、不执行节点动作或手势；`IcarWindowAvoidancePolicy` 统一拥有空调隐藏、按壁纸歌词实际位置选择 Dock 裁剪、SR 早期避让和未知状态保守退化规则。
-10. `BootReceiver` 只在用户已开启自动恢复时重启歌词服务。
-11. 跨两个以上调用点的规则必须回到上述 owner，不在 UI、广播接收器或临时分支中复制第二套状态机。
+2. `LyricsOverlayService` 负责运行资源装配、前台服务、窗口生命周期、车机表面切换和唯一 WebView 投递；同一投递先提交播放身份再提交对应歌词，不在服务层复制缓存或歌词请求状态机。
+3. `PublicMediaBrowserSessionRegistry` 补齐公开 Browser 会话，`MediaSessionArbiter` 统一选择可恢复来源；`MediaPlaybackAdapter` 经 `MediaRecordingFactsStore` 补齐同来源、同公开歌曲 ID、同归一字段下已观察的时长，再交给录音 tracker 与唯一 `MediaSessionTimelineTracker`。控制器 Token 不作为录音身份；初始化缺时长的零位置不能成为进度证据，标准位置、已验证 AVRCP 和检查点只进入同一条时间线。
+4. `LyricsPlaybackStore` 统一拥有当前录音的自动解析、人工搜索 / 选择、恢复自动和缓存动作；主线程发布不可变歌词 / 缓存快照，IO 缓存操作串行执行。设置页和 WebView 消费同一份快照，不分别判断当前缓存。
+5. `LyricsResolutionCoordinator` 只保留最新歌词请求，负责取消旧请求并仅对瞬时失败退避重试一次。
+6. `LyricsSearchPlanner` 负责有上限的来源无关搜索计划；`LyricsResolutionSession` 负责每来源独立推进、完成顺序、正文通道和失败诊断；`DirectLyricsRepository` 只负责装配、取消、关闭与封面查询。
+7. `PublicLyricsSources` 只负责外部协议解析和可断开的 HTTP 访问，不自行决定搜索变体或候选准入。
+8. `RecordingIdentity` 负责录音身份归一；`RecordingEvidence` 输出带原因的四级字段证据；`LyricsCandidateSelector` 负责显式准入、排序和入选证明，不让排序分值充当安全门槛。
+9. `LyricsCache` 实现 `LyricsPlaybackCache`，负责本地缓存、完整入选证明、人工优先和淘汰；数据库升级可以清理无法证明的自动条目，必须保留人工记录。
+10. `lyrics_overlay.html` 只负责呈现。正在播放且已有匹配歌词时，未知进度先预览第一句；可信进度到达立即定位，预览不得推进时间或写成检查点。
+11. `IcarDisplayStateMonitor` 只读观察已验证的公开系统状态，不写车辆状态，不连接 CAN、无障碍或猜测的私有接口。
+12. `IcarDockAccessibilityService` 只读观察原厂 Launcher 的 SR 把手与 Dock 窗口边界，不读取文字、不执行节点动作或手势；`IcarWindowAvoidancePolicy` 统一拥有空调隐藏、按壁纸歌词实际位置选择 Dock 裁剪、SR 早期避让和未知状态保守退化规则。
+13. `BootReceiver` 只在用户已开启自动恢复时重启歌词服务。
+14. 跨两个以上调用点的规则必须回到上述 owner，不在 UI、广播接收器或临时分支中复制第二套状态机。
 
 ## 5. 目标设备与性能边界
 

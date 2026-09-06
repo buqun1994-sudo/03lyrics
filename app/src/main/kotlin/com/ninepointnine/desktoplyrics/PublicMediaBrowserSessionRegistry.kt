@@ -59,10 +59,15 @@ internal object PublicMediaBrowserServiceResolver {
             @Suppress("DEPRECATION")
             packageManager.queryIntentServices(Intent(ACTION), 0)
         }.getOrElse { return emptyList() }
-        return select(
-            services.mapNotNull { resolve(it.serviceInfo, excludedPackages) }
-        )
+        return resolveServices(services.map { it.serviceInfo }, excludedPackages)
     }
+
+    fun resolveServices(
+        serviceInfos: List<ServiceInfo?>,
+        excludedPackages: Set<String> = emptySet()
+    ): List<PublicMediaBrowserServiceDescriptor> = serviceInfos
+        .mapNotNull { resolve(it, excludedPackages) }
+        .distinctBy(PublicMediaBrowserServiceDescriptor::sourceKey)
 
     fun resolve(
         serviceInfo: ServiceInfo?,
@@ -82,9 +87,18 @@ internal object PublicMediaBrowserServiceResolver {
 
     fun select(
         descriptors: List<PublicMediaBrowserServiceDescriptor>,
-        limit: Int = MAX_SERVICES
+        limit: Int = MAX_SERVICES,
+        preferredSourceId: String? = null,
+        eligiblePackages: Set<String> = emptySet()
     ): List<PublicMediaBrowserServiceDescriptor> = descriptors
         .distinctBy(PublicMediaBrowserServiceDescriptor::sourceKey)
+        .sortedBy {
+            when {
+                it.sourceKey == preferredSourceId -> 0
+                it.packageName in eligiblePackages -> 1
+                else -> 2
+            }
+        }
         .take(limit.coerceAtLeast(0))
 
     fun durationUnitFor(
@@ -109,10 +123,18 @@ internal object PublicMediaBrowserRegistryPolicy {
     const val CONNECT_TIMEOUT_MS = 3_000L
     const val RETRY_DELAY_MS = 1_000L
     const val REPROBE_DELAY_MS = 30_000L
-    const val COLD_DISCOVERY_WINDOW_MS = 3_500L
+    const val COLD_DISCOVERY_WINDOW_MS = 30_000L
     const val MAX_RETRIES = 1
 
     fun shouldRetry(retryCount: Int): Boolean = retryCount < MAX_RETRIES
+
+    /**
+     * Empty Browser sessions are not an active source. Continue bounded
+     * discovery until arbitration has selected a recording.
+     */
+    fun shouldDiscoverAllSources(
+        currentControllerPresent: Boolean
+    ): Boolean = !currentControllerPresent
 
     fun shouldInclude(
         descriptor: PublicMediaBrowserServiceDescriptor,
@@ -247,8 +269,9 @@ internal class PublicMediaBrowserSessionRegistry(
                         bluetoothRoutePresent = bluetoothRoutePresent,
                         discoverAllSources = discoverAllSources
                     )
-                }
-                .sortedBy { if (it.sourceKey == preferredSourceId) 0 else 1 }
+                },
+            preferredSourceId = preferredSourceId,
+            eligiblePackages = eligiblePackages
         )
         val selectedSources = selected.mapTo(linkedSetOf()) { it.sourceKey }
 

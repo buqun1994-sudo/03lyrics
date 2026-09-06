@@ -6,6 +6,91 @@ import org.junit.Test
 
 class MediaSessionTimelineTrackerTest {
     @Test
+    fun `bluetooth repeated zero snapshot stays untrusted so checkpoint can restore`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker(nowElapsedRealtime = { now })
+
+        val first = tracker.update(
+            "track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L,
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        )
+        assertEquals(false, first.timelineReady)
+
+        now = 1_500L
+        val repeated = tracker.update(
+            "track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L,
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        )
+        assertEquals(false, repeated.timelineReady)
+
+        now = 2_000L
+        assertEquals(
+            90_000L,
+            tracker.restorePosition("track", 90_000L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)?.positionMs
+        )
+    }
+
+    @Test
+    fun `bluetooth avrcp event confirms resume and seek position`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker(nowElapsedRealtime = { now })
+        tracker.update(
+            "track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L,
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        )
+
+        now = 2_000L
+        tracker.onAvrcpPosition(123_000L, now)
+        val resumed = tracker.update(
+            "track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L,
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        )
+        assertEquals(true, resumed.timelineReady)
+        assertEquals(123_000L, resumed.positionMs)
+
+        now = 3_000L
+        tracker.onAvrcpPosition(35_000L, now)
+        assertEquals(
+            35_000L,
+            tracker.update(
+                "track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L,
+                MediaSessionTransport.BLUETOOTH_AVRCP
+            ).positionMs
+        )
+    }
+
+    @Test
+    fun `bluetooth restored checkpoint ignores stale controller positions until avrcp confirms`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker(nowElapsedRealtime = { now })
+        tracker.update(
+            "track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L,
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        )
+        assertEquals(
+            90_000L,
+            tracker.restorePosition("track", 90_000L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)?.positionMs
+        )
+
+        now = 2_000L
+        val stale = tracker.update(
+            "track", PlaybackState.STATE_PLAYING, 1_000L, 1f, 0L, 240_000L,
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        )
+        assertEquals(91_000L, stale.positionMs)
+
+        now = 3_000L
+        tracker.onAvrcpPosition(92_000L, now)
+        assertEquals(
+            92_000L,
+            tracker.update(
+                "track", PlaybackState.STATE_PLAYING, 1_000L, 1f, 0L, 240_000L,
+                MediaSessionTransport.BLUETOOTH_AVRCP
+            ).positionMs
+        )
+    }
+
+    @Test
     fun `initial unknown position keeps the timeline unavailable`() {
         var now = 1_000L
         val tracker = MediaSessionTimelineTracker { now }
@@ -362,6 +447,117 @@ class MediaSessionTimelineTrackerTest {
     }
 
     @Test
+    fun `repeated zero with fresh publisher timestamps cannot undo an avrcp seek`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, now, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        tracker.onAvrcpPosition(90_000L)
+        assertEquals(90_000L, tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, now, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).positionMs)
+        now += 1_000L
+        assertEquals(91_000L, tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, now, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).positionMs)
+        now += 1_000L
+        assertEquals(92_000L, tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, now, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).positionMs)
+    }
+
+    @Test
+    fun `controller positions older than avrcp evidence are ignored but a fresh sample is accepted`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        now = 2_000L
+        tracker.onAvrcpPosition(90_000L)
+        tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        now = 3_000L
+        assertEquals(91_000L, tracker.update("track", PlaybackState.STATE_PLAYING, 1_000L, 1f, 1_000L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).positionMs)
+        now = 4_000L
+        assertEquals(45_000L, tracker.update("track", PlaybackState.STATE_PLAYING, 45_000L, 1f, now, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).positionMs)
+    }
+
+    @Test
+    fun `avrcp position received before the first snapshot belongs to the explicit recording`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.onAvrcpPosition(34_000L, trackKey = "first")
+        now = 1_035L
+        val first = tracker.update("first", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        assertEquals(true, first.timelineReady)
+        assertEquals(34_035L, first.positionMs)
+    }
+
+    @Test
+    fun `old recording avrcp position is not consumed by a new recording`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("first", PlaybackState.STATE_PLAYING, 5_000L, 1f, now, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        tracker.onAvrcpPosition(40_000L)
+        now += 35L
+        val next = tracker.update("second", PlaybackState.STATE_PLAYING, 40_000L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        assertEquals(false, next.timelineReady)
+        assertEquals(0L, next.positionMs)
+    }
+
+    @Test
+    fun `future and expired avrcp events cannot create a timeline`() {
+        val now = 5_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.onAvrcpPosition(30_000L, now + 1L, "track")
+        assertEquals(false, tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).timelineReady)
+        tracker.onAvrcpPosition(30_000L, now - 1_501L, "track")
+        assertEquals(false, tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).timelineReady)
+    }
+
+    @Test
+    fun `avrcp pause freezes and a zero seek is valid evidence`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.onAvrcpPosition(34_000L, trackKey = "track")
+        tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        now = 2_000L
+        assertEquals(35_000L, tracker.update("track", PlaybackState.STATE_PAUSED, 0L, 0f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).positionMs)
+        now = 8_000L
+        assertEquals(35_000L, tracker.update("track", PlaybackState.STATE_PAUSED, 0L, 0f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP).positionMs)
+        tracker.onAvrcpPosition(0L)
+        val seek = tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L, MediaSessionTransport.BLUETOOTH_AVRCP)
+        assertEquals(true, seek.timelineReady)
+        assertEquals(0L, seek.positionMs)
+    }
+
+    @Test
+    fun `unknown positions never advance a provisional clock`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("track", PlaybackState.STATE_PLAYING, -1L, 1f, 0L, 240_000L)
+        now = 8_000L
+        val unknown = tracker.update("track", PlaybackState.STATE_PLAYING, -1L, 1f, 0L, 240_000L)
+        assertEquals(false, unknown.timelineReady)
+        assertEquals(0L, unknown.positionMs)
+        val ready = tracker.update("track", PlaybackState.STATE_PLAYING, 75_000L, 1f, now, 240_000L)
+        assertEquals(true, ready.timelineReady)
+        assertEquals(75_000L, ready.positionMs)
+    }
+
+    @Test
+    fun `replacement controller repeated stale frame does not become a seek on the second update`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        tracker.update("track", PlaybackState.STATE_PLAYING, 5_000L, 1f, 0L, 240_000L)
+        tracker.deferNextReportedPosition()
+        now = 2_000L
+        tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L)
+        now = 3_000L
+        assertEquals(7_000L, tracker.update("track", PlaybackState.STATE_PLAYING, 0L, 1f, 0L, 240_000L).positionMs)
+    }
+
+    @Test
+    fun `positions and extrapolation are clamped without overflow`() {
+        var now = 1_000L
+        val tracker = MediaSessionTimelineTracker { now }
+        assertEquals(200_000L, tracker.update("track", PlaybackState.STATE_PLAYING, Long.MAX_VALUE, Float.MAX_VALUE, 0L, 200_000L).positionMs)
+        now = 10_000L
+        assertEquals(200_000L, tracker.update("track", PlaybackState.STATE_PLAYING, Long.MAX_VALUE, Float.MAX_VALUE, 0L, 200_000L).positionMs)
+    }
+
+    @Test
     fun `checkpoint policy accepts same recording within duration tolerance`() {
         val checkpoint = MediaPlaybackCheckpoint(
             sourceId = "com.tencent.wecarflow",
@@ -397,6 +593,47 @@ class MediaSessionTimelineTrackerTest {
                 nowEpochMs = 1_000_000L + 60_000L
             )
         )
+    }
+
+    @Test
+    fun `checkpoint recovery does not treat missing recording fields as a match`() {
+        val checkpoint = MediaPlaybackCheckpoint("source", "Song", "Artist", "Album", 180_000L, 32_000L, 1_000_000L)
+        assertEquals(false, MediaPlaybackCheckpointPolicy.matches(checkpoint, "source", "Song", "", "Album", 180_000L, 1_000_001L))
+        assertEquals(false, MediaPlaybackCheckpointPolicy.matches(checkpoint, "source", "Song", "Artist", "", 180_000L, 1_000_001L))
+        assertEquals(false, MediaPlaybackCheckpointPolicy.matches(checkpoint, "source", "Song", "Artist", "Album", 0L, 1_000_001L))
+        assertEquals(false, MediaPlaybackCheckpointPolicy.isValid(checkpoint.copy(durationMs = 0L), 1_000_001L))
+    }
+
+    @Test
+    fun `checkpoint requires the same public id whenever either side has one`() {
+        val checkpoint = MediaPlaybackCheckpoint("source", "Song", "Artist", "Album", 180_000L, 32_000L, 1_000_000L, "item/A")
+        listOf("", "item/a", "itemA", "item/B").forEach { mediaId ->
+            assertEquals(false, MediaPlaybackCheckpointPolicy.matches(
+                checkpoint, "source", "Song", "Artist", "Album", 180_000L, 1_000_001L, mediaId
+            ))
+        }
+        assertEquals(false, MediaPlaybackCheckpointPolicy.matches(
+            checkpoint.copy(mediaId = ""), "source", "Song", "Artist", "Album", 180_000L, 1_000_001L, "item/A"
+        ))
+        assertEquals(true, MediaPlaybackCheckpointPolicy.matches(
+            checkpoint, "source", "Song", "Artist", "Album", 180_000L, 1_000_001L, "item/A"
+        ))
+    }
+
+    @Test
+    fun `checkpoint shares recording text normalization but keeps the source boundary`() {
+        val checkpoint = MediaPlaybackCheckpoint(
+            "source.package", "Song (Live)", "Artist A / Artist B", "Live Album", 180_000L, 32_000L, 1_000_000L
+        )
+        assertEquals(true, MediaPlaybackCheckpointPolicy.matches(
+            checkpoint, "source.package", "Song-Live", "Artist A/Artist B", "LIVE ALBUM", 180_000L, 1_000_001L
+        ))
+        assertEquals(false, MediaPlaybackCheckpointPolicy.matches(
+            checkpoint, "sourcepackage", "Song (Live)", "Artist A / Artist B", "Live Album", 180_000L, 1_000_001L
+        ))
+        assertEquals(false, MediaPlaybackCheckpointPolicy.matches(
+            checkpoint, "source.package", "Song", "Artist A / Artist B", "Live Album", 180_000L, 1_000_001L
+        ))
     }
 
     @Test

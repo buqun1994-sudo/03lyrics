@@ -3,7 +3,6 @@ package com.ninepointnine.desktoplyrics
 import android.media.session.PlaybackState
 import kotlin.math.max
 import kotlin.math.min
-import java.util.Locale
 
 internal data class MediaSessionTimeline(
     val positionMs: Long,
@@ -18,7 +17,8 @@ internal data class MediaPlaybackCheckpoint(
     val album: String,
     val durationMs: Long,
     val positionMs: Long,
-    val savedAtEpochMs: Long
+    val savedAtEpochMs: Long,
+    val mediaId: String = ""
 )
 
 /** Keeps restart recovery tied to one logical source and one recording. */
@@ -28,7 +28,9 @@ internal object MediaPlaybackCheckpointPolicy {
 
     fun isValid(checkpoint: MediaPlaybackCheckpoint, nowEpochMs: Long): Boolean {
         if (checkpoint.sourceId.isBlank() || checkpoint.track.isBlank()) return false
-        if (checkpoint.positionMs < 0L || checkpoint.durationMs < 0L) return false
+        if (checkpoint.positionMs < 0L ||
+            checkpoint.durationMs < MediaRecordingStateTracker.MINIMUM_QUERY_DURATION_MS
+        ) return false
         if (checkpoint.durationMs > 0L &&
             checkpoint.positionMs > checkpoint.durationMs + DURATION_TOLERANCE_MS
         ) return false
@@ -43,24 +45,26 @@ internal object MediaPlaybackCheckpointPolicy {
         artist: String,
         album: String,
         durationMs: Long,
-        nowEpochMs: Long
+        nowEpochMs: Long,
+        mediaId: String = ""
     ): Boolean {
         if (!isValid(checkpoint, nowEpochMs)) return false
-        if (!sameRequiredText(checkpoint.sourceId, sourceId)) return false
+        if (!checkpoint.sourceId.trim().equals(sourceId.trim(), ignoreCase = true)) return false
+        if (checkpoint.mediaId != mediaId &&
+            (checkpoint.mediaId.isNotBlank() || mediaId.isNotBlank())
+        ) return false
         if (!sameRequiredText(checkpoint.track, track)) return false
         if (!sameOptionalText(checkpoint.artist, artist)) return false
         if (!sameOptionalText(checkpoint.album, album)) return false
-        return checkpoint.durationMs <= 0L || durationMs <= 0L ||
+        return durationMs >= MediaRecordingStateTracker.MINIMUM_QUERY_DURATION_MS &&
             kotlin.math.abs(checkpoint.durationMs - durationMs) <= DURATION_TOLERANCE_MS
     }
 
     private fun sameRequiredText(first: String, second: String): Boolean =
-        normalize(first) == normalize(second) && normalize(first).isNotEmpty()
+        normalizeText(first) == normalizeText(second) && normalizeText(first).isNotEmpty()
 
     private fun sameOptionalText(first: String, second: String): Boolean =
-        first.isBlank() || second.isBlank() || normalize(first) == normalize(second)
-
-    private fun normalize(value: String): String = value.trim().lowercase(Locale.ROOT)
+        normalizeText(first) == normalizeText(second)
 }
 
 /**
@@ -82,6 +86,20 @@ internal class MediaSessionTimelineTracker(
     private var wasPlaying = false
     private var timelineReady = false
     private var deferNextReportedPosition = false
+    private data class AvrcpPosition(val trackKey: String, val positionMs: Long, val capturedAt: Long)
+    private var pendingAvrcpPosition: AvrcpPosition? = null
+    private var supersededReportedPositionMs: Long? = null
+    private var lastAvrcpCapturedAt: Long? = null
+    private var ignoreReportedUntilAvrcp = false
+
+    fun onAvrcpPosition(
+        positionMs: Long,
+        capturedAtRealtime: Long = nowElapsedRealtime(),
+        trackKey: String = this.trackKey
+    ) {
+        if (positionMs < 0L || trackKey.isBlank()) return
+        pendingAvrcpPosition = AvrcpPosition(trackKey, positionMs, capturedAtRealtime)
+    }
 
     fun update(
         trackKey: String,
@@ -89,7 +107,8 @@ internal class MediaSessionTimelineTracker(
         reportedPositionMs: Long,
         playbackSpeed: Float,
         publisherPositionTime: Long,
-        durationMs: Long
+        durationMs: Long,
+        transport: MediaSessionTransport = MediaSessionTransport.STANDARD
     ): MediaSessionTimeline {
         val now = nowElapsedRealtime()
         val hasReportedPosition = reportedPositionMs >= 0L
@@ -98,31 +117,44 @@ internal class MediaSessionTimelineTracker(
         val speed = effectiveSpeed(playing, playbackState, playbackSpeed)
         val validPublisherTime = publisherPositionTime
             .takeIf { it > 0L && it <= now }
+        val avrcpPosition = pendingAvrcpPosition?.takeIf {
+            transport == MediaSessionTransport.BLUETOOTH_AVRCP && it.trackKey == trackKey &&
+                now - it.capturedAt in 0L..AVRCP_EVENT_MAX_AGE_MS
+        }
+        pendingAvrcpPosition = null
 
         if (trackKey != this.trackKey) {
             val firstObservedTrack = !hasObservedTrack
             val trustedInitialPosition = hasReportedPosition &&
-                (firstObservedTrack || reported <= INITIAL_POSITION_TRUST_LIMIT_MS)
+                (firstObservedTrack || reported <= INITIAL_POSITION_TRUST_LIMIT_MS) &&
+                (transport != MediaSessionTransport.BLUETOOTH_AVRCP || reported > 0L)
             this.trackKey = trackKey
-            basePositionMs = if (trustedInitialPosition) reported else 0L
-            capturedAtElapsedRealtime = if (trustedInitialPosition) {
-                validPublisherTime ?: now
-            } else {
-                now
-            }
-            lastReportedPositionMs = if (trustedInitialPosition) reported else Long.MIN_VALUE
-            firstUntrustedPositionMs = if (trustedInitialPosition) Long.MIN_VALUE else reported
+            basePositionMs = clamp(avrcpPosition?.positionMs ?: if (trustedInitialPosition) reported else 0L, durationMs)
+            capturedAtElapsedRealtime = avrcpPosition?.capturedAt
+                ?: if (trustedInitialPosition) validPublisherTime ?: now else now
+            lastReportedPositionMs = if (hasReportedPosition) reported else Long.MIN_VALUE
+            firstUntrustedPositionMs = if (hasReportedPosition) reported else Long.MIN_VALUE
             lastObservedPublisherPositionTime = publisherPositionTime
             lastSpeed = speed
             wasPlaying = playing
-            timelineReady = trustedInitialPosition
+            timelineReady = trustedInitialPosition || avrcpPosition != null
             hasObservedTrack = true
             deferNextReportedPosition = false
+            supersededReportedPositionMs = if (avrcpPosition != null && hasReportedPosition) reported else null
+            lastAvrcpCapturedAt = avrcpPosition?.capturedAt
+            ignoreReportedUntilAvrcp = false
         } else {
             val currentPosition = positionAt(now)
             val deferPositionFrame = deferNextReportedPosition
             deferNextReportedPosition = false
-            val ignoreReportedPosition = deferPositionFrame && hasReportedPosition
+            if (deferPositionFrame && hasReportedPosition) supersededReportedPositionMs = reported
+            if (!deferPositionFrame && hasReportedPosition && reported != supersededReportedPositionMs) {
+                supersededReportedPositionMs = null
+            }
+            val ignoreReportedPosition = deferPositionFrame || ignoreReportedUntilAvrcp ||
+                reported == supersededReportedPositionMs ||
+                (transport == MediaSessionTransport.BLUETOOTH_AVRCP && lastAvrcpCapturedAt != null &&
+                    (validPublisherTime == null || validPublisherTime <= lastAvrcpCapturedAt!!))
             val reportedChanged = !ignoreReportedPosition &&
                 hasReportedPosition && reported != lastReportedPositionMs
             val publisherChanged = publisherPositionTime != lastObservedPublisherPositionTime
@@ -132,13 +164,23 @@ internal class MediaSessionTimelineTracker(
             val playbackModeChanged = playing != wasPlaying
             val speedChanged = playing && speed != lastSpeed
 
-            if (!timelineReady) {
-                val freshPosition = hasReportedPosition &&
-                    (reported <= INITIAL_POSITION_TRUST_LIMIT_MS ||
-                        (firstUntrustedPositionMs != Long.MIN_VALUE &&
-                            reported != firstUntrustedPositionMs))
+            if (avrcpPosition != null) {
+                basePositionMs = clamp(avrcpPosition.positionMs, durationMs)
+                capturedAtElapsedRealtime = avrcpPosition.capturedAt
+                timelineReady = true
+                supersededReportedPositionMs = if (hasReportedPosition) reported else null
+                lastAvrcpCapturedAt = avrcpPosition.capturedAt
+                ignoreReportedUntilAvrcp = false
+            } else if (!timelineReady) {
+                val freshPosition = !ignoreReportedPosition && hasReportedPosition && when (transport) {
+                    MediaSessionTransport.BLUETOOTH_AVRCP ->
+                        reported > 0L && reported != firstUntrustedPositionMs
+                    MediaSessionTransport.STANDARD ->
+                        reported <= INITIAL_POSITION_TRUST_LIMIT_MS ||
+                            reported != firstUntrustedPositionMs || usablePublisherChange
+                }
                 if (freshPosition) {
-                    basePositionMs = reported
+                    basePositionMs = clamp(reported, durationMs)
                     capturedAtElapsedRealtime = if (usablePublisherChange) {
                         validPublisherTime!!
                     } else {
@@ -146,15 +188,17 @@ internal class MediaSessionTimelineTracker(
                     }
                     timelineReady = true
                 }
-            } else if (reportedChanged || usablePublisherChange) {
-                basePositionMs = reported
+            } else if (reportedChanged ||
+                (usablePublisherChange && transport != MediaSessionTransport.BLUETOOTH_AVRCP)
+            ) {
+                basePositionMs = clamp(reported, durationMs)
                 capturedAtElapsedRealtime = if (usablePublisherChange) validPublisherTime!! else now
             } else if (playbackModeChanged || speedChanged) {
                 basePositionMs = currentPosition
                 capturedAtElapsedRealtime = now
             }
 
-            if (hasReportedPosition && timelineReady && !ignoreReportedPosition) {
+            if (hasReportedPosition) {
                 lastReportedPositionMs = reported
             }
             lastObservedPublisherPositionTime = publisherPositionTime
@@ -182,15 +226,17 @@ internal class MediaSessionTimelineTracker(
     fun restorePosition(
         trackKey: String,
         positionMs: Long,
-        durationMs: Long
+        durationMs: Long,
+        transport: MediaSessionTransport = MediaSessionTransport.STANDARD
     ): MediaSessionTimeline? {
         if (trackKey != this.trackKey || positionMs < 0L) return null
         val now = nowElapsedRealtime()
         basePositionMs = clamp(positionMs, durationMs)
         capturedAtElapsedRealtime = now
-        lastReportedPositionMs = basePositionMs
+        supersededReportedPositionMs = lastReportedPositionMs.takeIf { it >= 0L }
         deferNextReportedPosition = false
         timelineReady = true
+        ignoreReportedUntilAvrcp = transport == MediaSessionTransport.BLUETOOTH_AVRCP
         return MediaSessionTimeline(
             positionMs = clamp(positionAt(now), durationMs),
             speed = lastSpeed,
@@ -210,16 +256,21 @@ internal class MediaSessionTimelineTracker(
         wasPlaying = false
         timelineReady = false
         deferNextReportedPosition = false
+        pendingAvrcpPosition = null
+        supersededReportedPositionMs = null
+        lastAvrcpCapturedAt = null
+        ignoreReportedUntilAvrcp = false
     }
 
     private fun positionAt(now: Long): Long {
+        if (!timelineReady) return 0L
         if (!wasPlaying) return basePositionMs
         val elapsed = max(0L, now - capturedAtElapsedRealtime)
-        return max(0L, basePositionMs + (elapsed * lastSpeed).toLong())
+        return (basePositionMs.toDouble() + elapsed * lastSpeed).coerceAtLeast(0.0).toLong()
     }
 
     private fun clamp(position: Long, durationMs: Long): Long =
-        if (durationMs > 0L) min(position, durationMs) else position
+        if (durationMs > 0L) min(position.coerceAtLeast(0L), durationMs) else position.coerceAtLeast(0L)
 
     private fun isPlaying(state: Int?): Boolean = state == PlaybackState.STATE_PLAYING ||
         state == PlaybackState.STATE_FAST_FORWARDING ||
@@ -237,5 +288,6 @@ internal class MediaSessionTimelineTracker(
 
     private companion object {
         const val INITIAL_POSITION_TRUST_LIMIT_MS = 2_500L
+        const val AVRCP_EVENT_MAX_AGE_MS = 1_500L
     }
 }

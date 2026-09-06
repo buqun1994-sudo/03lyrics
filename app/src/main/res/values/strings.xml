@@ -64,6 +64,8 @@
     <string name="settings_cache_current">当前歌曲</string>
     <string name="settings_cache_no_track">当前没有可识别的歌曲</string>
     <string name="settings_cache_not_found">当前歌曲尚无歌词缓存</string>
+    <string name="settings_cache_loading">正在查找当前歌曲的歌词</string>
+    <string name="settings_cache_memory_only">歌词已加载，尚未缓存</string>
     <string name="settings_cache_source">来源：%1$s</string>
     <string name="settings_cache_version">版本：%1$s</string>
     <string name="settings_cache_details">%1$s · %2$s · 更新于 %3$s</string>

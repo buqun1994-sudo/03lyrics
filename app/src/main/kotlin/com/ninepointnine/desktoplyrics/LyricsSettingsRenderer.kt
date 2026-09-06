@@ -379,7 +379,11 @@ internal class LyricsSettingsRenderer(
             current == null -> {
                 cacheTrack.text = playback.track
                 cacheIdentity.text = identityLine(playback.artist, playback.album)
-                cacheSource.setText(R.string.settings_cache_not_found)
+                cacheSource.setText(when (state.availability) {
+                    LyricsAvailability.LOADING -> R.string.settings_cache_loading
+                    LyricsAvailability.ONLINE_ONLY -> R.string.settings_cache_memory_only
+                    else -> R.string.settings_cache_not_found
+                })
                 cacheSource.visibility = View.VISIBLE
                 cacheVersion.visibility = View.GONE
                 cacheDetails.visibility = View.GONE

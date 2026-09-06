@@ -438,10 +438,10 @@
     let desktopFocusRatio=.48;
     const playback = {
       hasSession:false, track:'', artist:'', album:'', state:'paused', positionMs:0,
-      durationMs:0, speed:0, timelineReady:true, receivedAt:performance.now(), key:'', lyrics:[], active:-1,
+      durationMs:0, speed:0, timelineReady:false, receivedAt:performance.now(), key:'', lyrics:[], active:-1,
       recordingGeneration:0, queryRevision:0,
       activeStarted:false,
-      cover:'', coverIsNative:false, requestId:0
+      cover:'', coverIsNative:false
     };
     let lyricAdvanceTimer=0,compactLineCount=2;
     let lyricsTranslationEnabled=true,resolvedTranslationAvailable=false;
@@ -590,10 +590,10 @@
         return;
       }
       if (!playback.timelineReady) {
-        // Keep the resolved lines ready, but do not expose a guessed first
-        // line until MediaSession provides a trustworthy position.
+        // Show a provisional first line so startup has immediate visual
+        // feedback; the first trusted timeline sample repositions it.
         pendingInitialReveal = true;
-        clearCompactLyric();
+        revealProvisionalFirstLine();
         return;
       }
       if (initial) {
@@ -602,6 +602,31 @@
         updateActiveLine(currentPosition(), true);
       }
       scheduleLyricAdvance();
+    }
+
+    function revealProvisionalFirstLine() {
+      const lines = playback.lyrics;
+      if (!lines.length) return;
+      ui.lyrics.classList.add('initial-positioning');
+      const nodes = ui.lyrics.children;
+      playback.active = 0;
+      playback.activeStarted = false;
+      reconcileLineStates(nodes, -1, 0, true);
+      const active = nodes[0];
+      if (active) {
+        const target = ui.viewport.clientHeight * lyricsFocusRatio() -
+          active.offsetTop - active.offsetHeight * .5;
+        setLyricsTranslate(target);
+      }
+      setCompactLyric(
+        lines[0].text,
+        false,
+        lyricsTranslationEnabled ? lines[0].translation : '',
+        lines[1] ? lines[1].text : '',
+        0,
+        false
+      );
+      document.body.classList.add('lyrics-visible');
     }
 
     function clearLyricsForTrackChange() {
@@ -619,8 +644,8 @@
       updateCompactLayout();
     }
 
-    function hideLyricsForUnavailableTrack(key, requestId) {
-      if (key !== playback.key || requestId !== playback.requestId) return;
+    function hideLyricsForUnavailableTrack(key) {
+      if (key !== playback.key) return;
       renderedLyricsKey = key;
       pendingTrackTransition = false;
       clearLyricsForTrackChange();
@@ -1081,8 +1106,11 @@
     },{passive:true});
 
     function updateActiveLine(position, force, animateCompact=true) {
-      if (!playback.timelineReady || renderedLyricsKey !== playback.key ||
-          pendingTrackTransition) return;
+      if (renderedLyricsKey !== playback.key || pendingTrackTransition) return;
+      if (!playback.timelineReady) {
+        if (document.body.classList.contains('lyrics-visible')) revealProvisionalFirstLine();
+        return;
+      }
       const lines = playback.lyrics;
       if (!lines.length) return;
       let index = 0;
@@ -1161,41 +1189,23 @@
       lyricAdvanceTimer=setTimeout(scheduleLyricAdvance,delay);
     }
 
-    async function resolveTrack(recordingGeneration, queryRevision, key, requestId) {
-      if (window.LobstaNativeLyrics && window.LobstaNativeLyrics.requestLyrics) {
-        try {
-          window.LobstaNativeLyrics.requestLyrics(
-            String(recordingGeneration),String(queryRevision),
-            requestId,false
-          );
-          return;
-        } catch (_) {}
-      }
-      hideLyricsForUnavailableTrack(key, requestId);
-    }
-
-    function receiveLyrics(recordingGeneration, queryRevision, requestId, data) {
+    function receiveLyrics(recordingGeneration, queryRevision, data) {
       if (recordingGeneration !== playback.recordingGeneration ||
-          queryRevision !== playback.queryRevision ||
-          requestId !== playback.requestId || !playback.key) return;
+          queryRevision !== playback.queryRevision || !playback.key) return;
       const lyrics=sanitizeLyrics(data&&data.lyrics);
       if (lyrics&&parseLrc(lyrics).length) {
         data.lyrics=lyrics;
-        applyResolved(data, playback.key, requestId);
-      } else hideLyricsForUnavailableTrack(playback.key, requestId);
+        applyResolved(data, playback.key);
+      } else hideLyricsForUnavailableTrack(playback.key);
     }
 
-    function receiveRemoteCover(requestId, cover) {
-      // Kept for compatibility with older native bridges. The lyric-only UI never loads artwork.
-    }
-
-    function applyResolved(data, key, requestId) {
-      if (key !== playback.key || requestId !== playback.requestId) return;
+    function applyResolved(data, key) {
+      if (key !== playback.key) return;
       const lyrics=sanitizeLyrics(data&&data.lyrics);
-      if(!lyrics){hideLyricsForUnavailableTrack(key, requestId);return;}
+      if(!lyrics){hideLyricsForUnavailableTrack(key);return;}
       const translatedLyrics=sanitizeLyrics(data&&data.translatedLyrics);
       const timed = alignTranslatedLyrics(parseLrc(lyrics), translatedLyrics);
-      if(!timed.length){hideLyricsForUnavailableTrack(key, requestId);return;}
+      if(!timed.length){hideLyricsForUnavailableTrack(key);return;}
       const sameLyrics = playback.lyrics.length === timed.length && playback.lyrics.every((line, index) =>
         line.t === timed[index].t && line.text === timed[index].text &&
           line.translation === timed[index].translation
@@ -1343,7 +1353,6 @@
         playback.key='';
         playback.recordingGeneration=0;
         playback.queryRevision=0;
-        playback.requestId++;
         clearLyricsForTrackChange();
         return;
       }
@@ -1353,7 +1362,6 @@
         playback.key='';
         playback.recordingGeneration=0;
         playback.queryRevision=0;
-        playback.requestId++;
         clearLyricsForTrackChange();
         return;
       }
@@ -1367,7 +1375,6 @@
         playback.key='';
         playback.recordingGeneration=0;
         playback.queryRevision=0;
-        playback.requestId++;
         clearLyricsForTrackChange();
         return;
       }
@@ -1385,7 +1392,7 @@
       playback.positionMs = Number(data.positionMs || 0);
       playback.durationMs = Number(data.durationMs || 0);
       playback.speed = playback.state === 'playing' ? Number(data.speed || 1) : 0;
-      playback.timelineReady = data.timelineReady !== false;
+      playback.timelineReady = data.timelineReady === true;
       playback.receivedAt = performance.now();
 
       if (!playback.timelineReady) {
@@ -1394,7 +1401,15 @@
         pendingInitialReveal = playback.lyrics.length > 0;
         playback.active = -1;
         playback.activeStarted = false;
-        clearCompactLyric();
+        if (playback.state === 'playing' && playback.lyrics.length > 0 &&
+            !changed && !queryChanged && renderedLyricsKey === key &&
+            !pendingTrackTransition) {
+          // Keep a visible first line while the first trusted timeline sample
+          // is pending.  The next ready sample repositions this same DOM.
+          revealProvisionalFirstLine();
+        } else if (!playback.lyrics.length) {
+          clearCompactLyric();
+        }
       }
 
       document.body.classList.add('has-session');
@@ -1419,19 +1434,15 @@
 
       if (changed) {
         playback.key = key;
-        playback.requestId++;
         playback.cover = '';
         playback.coverIsNative = false;
         pendingTrackTransition = true;
         clearTimeout(lyricAdvanceTimer);
         lyricAdvanceTimer = 0;
         clearLyricsForTrackChange();
-        resolveTrack(recordingGeneration, queryRevision, key, playback.requestId);
       } else if (queryChanged) {
-        playback.requestId++;
         pendingTrackTransition = true;
         clearLyricsForTrackChange();
-        resolveTrack(recordingGeneration, queryRevision, key, playback.requestId);
       } else if (pendingInitialReveal && playback.state === 'playing' &&
           playback.timelineReady) {
         revealInitialLyrics();
@@ -1568,16 +1579,9 @@
     }
 
     function retryLyrics() {
-      if(!playback.key||!playback.track)return;
-      playback.requestId++;
-      pendingTrackTransition=true;
-      clearLyricsForTrackChange();
-      resolveTrack(
-        playback.recordingGeneration,
-        playback.queryRevision,
-        playback.key,
-        playback.requestId
-      );
+      if(window.LobstaNativeLyrics && window.LobstaNativeLyrics.retryLyrics) {
+        try { window.LobstaNativeLyrics.retryLyrics(); } catch (_) {}
+      }
     }
     addEventListener('resize', () => {
       finishDesktopLineMotion();
@@ -1588,7 +1592,6 @@
     window.LobstaOverlay = {
       updatePlayback,
       receiveLyrics,
-      receiveRemoteCover,
       retryLyrics,
       setFontScale,
       setDisplayPreferences,

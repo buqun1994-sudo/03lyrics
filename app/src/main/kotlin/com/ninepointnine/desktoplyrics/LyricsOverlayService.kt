@@ -7,8 +7,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.ActivityOptions
 import android.app.Service
-import android.Manifest
-import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -16,7 +14,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
 import android.content.pm.ServiceInfo
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -36,7 +33,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Base64
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
@@ -62,14 +58,11 @@ import com.ninepointnine.desktoplyrics.commercial.CommercialRuntimeFactory
 import com.ninepointnine.desktoplyrics.commercial.EntitlementState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.max
@@ -77,9 +70,8 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * A user-started overlay that consumes MediaSession callbacks directly on-device.
- * Network requests are only used to resolve lyrics/cover art; playback synchronization
- * never waits for the website status polling path.
+ * Owns Android lifecycle, public media adapters and one lyric surface.
+ * Lyrics resolution and cache state are owned by LyricsPlaybackStore.
  */
 @SuppressLint("ForegroundServiceType")
 class LyricsOverlayService : Service() {
@@ -125,9 +117,8 @@ class LyricsOverlayService : Service() {
     private var lyricsRepository: DirectLyricsRepository? = null
     private var lyricsResolutionCoordinator: LyricsResolutionCoordinator? = null
     private var lyricsCache: LyricsCache? = null
+    private var lyricsPlaybackStore: LyricsPlaybackStore? = null
     private var lyricsJob: Job? = null
-    private var lyricsScope: CoroutineScope? = null
-    private val lyricsUsageLock = Any()
     private val commercialCheckJob = SupervisorJob()
     private val commercialCheckScope = CoroutineScope(commercialCheckJob + Dispatchers.IO)
     private var commercialStartupCheckStarted = false
@@ -207,50 +198,28 @@ class LyricsOverlayService : Service() {
         MediaSession.Token,
         Pair<MediaController, MediaController.Callback>
     >()
-    private val standardTimelineTracker = MediaSessionTimelineTracker {
-        SystemClock.elapsedRealtime()
-    }
-    private val recordingStateTracker = MediaRecordingStateTracker()
-    @Volatile private var currentRecordingState: MediaRecordingState? = null
+    private val mediaPlaybackAdapter = MediaPlaybackAdapter(
+        recordingFacts = MediaRecordingFactsStore(
+            read = { prefs.getString(PREF_MEDIA_RECORDING_FACTS, null) },
+            write = { prefs.edit().putString(PREF_MEDIA_RECORDING_FACTS, it).apply() }
+        ),
+        nowElapsedRealtime = { SystemClock.elapsedRealtime() }
+    )
+    private val currentRecordingState: MediaRecordingState?
+        get() = mediaPlaybackAdapter.currentRecordingState
     private var pendingSnapshot: JSONObject? = null
-    private var cachedArtworkKey = ""
-    private var cachedArtworkDataUrl = ""
+    private var latestLyricsPlaybackSnapshot = LyricsPlaybackStoreSnapshot.empty()
+    private var deliveredLyricsPlaybackSnapshot: LyricsPlaybackStoreSnapshot? = null
     private var snapshotScheduled = false
     private var sessionSelectionRefreshScheduled = false
     private var lastSessionDiagnostics = ""
-    private var bluetoothTrackKey = ""
-    private var bluetoothPositionMs = 0L
-    private var bluetoothPositionCapturedAtRealtime = 0L
-    private var bluetoothWasPlaying = false
-    private var bluetoothLastReportedPositionMs = -1L
-    private var pendingBluetoothPositionMs: Long? = null
-    private var pendingBluetoothPositionCapturedAtRealtime = 0L
-    private var bluetoothTimelineGenerationStartedAtRealtime = 0L
-    private var bluetoothTimelineReady = false
-    private var deferNextBluetoothPosition = false
-    private var bluetoothReportedPlaybackState: Int? = null
-    private var lastLyricsUsageKey = ""
-    private var activeLyricsRequestJob: Job? = null
-    private var manualLyricsJob: Job? = null
-    private var manualLyricsCancellation: LyricsCancellationSignal? = null
-    private var manualSearchBinding: LyricsPlaybackIdentity? = null
-    private var manualSearchBindingGeneration: Long? = null
-    private var manualSearchState = LyricsManualSearchState.IDLE
-    private val manualSearchCandidates = linkedMapOf<String, LyricsResult>()
-    private var manualLyricsGeneration = 0L
-    private var settingsStateGeneration = 0L
-    private var observedSettingsPlayback: LyricsPlaybackIdentity? = null
-    private var observedSettingsRecordingGeneration: Long? = null
     private val runtimeGeneration = AtomicLong(0L)
-    @Volatile private var latestLyricsRequestId = 0
-    @Volatile private var latestLyricsRecordingGeneration = 0L
-    @Volatile private var latestLyricsQueryRevision = 0L
-
-    private data class PlaybackTimeline(
-        val positionMs: Long,
-        val speed: Double,
-        val timelineReady: Boolean
-    )
+    /**
+     * Serializes the two native -> WebView lyric inputs.  A playback snapshot
+     * and its lyric payload must be observed by the page in that order and on
+     * the same WebView instance.
+     */
+    private var webDispatchSerial = 0L
 
     private val dispatchRunnable = Runnable {
         snapshotScheduled = false
@@ -350,38 +319,22 @@ class LyricsOverlayService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!monitorStarted) return
             val event = intent ?: return
+            val controller = currentController
+            if (controller?.packageName != BLUETOOTH_PACKAGE) {
+                scheduleSessionSelectionRefresh()
+                return
+            }
+            updateCurrentRecordingState(controller)
             val extrasBundle = event.extras
-            val reportedPlaybackState = if (event.action == ACTION_AVRCP_TRACK_EVENT) {
-                extrasBundle?.playbackState(EXTRA_AVRCP_PLAYBACK)
-            } else {
-                null
+            val decoded = AvrcpPlaybackEventDecoder.decode(event.action) { key ->
+                runCatching { extrasBundle?.get(key) }.getOrNull()
+            } ?: return
+            val accepted = mediaPlaybackAdapter.onAvrcpEvent(decoded)
+            if (BuildConfig.DEBUG) {
+                Log.d(LOG_TAG, "AVRCP event action=${event.action} accepted=$accepted " +
+                    "position=${decoded.positionMs} state=${decoded.playbackState} duration=${decoded.durationMs}")
             }
-            val position = when (event.action) {
-                ACTION_AVRCP_PLAYBACK_POSITION_CHANGED -> {
-                    extrasBundle?.number(EXTRA_AVRCP_SONG_POSITION)
-                        ?: extrasBundle?.number(EXTRA_AVRCP_PLAY_SONG_POSITION)
-                }
-                ACTION_AVRCP_TRACK_EVENT -> {
-                    @Suppress("DEPRECATION")
-                    val playback = extrasBundle?.getParcelable(EXTRA_AVRCP_PLAYBACK) as? PlaybackState
-                    playback?.position?.takeIf { it >= 0L }
-                        ?: extrasBundle?.number(EXTRA_AVRCP_SONG_POSITION)
-                        ?: extrasBundle?.number(EXTRA_AVRCP_PLAY_SONG_POSITION)
-                }
-                else -> null
-            }
-            val playbackStateChanged = reportedPlaybackState != null &&
-                reportedPlaybackState != bluetoothReportedPlaybackState
-            if (playbackStateChanged) {
-                bluetoothReportedPlaybackState = reportedPlaybackState
-                Log.i(LOG_TAG, "AVRCP playback state update=$reportedPlaybackState")
-            }
-            if (position != null && position >= 0L) {
-                Log.i(LOG_TAG, "AVRCP position update=$position action=${event.action}")
-                pendingBluetoothPositionMs = position
-                pendingBluetoothPositionCapturedAtRealtime = SystemClock.elapsedRealtime()
-            }
-            if (playbackStateChanged || (position != null && position >= 0L)) scheduleSnapshot()
+            if (accepted) scheduleSnapshot()
         }
     }
 
@@ -1082,14 +1035,28 @@ class LyricsOverlayService : Service() {
         if (lyricsRepository != null) return
         val repository = DirectLyricsRepository()
         lyricsRepository = repository
-        lyricsResolutionCoordinator = LyricsResolutionCoordinator(
+        val resolutionCoordinator = LyricsResolutionCoordinator(
             lyricsResolver = repository,
             coverResolver = repository
         )
-        lyricsCache = LyricsCache(this)
+        lyricsResolutionCoordinator = resolutionCoordinator
+        val cache = LyricsCache(this)
+        lyricsCache = cache
         val job = SupervisorJob()
         lyricsJob = job
-        lyricsScope = CoroutineScope(job + Dispatchers.IO)
+        val scope = CoroutineScope(job + Dispatchers.Main.immediate)
+        lyricsPlaybackStore = LyricsPlaybackStore(
+            cache = cache,
+            resolveAutomatic = resolutionCoordinator::resolveLatest,
+            searchCandidates = repository::searchManualCandidates,
+            loadManualLyrics = repository::loadManualLyrics,
+            scope = scope,
+            listener = object : LyricsPlaybackStore.Listener {
+                override fun onLyricsSnapshot(snapshot: LyricsPlaybackStoreSnapshot) {
+                    onLyricsPlaybackSnapshot(snapshot)
+                }
+            }
+        )
     }
 
     private fun restartRuntime() {
@@ -1105,25 +1072,12 @@ class LyricsOverlayService : Service() {
 
     private fun releaseRuntimeResources() {
         runtimeGeneration.incrementAndGet()
-        cancelManualLyricsWork()
-        manualSearchBinding = null
-        manualSearchBindingGeneration = null
-        manualSearchCandidates.clear()
-        manualSearchState = LyricsManualSearchState.IDLE
-        observedSettingsPlayback = null
-        observedSettingsRecordingGeneration = null
-        val activeRequest = synchronized(lyricsUsageLock) {
-            latestLyricsRequestId = 0
-            latestLyricsRecordingGeneration = 0L
-            latestLyricsQueryRevision = 0L
-            lastLyricsUsageKey = ""
-            activeLyricsRequestJob.also { activeLyricsRequestJob = null }
-        }
-        activeRequest?.cancel()
+        lyricsPlaybackStore?.close()
+        lyricsPlaybackStore = null
+        latestLyricsPlaybackSnapshot = LyricsPlaybackStoreSnapshot.empty()
         lyricsResolutionCoordinator?.cancelCurrent()
         lyricsJob?.cancel()
         lyricsJob = null
-        lyricsScope = null
         lyricsResolutionCoordinator?.close()
         lyricsResolutionCoordinator = null
         lyricsRepository?.close()
@@ -1141,14 +1095,13 @@ class LyricsOverlayService : Service() {
 
         displayState = null
         pendingSnapshot = null
-        currentRecordingState = null
-        recordingStateTracker.clear()
+        mediaPlaybackAdapter.reset()
         translationAvailable = false
-        cachedArtworkKey = ""
-        cachedArtworkDataUrl = ""
     }
 
     private fun destroyOverlay() {
+        webDispatchSerial += 1L
+        deliveredLyricsPlaybackSnapshot = null
         webReady = false
         desktopVisibleRatioBasisPoints = null
         val player = webView
@@ -1192,485 +1145,72 @@ class LyricsOverlayService : Service() {
         }
 
         @JavascriptInterface
-        fun requestLyrics(
-            recordingGenerationText: String,
-            queryRevisionText: String,
-            requestId: Int,
-            needsRemoteCover: Boolean
-        ) {
-            if (generation != runtimeGeneration.get() || requestId <= 0) return
-            val recordingGeneration = recordingGenerationText.toLongOrNull() ?: return
-            val queryRevision = queryRevisionText.toLongOrNull() ?: return
-            val recordingState = currentRecordingState ?: return
-            if (recordingState.recordingGeneration != recordingGeneration ||
-                recordingState.queryRevision != queryRevision
-            ) {
-                return
-            }
-            val metadata = recordingState.metadata
-            val track = metadata.track
-            val artist = metadata.artist
-            val album = metadata.album
-            val durationMs = metadata.durationMs
-            if (track.isBlank()) return
-            val hasKnownDuration = LyricsCandidateSelector.hasKnownDuration(durationMs)
-            val usageKey = if (hasKnownDuration) {
-                LyricsCache.usageKey(track, artist, album, durationMs)
-            } else {
-                ""
-            }
-            val claim = synchronized(lyricsUsageLock) {
-                val latestRecordingState = currentRecordingState
-                if (generation != runtimeGeneration.get() ||
-                    latestRecordingState?.recordingGeneration != recordingGeneration ||
-                    latestRecordingState.queryRevision != queryRevision
-                ) {
-                    null
-                } else {
-                    val recordUse = hasKnownDuration && usageKey != lastLyricsUsageKey
-                    if (hasKnownDuration) lastLyricsUsageKey = usageKey
-                    latestLyricsRequestId = requestId
-                    latestLyricsRecordingGeneration = recordingGeneration
-                    latestLyricsQueryRevision = queryRevision
-                    recordUse to activeLyricsRequestJob.also { activeLyricsRequestJob = null }
-                }
-            } ?: return
-            claim.second?.cancel()
-            val coordinator = lyricsResolutionCoordinator ?: return
-            val cache = lyricsCache ?: return
-            val requestScope = lyricsScope ?: return
-            coordinator.cancelCurrent()
-            if (!hasKnownDuration) {
-                deliverLyricsResult(
-                    generation,
-                    recordingGeneration,
-                    queryRevision,
-                    requestId,
-                    LyricsResult()
-                )
-                return
-            }
+        fun retryLyrics() {
             mainHandler.post {
-                if (isCurrentLyricsRequest(
-                        generation,
-                        recordingGeneration,
-                        queryRevision,
-                        requestId
-                    )
-                ) {
-                    updateTranslationAvailability(false)
-                }
+                if (generation != runtimeGeneration.get()) return@post
+                lyricsPlaybackStore?.retryCurrent()
             }
-            if (generation != runtimeGeneration.get()) return
-            val query = LyricsLookup(track, artist, album, durationMs)
-            val requestJob = requestScope.launch(start = CoroutineStart.LAZY) {
-                val nowMs = System.currentTimeMillis()
-                val cached = cache.get(track, artist, album, durationMs, claim.first, nowMs)
-                if (!isCurrentLyricsRequest(
-                        generation,
-                        recordingGeneration,
-                        queryRevision,
-                        requestId
-                    )
-                ) return@launch
-                if (cached != null) {
-                    deliverLyricsResult(
-                        generation,
-                        recordingGeneration,
-                        queryRevision,
-                        requestId,
-                        cached.result
-                    )
-                    if (!cached.needsRefresh(nowMs)) return@launch
-                }
-
-                val startedAt = SystemClock.elapsedRealtime()
-                val outcome = coordinator.resolveLatest(query)
-                if (!isCurrentLyricsRequest(
-                        generation,
-                        recordingGeneration,
-                        queryRevision,
-                        requestId
-                    )
-                ) {
-                    return@launch
-                }
-                val resolved = (outcome as? LyricsResolutionOutcome.Found)?.resolved
-                val result = resolved?.result ?: LyricsResult()
-                val outcomeName = when (outcome) {
-                    is LyricsResolutionOutcome.Found -> "found"
-                    LyricsResolutionOutcome.NoMatch -> "no-match"
-                    LyricsResolutionOutcome.InvalidMetadata -> "invalid-metadata"
-                    is LyricsResolutionOutcome.RetryableFailure ->
-                        "retryable-failure:${outcome.reason}"
-                    LyricsResolutionOutcome.Cancelled -> "cancelled"
-                }
-                Log.i(
-                    LOG_TAG,
-                    "Direct lyrics outcome=$outcomeName " +
-                        "source=${result.source.ifBlank { "none" }} " +
-                        "kind=${result.lyricsKind} " +
-                        "found=${result.lyrics.isNotBlank()} " +
-                        "translation=${result.translatedLyrics.isNotBlank()} " +
-                        "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
-                )
-                if (resolved != null) {
-                    cache.put(track, artist, album, durationMs, resolved)
-                    deliverLyricsResult(
-                        generation,
-                        recordingGeneration,
-                        queryRevision,
-                        requestId,
-                        result
-                    )
-                } else if (cached == null && outcome != LyricsResolutionOutcome.Cancelled) {
-                    deliverLyricsResult(
-                        generation,
-                        recordingGeneration,
-                        queryRevision,
-                        requestId,
-                        result
-                    )
-                }
-
-                if (needsRemoteCover && result.cover.isBlank()) {
-                    val cover = coordinator.resolveCover(
-                        LyricsLookup(track = track, artist = artist)
-                    )
-                    if (cover.isNotBlank() && isCurrentLyricsRequest(
-                            generation,
-                            recordingGeneration,
-                            queryRevision,
-                            requestId
-                        )
-                    ) {
-                        deliverRemoteCover(
-                            generation,
-                            recordingGeneration,
-                            queryRevision,
-                            requestId,
-                            cover
-                        )
-                    }
-                }
-            }
-            requestJob.invokeOnCompletion {
-                synchronized(lyricsUsageLock) {
-                    if (activeLyricsRequestJob === requestJob) activeLyricsRequestJob = null
-                }
-            }
-            val shouldStart = synchronized(lyricsUsageLock) {
-                if (isCurrentLyricsRequest(
-                        generation,
-                        recordingGeneration,
-                        queryRevision,
-                        requestId
-                    )
-                ) {
-                    activeLyricsRequestJob = requestJob
-                    true
-                } else {
-                    false
-                }
-            }
-            if (shouldStart) requestJob.start() else requestJob.cancel()
         }
     }
 
     private fun searchManualLyrics(intent: Intent) {
-        val playback = currentPlaybackIdentity()
-        val playbackGeneration = currentRecordingState?.recordingGeneration
         val track = intent.getStringExtra(EXTRA_MANUAL_TRACK)?.trim().orEmpty()
         val artist = intent.getStringExtra(EXTRA_MANUAL_ARTIST)?.trim().orEmpty()
         val album = intent.getStringExtra(EXTRA_MANUAL_ALBUM)?.trim().orEmpty()
-        if (playback?.isUsable != true || track.isBlank()) {
-            cancelManualLyricsWork()
-            manualSearchBinding = null
-            manualSearchBindingGeneration = null
-            manualSearchCandidates.clear()
-            manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
-            publishSettingsState()
-            return
-        }
-        val repository = lyricsRepository ?: return
-        val scope = lyricsScope ?: return
-        cancelManualLyricsWork()
-        manualSearchBinding = playback
-        manualSearchBindingGeneration = playbackGeneration
-        manualSearchCandidates.clear()
-        manualSearchState = LyricsManualSearchState.SEARCHING
-        publishSettingsState()
-
-        val generation = manualLyricsGeneration
-        val cancellation = LyricsCancellationSignal()
-        manualLyricsCancellation = cancellation
-        val job = scope.launch {
-            val results = repository.searchManualCandidates(
-                LyricsLookup(track, artist, album, playback.durationMs),
-                cancellation
-            )
-            mainHandler.post {
-                if (generation != manualLyricsGeneration) return@post
-                manualLyricsJob = null
-                manualLyricsCancellation = null
-                manualSearchCandidates.clear()
-                results.forEach { candidate ->
-                    manualSearchCandidates[LyricsManualSearchPolicy.token(candidate)] = candidate
-                }
-                manualSearchState = if (results.isEmpty()) {
-                    LyricsManualSearchState.EMPTY
-                } else {
-                    LyricsManualSearchState.READY
-                }
-                publishSettingsState()
-            }
-        }
-        manualLyricsJob = job
+        lyricsPlaybackStore?.searchManual(track, artist, album)
     }
 
     private fun selectManualLyrics(token: String) {
-        val playbackGeneration = currentRecordingState?.recordingGeneration
-        val binding = manualSearchBinding
-        val bindingGeneration = manualSearchBindingGeneration
-        val candidate = manualSearchCandidates[token]
-        if (binding?.isUsable != true || bindingGeneration == null ||
-            bindingGeneration != playbackGeneration
-        ) {
-            cancelManualLyricsWork()
-            manualSearchCandidates.clear()
-            manualSearchBinding = null
-            manualSearchBindingGeneration = null
-            manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
-            publishSettingsState()
-            return
-        }
-        if (candidate == null) {
-            manualSearchState = LyricsManualSearchState.ERROR
-            publishSettingsState()
-            return
-        }
-        val repository = lyricsRepository ?: return
-        val cache = lyricsCache ?: return
-        val scope = lyricsScope ?: return
-        cancelManualLyricsWork()
-        manualSearchState = LyricsManualSearchState.APPLYING
-        publishSettingsState()
-
-        val generation = manualLyricsGeneration
-        val cancellation = LyricsCancellationSignal()
-        manualLyricsCancellation = cancellation
-        val loadJob = scope.launch {
-            val result = repository.loadManualLyrics(candidate, cancellation)
-            mainHandler.post {
-                if (generation != manualLyricsGeneration) return@post
-                manualLyricsCancellation = null
-                if (bindingGeneration != currentRecordingState?.recordingGeneration) {
-                    manualLyricsJob = null
-                    manualSearchCandidates.clear()
-                    manualSearchBinding = null
-                    manualSearchBindingGeneration = null
-                    manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
-                    publishSettingsState()
-                    return@post
-                }
-                if (result == null) {
-                    manualLyricsJob = null
-                    manualSearchState = LyricsManualSearchState.ERROR
-                    publishSettingsState()
-                    return@post
-                }
-                val cacheJob = scope.launch {
-                    cache.putManual(binding, result)
-                    mainHandler.post cacheCommitted@{
-                        if (generation != manualLyricsGeneration) return@cacheCommitted
-                        manualLyricsJob = null
-                        manualSearchState = LyricsManualSearchState.READY
-                        reloadCurrentLyrics()
-                        publishSettingsState()
-                    }
-                }
-                manualLyricsJob = cacheJob
-            }
-        }
-        manualLyricsJob = loadJob
+        lyricsPlaybackStore?.selectManual(token)
     }
 
     private fun restoreAutomaticLyrics() {
-        val playback = currentPlaybackIdentity()
-        val cache = lyricsCache
-        val scope = lyricsScope
-        if (playback?.isUsable != true || cache == null || scope == null) {
-            manualSearchState = LyricsManualSearchState.NO_CURRENT_TRACK
-            publishSettingsState()
-            return
-        }
-        scope.launch {
-            cache.clearManual(playback)
-            mainHandler.post {
-                reloadCurrentLyrics()
-                publishSettingsState()
-            }
-        }
+        lyricsPlaybackStore?.restoreAutomatic()
     }
 
     private fun clearCurrentLyricsCache() {
-        val playback = currentPlaybackIdentity()
-        val cache = lyricsCache
-        val scope = lyricsScope
-        if (playback?.isUsable != true || cache == null || scope == null) {
-            publishSettingsState()
-            return
-        }
-        scope.launch {
-            cache.clearCurrent(playback)
-            mainHandler.post { publishSettingsState() }
-        }
+        lyricsPlaybackStore?.clearCurrent()
     }
 
-    private fun cancelManualLyricsWork() {
-        manualLyricsGeneration += 1L
-        manualLyricsCancellation?.cancel()
-        manualLyricsCancellation = null
-        manualLyricsJob?.cancel()
-        manualLyricsJob = null
-    }
-
-    private fun reloadCurrentLyrics() {
-        if (!webReady) return
-        webView?.evaluateJavascript(
-            "window.LobstaOverlay && window.LobstaOverlay.retryLyrics();",
-            null
-        )
-    }
-
-    private fun currentPlaybackIdentity(): LyricsPlaybackIdentity? {
-        val metadata = currentRecordingState?.metadata ?: return null
-        if (!metadata.hasTrack) return null
-        return LyricsPlaybackIdentity(
-            metadata.track,
-            metadata.artist,
-            metadata.album,
-            metadata.durationMs
-        )
-    }
-
-    private fun refreshSettingsPlaybackIdentity() {
-        val current = currentPlaybackIdentity()
-        val currentGeneration = currentRecordingState?.recordingGeneration
-        if (observedSettingsPlayback == current &&
-            observedSettingsRecordingGeneration == currentGeneration
-        ) return
-        observedSettingsPlayback = current
-        observedSettingsRecordingGeneration = currentGeneration
-        if (manualSearchBinding != null &&
-            manualSearchBindingGeneration != currentGeneration
-        ) {
-            cancelManualLyricsWork()
-            manualSearchBinding = null
-            manualSearchBindingGeneration = null
-            manualSearchCandidates.clear()
-            manualSearchState = LyricsManualSearchState.IDLE
-        }
-        publishSettingsState()
-    }
-
-    private fun publishSettingsState() {
-        val cache = lyricsCache ?: return
-        val scope = lyricsScope ?: return
-        val playback = currentPlaybackIdentity()
-        val recordingGeneration = currentRecordingState?.recordingGeneration ?: 0L
-        val searchState = manualSearchState
-        val candidates = manualSearchCandidates.map { (token, result) ->
-            LyricsManualSearchCandidate(token, result.candidateSnapshot())
-        }
-        val generation = ++settingsStateGeneration
-        scope.launch {
-            val snapshot = cache.snapshot(playback)
-            val state = LyricsSettingsRuntimeState(
-                playback = playback,
-                cache = snapshot,
-                searchState = searchState,
-                searchCandidates = candidates,
-                recordingGeneration = recordingGeneration
-            )
-            mainHandler.post {
-                if (generation != settingsStateGeneration) return@post
-                sendBroadcast(
-                    Intent(ACTION_SETTINGS_STATE_CHANGED)
-                        .setPackage(packageName)
-                        .putExtra(EXTRA_SETTINGS_STATE, state.encode())
-                )
-            }
-        }
-    }
-
-    private fun isCurrentLyricsRequest(
-        generation: Long,
-        recordingGeneration: Long,
-        queryRevision: Long,
-        requestId: Int
-    ): Boolean = generation == runtimeGeneration.get() &&
-        recordingGeneration == latestLyricsRecordingGeneration &&
-        queryRevision == latestLyricsQueryRevision &&
-        requestId == latestLyricsRequestId &&
-        currentRecordingState?.let { current ->
-            current.recordingGeneration == recordingGeneration &&
-                current.queryRevision == queryRevision
-        } == true
-
-    private fun deliverLyricsResult(
-        generation: Long,
-        recordingGeneration: Long,
-        queryRevision: Long,
-        requestId: Int,
-        result: LyricsResult
+    private fun publishSettingsState(
+        snapshot: LyricsPlaybackStoreSnapshot? = lyricsPlaybackStore?.currentSnapshot()
     ) {
-        val payload = result.toJson().toString()
-        val hasTranslation = classifyLyrics(result.translatedLyrics) == LyricsKind.SYNCHRONIZED
-        mainHandler.post {
-            if (!isCurrentLyricsRequest(
-                    generation,
-                    recordingGeneration,
-                    queryRevision,
-                    requestId
-                ) || !webReady
-            ) return@post
-            updateTranslationAvailability(hasTranslation)
-            webView?.evaluateJavascript(
-                "window.LobstaOverlay && window.LobstaOverlay.receiveLyrics(" +
-                    "$recordingGeneration,$queryRevision,$requestId,$payload);",
-                null
-            )
+        snapshot ?: return
+        val state = LyricsSettingsRuntimeState(
+            playback = snapshot.identity,
+            cache = snapshot.cache,
+            searchState = snapshot.searchState,
+            searchCandidates = snapshot.searchCandidates,
+            recordingGeneration = snapshot.recordingGeneration,
+            availability = snapshot.availability
+        )
+        sendBroadcast(
+            Intent(ACTION_SETTINGS_STATE_CHANGED)
+                .setPackage(packageName)
+                .putExtra(EXTRA_SETTINGS_STATE, state.encode())
+        )
+    }
+
+    private fun onLyricsPlaybackSnapshot(snapshot: LyricsPlaybackStoreSnapshot) {
+        if (!commercialRuntimeAccess.hasCurrentAccess()) return
+        if (BuildConfig.DEBUG) {
+            Log.d(LOG_TAG, "Lyrics snapshot generation=${snapshot.recordingGeneration} " +
+                "revision=${snapshot.queryRevision} availability=${snapshot.availability} " +
+                "cached=${snapshot.cache.current?.selection ?: "none"}")
         }
+        latestLyricsPlaybackSnapshot = snapshot
+        updateTranslationAvailability(
+            snapshot.result?.let { classifyLyrics(it.translatedLyrics) == LyricsKind.SYNCHRONIZED }
+                ?: false
+        )
+        publishSettingsState(snapshot)
+        scheduleWebDispatch()
     }
 
     private fun updateTranslationAvailability(available: Boolean) {
         if (translationAvailable == available) return
         translationAvailable = available
         refreshTopbarPresentationGeometry()
-    }
-
-    private fun deliverRemoteCover(
-        generation: Long,
-        recordingGeneration: Long,
-        queryRevision: Long,
-        requestId: Int,
-        cover: String
-    ) {
-        val encodedCover = JSONObject.quote(cover)
-        mainHandler.post {
-            if (!isCurrentLyricsRequest(
-                    generation,
-                    recordingGeneration,
-                    queryRevision,
-                    requestId
-                ) || !webReady
-            ) return@post
-            webView?.evaluateJavascript(
-                "window.LobstaOverlay && window.LobstaOverlay.receiveRemoteCover($requestId,$encodedCover);",
-                null
-            )
-        }
     }
 
     private fun startAsForeground() {
@@ -1939,6 +1479,7 @@ class LyricsOverlayService : Service() {
             Gravity.TOP
         ))
 
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
         val player = WebView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             settings.javaScriptEnabled = true
@@ -1959,6 +1500,7 @@ class LyricsOverlayService : Service() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     if (generation != runtimeGeneration.get() || view !== webView) return
                     webReady = true
+                    deliveredLyricsPlaybackSnapshot = null
                     applyThemeToWeb()
                     applyDisplayPreferencesToWeb()
                     applySurfaceModeToWeb()
@@ -1974,7 +1516,8 @@ class LyricsOverlayService : Service() {
                     applyTopbarLines()
                     applyLyricsTranslationEnabled()
                     applyBackgroundMode()
-                    pendingSnapshot?.let { deliverToWeb(it) } ?: scheduleSnapshot()
+                    if (pendingSnapshot == null) scheduleSnapshot()
+                    scheduleWebDispatch()
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -2655,8 +2198,7 @@ class LyricsOverlayService : Service() {
         lastCheckpointWriteElapsedRealtime = Long.MIN_VALUE
         lastCheckpointSignature = ""
         mediaSessionArbiter.reset()
-        resetBluetoothTimeline()
-        standardTimelineTracker.reset()
+        mediaPlaybackAdapter.reset()
         lastSessionDiagnostics = ""
     }
 
@@ -2701,8 +2243,7 @@ class LyricsOverlayService : Service() {
     private fun startAvrcpEventMonitor() {
         if (avrcpEventMonitorStarted) return
         val filter = IntentFilter().apply {
-            addAction(ACTION_AVRCP_PLAYBACK_POSITION_CHANGED)
-            addAction(ACTION_AVRCP_TRACK_EVENT)
+            AvrcpPlaybackEventDecoder.actions.forEach(::addAction)
         }
         try {
             ContextCompat.registerReceiver(
@@ -2742,8 +2283,10 @@ class LyricsOverlayService : Service() {
                 eligiblePackages = systemPackages.toSet(),
                 preferredSourceId = lastMediaSourceId,
                 bluetoothRoutePresent = hasBluetoothBrowserRoute(),
-                discoverAllSources = lastMediaSourceId == null &&
-                    SystemClock.elapsedRealtime() < coldMediaDiscoveryDeadlineMs
+                discoverAllSources = SystemClock.elapsedRealtime() < coldMediaDiscoveryDeadlineMs ||
+                    PublicMediaBrowserRegistryPolicy.shouldDiscoverAllSources(
+                        currentControllerPresent = currentController != null
+                    )
             )
             val preferredBrowserDiscoveryPending = lastMediaSourceId?.let { sourceId ->
                 publicBrowserSessions.none { it.descriptor.sourceKey == sourceId } &&
@@ -2805,7 +2348,7 @@ class LyricsOverlayService : Service() {
         mergedControllers: List<MediaController>
     ) {
         val selected = currentController
-        val metadata = selected?.let(::normalizedRecordingMetadata)
+        val metadata = currentRecordingState?.metadata
         val durationUsable = metadata?.durationMs
             ?.takeIf { it >= MediaRecordingStateTracker.MINIMUM_QUERY_DURATION_MS } != null
         val rejectionReason = when {
@@ -2824,6 +2367,8 @@ class LyricsOverlayService : Service() {
                 "durationUnit=${selected?.let(::durationUnitForController)?.name?.lowercase() ?: "none"} " +
                 "trackPresent=${metadata?.hasTrack == true} " +
                 "durationUsable=$durationUsable " +
+                "publishedDuration=${mediaPlaybackAdapter.publishedDurationMs} " +
+                "effectiveDuration=${metadata?.durationMs ?: 0L} " +
                 "rejectionReason=$rejectionReason"
         )
     }
@@ -2900,11 +2445,7 @@ class LyricsOverlayService : Service() {
         val controllerTokenChanged = previousController != null && best != null &&
             previousController.sessionToken != best.sessionToken
         if (sameLogicalSource && controllerTokenChanged) {
-            if (best?.packageName == BLUETOOTH_PACKAGE) {
-                deferNextBluetoothReportedPosition()
-            } else {
-                standardTimelineTracker.deferNextReportedPosition()
-            }
+            mediaPlaybackAdapter.deferNextReportedPosition()
         }
         if (best != null && previousController?.sessionToken != best.sessionToken) {
             cancelSessionRebindIfReplaced(best)
@@ -2916,10 +2457,7 @@ class LyricsOverlayService : Service() {
         else currentLogicalSourceId = null
         best?.let(::rememberMediaSource)
         if (!sameLogicalSource) {
-            resetBluetoothTimeline()
-            standardTimelineTracker.reset()
-            cachedArtworkKey = ""
-            cachedArtworkDataUrl = ""
+            mediaPlaybackAdapter.resetTimeline()
         }
         updateCurrentRecordingState(best)
         scheduleSessionConvergenceRefreshes()
@@ -2942,26 +2480,14 @@ class LyricsOverlayService : Service() {
             currentLogicalSourceId ?: mediaSessionSourceId(controller)
         }
 
-    private fun checkpointSourceId(controller: MediaController): String =
-        controller.packageName.trim()
-
     private fun rememberMediaSource(controller: MediaController) {
         val sourceId = publicBrowserSessions
             .firstOrNull { it.controller.sessionToken == controller.sessionToken }
             ?.descriptor
             ?.sourceKey
         if (sourceId == null) {
-            val hasSamePackageBrowser = publicBrowserSessions.any {
-                it.descriptor.packageName == controller.packageName
-            }
-            val preferredPackage = lastMediaSourceId?.substringBefore('/')
-            if (!hasSamePackageBrowser &&
-                lastMediaSourceId != null &&
-                preferredPackage != controller.packageName
-            ) {
-                lastMediaSourceId = null
-                prefs.edit().remove(PREF_LAST_MEDIA_SOURCE_ID).apply()
-            }
+            // Keep the last public Browser source while the system controller
+            // is temporarily ahead of its Browser binding.
             return
         }
         if (sourceId == lastMediaSourceId) return
@@ -3048,28 +2574,19 @@ class LyricsOverlayService : Service() {
         if (controller == null && pendingSessionRebind != null &&
             SystemClock.elapsedRealtime() < pendingSessionRebind!!.deadlineElapsedRealtime
         ) {
-            currentRecordingState = previous?.copy(recordingChanged = false, queryChanged = false)
             return
         }
-        val next = if (controller == null) {
-            recordingStateTracker.clear()
-            null
-        } else {
-            recordingStateTracker.update(
-                sourceIdentity = mediaRecordingSourceId(controller),
-                incoming = normalizedRecordingMetadata(controller)
-            )
-        }
-        currentRecordingState = next
+        val next = mediaPlaybackAdapter.updateRecording(
+            sourceIdentity = controller?.let(::mediaRecordingSourceId),
+            incoming = normalizedRecordingMetadata(controller)
+        )
         val recordingChanged = next?.recordingChanged == true ||
             (previous != null && next == null)
+        lyricsPlaybackStore?.acceptPlayback(next)
         if (recordingChanged) {
             checkpointRestoredGeneration = null
-            resetBluetoothTimeline()
-            standardTimelineTracker.reset()
         }
         if (recordingChanged || next?.queryChanged == true) {
-            invalidateCurrentLyricsRequest()
             Log.i(
                 LOG_TAG,
                 "Media recording advanced generation=${next?.recordingGeneration ?: 0L} " +
@@ -3077,18 +2594,6 @@ class LyricsOverlayService : Service() {
                     "recordingChanged=$recordingChanged"
             )
         }
-    }
-
-    private fun invalidateCurrentLyricsRequest() {
-        val activeRequest = synchronized(lyricsUsageLock) {
-            latestLyricsRequestId = 0
-            latestLyricsRecordingGeneration = 0L
-            latestLyricsQueryRevision = 0L
-            activeLyricsRequestJob.also { activeLyricsRequestJob = null }
-        }
-        activeRequest?.cancel()
-        lyricsResolutionCoordinator?.cancelCurrent()
-        updateTranslationAvailability(false)
     }
 
     private fun logSessionCandidates(candidates: List<MediaSessionCandidate>) {
@@ -3185,7 +2690,6 @@ class LyricsOverlayService : Service() {
         }
         pendingSnapshot = snapshot
         deliverToWeb(snapshot)
-        refreshSettingsPlaybackIdentity()
     }
 
     private fun buildSnapshot(controller: MediaController): JSONObject {
@@ -3198,72 +2702,46 @@ class LyricsOverlayService : Service() {
         val duration = metadata?.durationMs ?: 0L
         val recordingGeneration = recordingState?.recordingGeneration ?: 0L
         val queryRevision = recordingState?.queryRevision ?: 0L
-        val mediaSessionState = when (playback?.state) {
-            PlaybackState.STATE_PLAYING -> "playing"
-            PlaybackState.STATE_PAUSED -> "paused"
+        val reportedPositionMs = playback?.position ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN
+        val sourceId = mediaRecordingSourceId(controller)
+        val transport = MediaPlaybackAdapter.transportFor(controller)
+        val frame = mediaPlaybackAdapter.updateTimeline(
+            playbackState = playback?.state,
+            reportedPositionMs = reportedPositionMs,
+            playbackSpeed = playback?.playbackSpeed ?: 1f,
+            publisherPositionTime = playback?.lastPositionUpdateTime ?: 0L,
+            transport = transport
+        )
+        val state = when (frame.playbackState) {
+            PlaybackState.STATE_PLAYING,
+            PlaybackState.STATE_FAST_FORWARDING,
+            PlaybackState.STATE_REWINDING -> "playing"
             PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING -> "buffering"
             PlaybackState.STATE_STOPPED, PlaybackState.STATE_NONE -> "stopped"
             else -> "paused"
         }
-        val state = if (controller.packageName == BLUETOOTH_PACKAGE) {
-            bluetoothPlaybackState(mediaSessionState)
-        } else {
-            mediaSessionState
-        }
-        val reportedPositionMs = playback?.position ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN
-        val sourceId = checkpointSourceId(controller)
-        val timeline = if (controller.packageName == BLUETOOTH_PACKAGE) {
-            val currentTimeline = bluetoothTimeline(
-                "recording:$recordingGeneration",
-                state,
-                reportedPositionMs,
-                duration
-            )
-            maybeRestorePlaybackCheckpoint(
-                sourceId = sourceId,
-                metadata = metadata,
-                recordingGeneration = recordingGeneration,
-                reportedPositionMs = reportedPositionMs,
-                timeline = currentTimeline,
-                restore = { position ->
-                    restoreBluetoothTimelinePosition(position, duration, state == "playing")
-                }
-            )
-        } else {
-            val standardTimeline = standardTimelineTracker.update(
-                trackKey = "recording:$recordingGeneration",
-                playbackState = playback?.state,
-                reportedPositionMs = reportedPositionMs,
-                playbackSpeed = playback?.playbackSpeed ?: 0f,
-                publisherPositionTime = playback?.lastPositionUpdateTime ?: 0L,
-                durationMs = duration
-            )
-            val currentTimeline = PlaybackTimeline(
-                positionMs = standardTimeline.positionMs,
-                speed = standardTimeline.speed,
-                timelineReady = standardTimeline.timelineReady
-            )
-            maybeRestorePlaybackCheckpoint(
-                sourceId = sourceId,
-                metadata = metadata,
-                recordingGeneration = recordingGeneration,
-                reportedPositionMs = reportedPositionMs,
-                timeline = currentTimeline,
-                restore = { position ->
-                    standardTimelineTracker.restorePosition(
-                        "recording:$recordingGeneration",
-                        position,
-                        duration
-                    )?.let {
-                        PlaybackTimeline(it.positionMs, it.speed, it.timelineReady)
-                    }
-                }
-            )
-        }
+        val timeline = maybeRestorePlaybackCheckpoint(
+            sourceId = sourceId,
+            metadata = metadata,
+            recordingGeneration = recordingGeneration,
+            timeline = frame.timeline,
+            restore = { position ->
+                mediaPlaybackAdapter.restoreTimeline(
+                    positionMs = position,
+                    transport = transport
+                )
+            }
+        )
         if (state == "stopped") {
             clearPlaybackCheckpoint()
         } else {
             savePlaybackCheckpoint(sourceId, metadata, timeline, state)
+        }
+        if (BuildConfig.DEBUG) {
+            Log.d(LOG_TAG, "Playback snapshot generation=$recordingGeneration revision=$queryRevision " +
+                "source=$sourceId state=$state ready=${timeline.timelineReady} " +
+                "position=${timeline.positionMs} reported=$reportedPositionMs " +
+                "duration=$duration publishedDuration=${mediaPlaybackAdapter.publishedDurationMs}")
         }
         return JSONObject()
             .put("hasSession", title.isNotBlank() || playback != null)
@@ -3286,12 +2764,11 @@ class LyricsOverlayService : Service() {
         sourceId: String,
         metadata: MediaRecordingMetadata?,
         recordingGeneration: Long,
-        reportedPositionMs: Long,
-        timeline: PlaybackTimeline,
-        restore: (Long) -> PlaybackTimeline?
-    ): PlaybackTimeline {
+        timeline: MediaSessionTimeline,
+        restore: (Long) -> MediaSessionTimeline?
+    ): MediaSessionTimeline {
         if (metadata?.hasTrack != true || checkpointRestoredGeneration == recordingGeneration ||
-            reportedPositionMs >= 0L
+            timeline.timelineReady
         ) {
             return timeline
         }
@@ -3303,7 +2780,8 @@ class LyricsOverlayService : Service() {
                 artist = metadata.artist,
                 album = metadata.album,
                 durationMs = metadata.durationMs,
-                nowEpochMs = System.currentTimeMillis()
+                nowEpochMs = System.currentTimeMillis(),
+                mediaId = metadata.mediaId
             )
         ) return timeline
         val restored = restore(checkpoint.positionMs) ?: return timeline
@@ -3332,7 +2810,8 @@ class LyricsOverlayService : Service() {
                 album = album,
                 durationMs = durationMs,
                 positionMs = positionMs,
-                savedAtEpochMs = savedAtEpochMs
+                savedAtEpochMs = savedAtEpochMs,
+                mediaId = prefs.getString(PREF_CHECKPOINT_MEDIA_ID, null).orEmpty()
             )
         } else {
             null
@@ -3352,7 +2831,7 @@ class LyricsOverlayService : Service() {
     private fun savePlaybackCheckpoint(
         sourceId: String,
         metadata: MediaRecordingMetadata?,
-        timeline: PlaybackTimeline,
+        timeline: MediaSessionTimeline,
         state: String
     ) {
         if (metadata?.hasTrack != true || sourceId.isBlank() || !timeline.timelineReady) return
@@ -3369,7 +2848,8 @@ class LyricsOverlayService : Service() {
             album = metadata.album,
             durationMs = metadata.durationMs,
             positionMs = timeline.positionMs,
-            savedAtEpochMs = System.currentTimeMillis()
+            savedAtEpochMs = System.currentTimeMillis(),
+            mediaId = metadata.mediaId
         )
         if (!MediaPlaybackCheckpointPolicy.isValid(checkpoint, checkpoint.savedAtEpochMs)) return
         val signature = listOf(
@@ -3378,7 +2858,8 @@ class LyricsOverlayService : Service() {
             checkpoint.artist,
             checkpoint.album,
             checkpoint.durationMs,
-            checkpoint.positionMs
+            checkpoint.positionMs,
+            checkpoint.mediaId
         ).joinToString("\u0000")
         if (signature == lastCheckpointSignature &&
             lastCheckpointWriteElapsedRealtime != Long.MIN_VALUE &&
@@ -3386,6 +2867,7 @@ class LyricsOverlayService : Service() {
         ) return
         prefs.edit()
             .putString(PREF_CHECKPOINT_SOURCE_ID, checkpoint.sourceId)
+            .putString(PREF_CHECKPOINT_MEDIA_ID, checkpoint.mediaId)
             .putString(PREF_CHECKPOINT_TRACK, checkpoint.track)
             .putString(PREF_CHECKPOINT_ARTIST, checkpoint.artist)
             .putString(PREF_CHECKPOINT_ALBUM, checkpoint.album)
@@ -3401,6 +2883,7 @@ class LyricsOverlayService : Service() {
     private fun clearPlaybackCheckpoint() {
         prefs.edit()
             .remove(PREF_CHECKPOINT_SOURCE_ID)
+            .remove(PREF_CHECKPOINT_MEDIA_ID)
             .remove(PREF_CHECKPOINT_TRACK)
             .remove(PREF_CHECKPOINT_ARTIST)
             .remove(PREF_CHECKPOINT_ALBUM)
@@ -3412,273 +2895,6 @@ class LyricsOverlayService : Service() {
         lastCheckpointSignature = ""
         lastCheckpointWriteElapsedRealtime = Long.MIN_VALUE
     }
-
-    private fun mediaVolumePercent(): Int {
-        return try {
-            val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            if (maxVolume > 0) (current * 100f / maxVolume).toInt().coerceIn(0, 100) else 0
-        } catch (_: Exception) {
-            0
-        }
-    }
-
-    private fun currentAudioDeviceLabel(): String {
-        return try {
-            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            val selected = devices.maxByOrNull(::audioDeviceScore)
-            if (selected == null) return "未知设备"
-            val productName = selected.productName?.toString()?.trim().orEmpty()
-            if (selected.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
-                audioDeviceTypeLabel(selected.type)
-            } else if (isBluetoothAudioDevice(selected.type)) {
-                connectedBluetoothName(selected)
-                    ?: productName.takeUnless(::isLikelyPhoneName)
-                    ?: audioDeviceTypeLabel(selected.type)
-            } else {
-                productName.ifBlank { audioDeviceTypeLabel(selected.type) }
-            }
-        } catch (_: Exception) {
-            "未知设备"
-        }
-    }
-
-    private fun audioDeviceScore(device: AudioDeviceInfo): Int {
-        var score = audioDevicePriority(device.type)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val address = device.address.trim()
-            if (address.isNotBlank() && address != "00:00:00:00:00:00") score += 5
-        }
-        val productName = device.productName?.toString()?.trim().orEmpty()
-        if (productName.isNotBlank() && !isLikelyPhoneName(productName)) score += 2
-        return score
-    }
-
-    private fun isBluetoothAudioDevice(type: Int): Boolean = type in setOf(
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-        AudioDeviceInfo.TYPE_BLE_HEADSET,
-        AudioDeviceInfo.TYPE_BLE_SPEAKER
-    )
-
-    @SuppressLint("MissingPermission")
-    private fun connectedBluetoothName(audioDevice: AudioDeviceInfo): String? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) !=
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) return null
-
-        return try {
-            val address = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                audioDevice.address.trim()
-            } else {
-                ""
-            }
-            if (address.isBlank()) return null
-            val adapter = getSystemService(BluetoothManager::class.java)?.adapter ?: return null
-            val remoteName = runCatching { adapter.getRemoteDevice(address).name }.getOrNull()
-            val bondedName = adapter.bondedDevices
-                .firstOrNull { it.address.equals(address, ignoreCase = true) }
-                ?.name
-            (remoteName ?: bondedName)
-                ?.trim()
-                ?.takeIf { it.isNotBlank() && !isLikelyPhoneName(it) }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun isLikelyPhoneName(value: String): Boolean {
-        val normalized = value.trim().lowercase(Locale.ROOT).replace(" ", "")
-        if (normalized.isBlank()) return true
-        return listOf(
-            Build.MODEL,
-            Build.DEVICE,
-            Build.PRODUCT,
-            "${Build.MANUFACTURER}${Build.MODEL}"
-        ).any { localName ->
-            val local = localName.trim().lowercase(Locale.ROOT).replace(" ", "")
-            local.isNotBlank() && (normalized == local || normalized.contains(local))
-        }
-    }
-
-    private fun audioDevicePriority(type: Int): Int = when (type) {
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> 120
-        AudioDeviceInfo.TYPE_BLE_HEADSET,
-        AudioDeviceInfo.TYPE_BLE_SPEAKER -> 115
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> 100
-        AudioDeviceInfo.TYPE_USB_HEADSET,
-        AudioDeviceInfo.TYPE_USB_DEVICE,
-        AudioDeviceInfo.TYPE_USB_ACCESSORY -> 90
-        AudioDeviceInfo.TYPE_WIRED_HEADSET,
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> 80
-        AudioDeviceInfo.TYPE_HDMI,
-        AudioDeviceInfo.TYPE_HDMI_ARC,
-        AudioDeviceInfo.TYPE_HDMI_EARC -> 70
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> 50
-        else -> 10
-    }
-
-    private fun audioDeviceTypeLabel(type: Int): String = when (type) {
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-        AudioDeviceInfo.TYPE_BLE_HEADSET,
-        AudioDeviceInfo.TYPE_BLE_SPEAKER -> "蓝牙音频"
-        AudioDeviceInfo.TYPE_USB_HEADSET,
-        AudioDeviceInfo.TYPE_USB_DEVICE,
-        AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB 音频"
-        AudioDeviceInfo.TYPE_WIRED_HEADSET,
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "有线耳机"
-        AudioDeviceInfo.TYPE_HDMI,
-        AudioDeviceInfo.TYPE_HDMI_ARC,
-        AudioDeviceInfo.TYPE_HDMI_EARC -> "HDMI 音频"
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "手机扬声器"
-        else -> "音频设备"
-    }
-
-    private fun bluetoothTimeline(
-        trackKey: String,
-        state: String,
-        reportedPositionMs: Long,
-        durationMs: Long
-    ): PlaybackTimeline {
-        val now = SystemClock.elapsedRealtime()
-        val isPlaying = state == "playing"
-        val eventPosition = pendingBluetoothPositionMs
-        val eventPositionCapturedAt = pendingBluetoothPositionCapturedAtRealtime
-        pendingBluetoothPositionMs = null
-        val deferPositionFrame = deferNextBluetoothPosition
-        deferNextBluetoothPosition = false
-        val ignoreEventPosition = deferPositionFrame && eventPosition != null
-        val ignoreReportedPosition = deferPositionFrame && reportedPositionMs >= 0L
-
-        if (trackKey != bluetoothTrackKey) {
-            bluetoothTrackKey = trackKey
-            bluetoothLastReportedPositionMs = -1L
-            // A metadata update can still carry the prior track's position.
-            // Start every new generation at zero and wait for a fresh low
-            // position before trusting later AVRCP progress.
-            bluetoothPositionMs = 0L
-            bluetoothPositionCapturedAtRealtime = now
-            bluetoothWasPlaying = isPlaying
-            bluetoothTimelineGenerationStartedAtRealtime = now
-            bluetoothTimelineReady = false
-            deferNextBluetoothPosition = false
-        } else {
-            if (eventPosition != null) {
-                val eventBelongsToGeneration = eventPositionCapturedAt >=
-                    bluetoothTimelineGenerationStartedAtRealtime
-                if (!ignoreEventPosition &&
-                    (bluetoothTimelineReady || eventBelongsToGeneration ||
-                        eventPosition <= BLUETOOTH_POSITION_RESET_TOLERANCE_MS)
-                ) {
-                    bluetoothPositionMs = eventPosition
-                    bluetoothPositionCapturedAtRealtime = eventPositionCapturedAt
-                    bluetoothTimelineReady = true
-                }
-            } else if (!ignoreReportedPosition && reportedPositionMs >= 0L &&
-                reportedPositionMs != bluetoothLastReportedPositionMs
-            ) {
-                if (bluetoothTimelineReady || reportedPositionMs <= BLUETOOTH_POSITION_RESET_TOLERANCE_MS) {
-                    bluetoothPositionMs = reportedPositionMs
-                    bluetoothPositionCapturedAtRealtime = now
-                    bluetoothTimelineReady = true
-                }
-            } else if (bluetoothWasPlaying && !isPlaying) {
-                bluetoothPositionMs += max(0L, now - bluetoothPositionCapturedAtRealtime)
-                bluetoothPositionCapturedAtRealtime = now
-            } else if (!bluetoothWasPlaying && isPlaying) {
-                bluetoothPositionCapturedAtRealtime = now
-            }
-            bluetoothLastReportedPositionMs = reportedPositionMs
-            bluetoothWasPlaying = isPlaying
-        }
-
-        var position = bluetoothPositionMs
-        if (isPlaying) {
-            position += max(0L, now - bluetoothPositionCapturedAtRealtime)
-        }
-        if (durationMs > 0L) position = min(position, durationMs)
-        return PlaybackTimeline(
-            positionMs = max(0L, position),
-            speed = if (isPlaying) 1.0 else 0.0,
-            timelineReady = bluetoothTimelineReady
-        )
-    }
-
-    private fun restoreBluetoothTimelinePosition(
-        positionMs: Long,
-        durationMs: Long,
-        isPlaying: Boolean
-    ): PlaybackTimeline? {
-        if (bluetoothTrackKey.isBlank() || positionMs < 0L) return null
-        bluetoothPositionMs = if (durationMs > 0L) {
-            positionMs.coerceIn(0L, durationMs)
-        } else {
-            positionMs
-        }
-        bluetoothPositionCapturedAtRealtime = SystemClock.elapsedRealtime()
-        bluetoothLastReportedPositionMs = bluetoothPositionMs
-        bluetoothWasPlaying = isPlaying
-        bluetoothTimelineReady = true
-        deferNextBluetoothPosition = false
-        var position = bluetoothPositionMs
-        if (isPlaying) {
-            position += max(
-                0L,
-                SystemClock.elapsedRealtime() - bluetoothPositionCapturedAtRealtime
-            )
-        }
-        if (durationMs > 0L) position = min(position, durationMs)
-        return PlaybackTimeline(
-            positionMs = max(0L, position),
-            speed = if (isPlaying) 1.0 else 0.0,
-            timelineReady = true
-        )
-    }
-
-    private fun resetBluetoothTimeline() {
-        bluetoothTrackKey = ""
-        bluetoothPositionMs = 0L
-        bluetoothPositionCapturedAtRealtime = 0L
-        bluetoothWasPlaying = false
-        bluetoothLastReportedPositionMs = -1L
-        pendingBluetoothPositionMs = null
-        pendingBluetoothPositionCapturedAtRealtime = 0L
-        bluetoothTimelineGenerationStartedAtRealtime = 0L
-        bluetoothTimelineReady = false
-        deferNextBluetoothPosition = false
-        bluetoothReportedPlaybackState = null
-    }
-
-    private fun deferNextBluetoothReportedPosition() {
-        deferNextBluetoothPosition = true
-    }
-
-    private fun bluetoothPlaybackState(fallback: String): String = when (bluetoothReportedPlaybackState) {
-        PlaybackState.STATE_PLAYING,
-        PlaybackState.STATE_FAST_FORWARDING,
-        PlaybackState.STATE_REWINDING -> "playing"
-        PlaybackState.STATE_PAUSED -> "paused"
-        PlaybackState.STATE_STOPPED,
-        PlaybackState.STATE_NONE -> "stopped"
-        PlaybackState.STATE_BUFFERING,
-        PlaybackState.STATE_CONNECTING -> "buffering"
-        else -> fallback
-    }
-
-    @Suppress("DEPRECATION")
-    private fun android.os.Bundle.number(key: String): Long? =
-        (runCatching { get(key) }.getOrNull() as? Number)?.toLong()
-
-    @Suppress("DEPRECATION")
-    private fun android.os.Bundle.playbackState(key: String): Int? = when (
-        val value = runCatching { get(key) }.getOrNull()
-    ) {
-        is PlaybackState -> value.state
-        is Number -> value.toInt()
-        else -> null
-    }?.takeIf { it in PlaybackState.STATE_NONE..PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM }
 
     private fun normalizedRecordingMetadata(controller: MediaController?): MediaRecordingMetadata? {
         val sourceController = controller ?: return null
@@ -3711,7 +2927,9 @@ class LyricsOverlayService : Service() {
                 },
                 durationUnit = durationUnitForController(sourceController),
                 reportedPositionMs = runCatching { sourceController.playbackState?.position }
-                    .getOrNull() ?: -1L
+                    .getOrNull() ?: -1L,
+                mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+                    ?.takeIf(String::isNotBlank) ?: description?.mediaId.orEmpty()
             )
         ).takeIf(MediaRecordingMetadata::hasTrack)
     }
@@ -3727,61 +2945,48 @@ class LyricsOverlayService : Service() {
                 ?: MediaSessionDurationUnit.MILLISECONDS
         }
 
-    private fun artworkDataUrl(metadata: MediaMetadata?, key: String): String {
-        // Media apps often publish title/artist first and artwork in a later callback.
-        // Do not permanently cache an empty first result for the lifetime of the track.
-        if (key == cachedArtworkKey && cachedArtworkDataUrl.isNotEmpty()) {
-            return cachedArtworkDataUrl
-        }
-        cachedArtworkKey = key
-        val bitmap = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-            ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
-            ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
-        cachedArtworkDataUrl = bitmap?.let { bitmapDataUrl(it) }.orEmpty()
-        return cachedArtworkDataUrl
-    }
-
-    private fun bitmapDataUrl(source: Bitmap): String {
-        return try {
-            val maxSide = max(source.width, source.height)
-            val scaled = if (maxSide > 640) {
-                val ratio = 640f / maxSide.toFloat()
-                Bitmap.createScaledBitmap(
-                    source,
-                    max(1, (source.width * ratio).toInt()),
-                    max(1, (source.height * ratio).toInt()),
-                    true
-                )
-            } else {
-                source
-            }
-            val bytes = ByteArrayOutputStream().use { output ->
-                scaled.compress(Bitmap.CompressFormat.JPEG, 88, output)
-                output.toByteArray()
-            }
-            if (scaled !== source) scaled.recycle()
-            "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
-        } catch (_: Exception) {
-            ""
-        }
-    }
-
     private fun deliverToWeb(snapshot: JSONObject) {
         if (!commercialRuntimeAccess.hasCurrentAccess()) return
         pendingSnapshot = snapshot
+        scheduleWebDispatch()
+    }
+
+    /** Playback identity and its lyrics are committed in one ordered WebView call. */
+    private fun scheduleWebDispatch() {
         if (!webReady) return
-        val generation = runtimeGeneration.get()
         val targetWebView = webView ?: return
+        val generation = runtimeGeneration.get()
+        val serial = ++webDispatchSerial
         targetWebView.post {
-            if (!commercialRuntimeAccess.hasCurrentAccess() || generation != runtimeGeneration.get() ||
-                targetWebView !== webView || !webReady
+            if (serial != webDispatchSerial ||
+                !commercialRuntimeAccess.hasCurrentAccess() ||
+                generation != runtimeGeneration.get() ||
+                targetWebView !== webView ||
+                !webReady
             ) {
                 return@post
             }
-            targetWebView.evaluateJavascript(
-                "window.LobstaOverlay && window.LobstaOverlay.updatePlayback($snapshot);",
-                null
-            )
+
+            val playback = pendingSnapshot ?: return@post
+            val lyricsSnapshot = latestLyricsPlaybackSnapshot
+            val delivered = deliveredLyricsPlaybackSnapshot
+            val lyricsChanged = delivered == null || delivered.recordingGeneration != lyricsSnapshot.recordingGeneration ||
+                delivered.queryRevision != lyricsSnapshot.queryRevision || delivered.result != lyricsSnapshot.result
+            val matchingLyrics = lyricsSnapshot.recordingGeneration ==
+                playback.optLong("recordingGeneration", 0L) &&
+                lyricsSnapshot.queryRevision == playback.optLong("queryRevision", 0L)
+            val script = StringBuilder("window.LobstaOverlay && window.LobstaOverlay.updatePlayback($playback);")
+            if (lyricsChanged && matchingLyrics) {
+                val lyricsPayload = lyricsSnapshot.result?.toJson() ?: JSONObject()
+                    .put("lyrics", "")
+                    .put("translatedLyrics", "")
+                    .put("duration", lyricsSnapshot.identity?.durationMs ?: 0L)
+                script.append("window.LobstaOverlay && window.LobstaOverlay.receiveLyrics(" +
+                    "${lyricsSnapshot.recordingGeneration}," +
+                    "${lyricsSnapshot.queryRevision},${lyricsPayload});")
+                deliveredLyricsPlaybackSnapshot = lyricsSnapshot
+            }
+            targetWebView.evaluateJavascript(script.toString(), null)
         }
     }
 
@@ -3867,6 +3072,8 @@ class LyricsOverlayService : Service() {
         const val EXTRA_SETTINGS_STATE = "settings_state"
         const val EXTRA_RUNNING = "running"
         const val PREFS_NAME = "lyrics_overlay_prefs"
+        private const val PREF_MEDIA_RECORDING_FACTS = "media_recording_facts_v1"
+        private const val PREF_CHECKPOINT_MEDIA_ID = "playback_checkpoint_media_id_v1"
         private const val PREF_LAST_MEDIA_SOURCE_ID = "last_media_source_id_v1"
         private const val PREF_CHECKPOINT_SOURCE_ID = "playback_checkpoint_source_v1"
         private const val PREF_CHECKPOINT_TRACK = "playback_checkpoint_track_v1"
@@ -3937,16 +3144,6 @@ class LyricsOverlayService : Service() {
         private const val SURFACE_FADE_IN_MS = 160L
         private const val SURFACE_HIDDEN_ALPHA = 0.01f
         private const val BLUETOOTH_PACKAGE = "com.android.bluetooth"
-        private const val ACTION_AVRCP_PLAYBACK_POSITION_CHANGED =
-            "android.bluetooth.avrcp-controller.profile.action.PLAYBACK_POS_CHANGEDS"
-        private const val ACTION_AVRCP_TRACK_EVENT =
-            "android.bluetooth.avrcp-controller.profile.action.TRACK_EVENT"
-        private const val EXTRA_AVRCP_SONG_POSITION =
-            "android.bluetooth.avrcp-controller.profile.extra.SONG_POS"
-        private const val EXTRA_AVRCP_PLAY_SONG_POSITION =
-            "android.bluetooth.avrcp-controller.extra.PLAY_SONG_POS"
-        private const val EXTRA_AVRCP_PLAYBACK =
-            "android.bluetooth.avrcp-controller.profile.extra.PLAYBACK"
 
         @Volatile
         var isRunning: Boolean = false

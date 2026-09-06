@@ -232,7 +232,7 @@ internal class MediaSessionArbiter(
         if (current == null) {
             if (coldStartStartedAtMs == null) coldStartStartedAtMs = nowMs
             val preferred = preferredSourceId?.let { sourceId ->
-                eligible.firstOrNull { sourceIdentityOf(it) == sourceId && it.hasTitle }
+                eligible.firstOrNull { sourceIdentityOf(it) == sourceId && isColdStartCandidate(it) }
             }
             if (preferred != null) {
                 return commit(preferred, candidates, "cold_start_preferred_source")
@@ -393,14 +393,14 @@ internal class MediaSessionArbiter(
             )
             .firstOrNull()
 
+    private fun isColdStartCandidate(candidate: MediaSessionCandidate): Boolean =
+        candidate.isPlaying || candidate.isBuffering || (candidate.isPaused && candidate.hasTitle)
+
     private fun bestColdStartCandidate(
         candidates: List<MediaSessionCandidate>,
         nowMs: Long
     ): MediaSessionCandidate? {
-        val viable = candidates.filter { candidate ->
-            candidate.isPlaying || candidate.isBuffering ||
-                (candidate.isPaused && candidate.hasTitle)
-        }
+        val viable = candidates.filter(::isColdStartCandidate)
         val withPublisherTime = viable.filter { candidate ->
             candidate.positionUpdateTimeMs in 1..nowMs
         }

@@ -568,7 +568,8 @@ class SettingsBehaviorTest {
         assertTrue(service.contains(".put(\"queryRevision\", queryRevision)"))
         assertFalse(service.contains("private fun mediaTitle("))
         assertFalse(overlay.contains("function normalizedKey("))
-        assertTrue(overlay.contains("String(recordingGeneration),String(queryRevision)"))
+        assertTrue(overlay.contains("function receiveLyrics(recordingGeneration, queryRevision, data)"))
+        assertFalse(overlay.contains("LobstaNativeLyrics.requestLyrics"))
         assertFalse(overlay.contains("track,artist,playback.album"))
         assertTrue(
             overlay.contains(
@@ -577,7 +578,12 @@ class SettingsBehaviorTest {
         )
         assertTrue(
             overlay.contains(
-                "if (!playback.timelineReady || renderedLyricsKey !== playback.key ||"
+                "if (renderedLyricsKey !== playback.key || pendingTrackTransition) return;"
+            )
+        )
+        assertTrue(
+            overlay.contains(
+                "if (document.body.classList.contains('lyrics-visible')) revealProvisionalFirstLine();"
             )
         )
         assertTrue(renderer.contains("recordingGeneration == populatedRecordingGeneration"))
@@ -601,7 +607,7 @@ class SettingsBehaviorTest {
         assertTrue(service.contains("lyricsRepository = null"))
         assertTrue(service.contains("lyricsCache?.close()"))
         assertTrue(service.contains("lyricsCache = null"))
-        assertTrue(service.contains("lyricsScope = null"))
+        assertTrue(service.contains("lyricsPlaybackStore?.close()"))
         assertFalse(service.contains("private lateinit var lyricsRepository"))
     }
 

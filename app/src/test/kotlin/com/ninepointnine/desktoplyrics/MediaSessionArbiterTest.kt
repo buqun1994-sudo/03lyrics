@@ -7,6 +7,37 @@ import org.junit.Test
 
 class MediaSessionArbiterTest {
     @Test
+    fun `preferred source must publish a resumable state before cold selection`() {
+        listOf(PlaybackState.STATE_NONE, PlaybackState.STATE_STOPPED, PlaybackState.STATE_ERROR, null).forEach { state ->
+            val arbiter = MediaSessionArbiter()
+            arbiter.restorePreferredSource("preferred-source")
+            val initializing = candidate("preferred", PlaybackState.STATE_NONE, 0L, 100L)
+                .copy(sourceId = "preferred-source", playbackState = state)
+            listOf(100L, 2_000L, 5_000L, 10_000L).forEach { now ->
+                val waiting = arbiter.evaluate(listOf(initializing), now, OWN_PACKAGE)
+                assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, waiting.action)
+                assertEquals(null, waiting.sessionId)
+            }
+            val playing = initializing.copy(playbackState = PlaybackState.STATE_PLAYING)
+            val ready = arbiter.evaluate(listOf(playing), 10_500L, OWN_PACKAGE)
+            assertEquals(MediaSessionArbitrationAction.SELECT, ready.action)
+            assertEquals("preferred", ready.sessionId)
+        }
+    }
+
+    @Test
+    fun `cleared stopped source is not selected again through its saved preference`() {
+        val arbiter = runningArbiter()
+        val playing = candidate("source", PlaybackState.STATE_PLAYING, 1_000L, 100L)
+        arbiter.evaluate(listOf(playing), 100L, OWN_PACKAGE)
+        val stopped = playing.copy(playbackState = PlaybackState.STATE_STOPPED)
+        assertEquals(MediaSessionArbitrationAction.CLEAR, arbiter.evaluate(listOf(stopped), 200L, OWN_PACKAGE).action)
+        val repeated = arbiter.evaluate(listOf(stopped), 300L, OWN_PACKAGE)
+        assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, repeated.action)
+        assertEquals(null, repeated.sessionId)
+    }
+
+    @Test
     fun `incumbent playing source is not replaced by a stale challenger`() {
         val arbiter = runningArbiter()
         val aqtPlaying = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 100L)
