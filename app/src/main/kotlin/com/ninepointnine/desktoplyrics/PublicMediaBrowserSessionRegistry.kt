@@ -103,18 +103,17 @@ internal object PublicMediaBrowserServiceResolver {
 
     fun durationUnitFor(
         packageName: String,
-        serviceName: String,
-        sdkInt: Int = Build.VERSION.SDK_INT
+        serviceName: String
     ): MediaSessionDurationUnit = when {
         packageName != BLUETOOTH_PACKAGE -> MediaSessionDurationUnit.MILLISECONDS
         serviceName.substringAfterLast('.').equals(
             "A2dpMediaBrowserService",
             ignoreCase = true
         ) -> MediaSessionDurationUnit.MILLISECONDS
-        sdkInt >= 29 && serviceName.substringAfterLast('.').equals(
+        serviceName.substringAfterLast('.').equals(
             "BluetoothMediaBrowserService",
             ignoreCase = true
-        ) -> MediaSessionDurationUnit.SECONDS
+        ) -> MediaSessionDurationUnit.MILLISECONDS
         else -> MediaSessionDurationUnit.UNKNOWN
     }
 }

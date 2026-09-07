@@ -1,4 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">03歌词诊断</string>
+    <string name="app_name">03诊断助手</string>
+    <string name="diagnostic_title">03诊断助手</string>
+    <string name="diagnostic_recording">正在记录网易云播放状态</string>
+    <string name="diagnostic_notification">60 秒后自动完成</string>
+    <string name="diagnostic_start">开始记录</string>
+    <string name="diagnostic_finish">结束记录</string>
+    <string name="diagnostic_open_target">打开网易云</string>
+    <string name="diagnostic_heard">已听到声音</string>
+    <string name="diagnostic_silent">当前无声</string>
+    <string name="diagnostic_play_pressed">已点播放</string>
+    <string name="diagnostic_pause_pressed">已点暂停</string>
+    <string name="diagnostic_next_pressed">已切下一首</string>
+    <string name="diagnostic_grant">打开授权设置</string>
+    <string name="diagnostic_grant_unavailable">系统授权入口不可用，请由安装人员完成授权。</string>
+    <string name="diagnostic_target_missing">当前无法打开车机网易云</string>
+    <string name="diagnostic_access_granted">媒体读取已授权</string>
+    <string name="diagnostic_access_missing">媒体读取未授权</string>
+    <string name="diagnostic_remaining">正在记录，剩余 %1$d 秒</string>
+    <string name="diagnostic_saving">正在生成报告</string>
+    <string name="diagnostic_recording_failed">记录未完成，请重新开始</string>
+    <string name="diagnostic_complete">报告已生成</string>
+    <string name="diagnostic_ready">准备记录</string>
+    <string name="diagnostic_marked">现场状态已标记</string>
+    <string name="diagnostic_local_report">最新本地报告</string>
+    <string name="diagnostic_export">导出报告</string>
+    <string name="diagnostic_exported">报告已导出</string>
+    <string name="diagnostic_export_failed">导出失败，本地报告已保留</string>
+    <string name="diagnostic_export_unavailable">系统导出入口不可用，本地报告已保留</string>
 </resources>

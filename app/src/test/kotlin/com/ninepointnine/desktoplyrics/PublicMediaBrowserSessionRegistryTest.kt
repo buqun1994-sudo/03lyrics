@@ -95,24 +95,21 @@ class PublicMediaBrowserSessionRegistryTest {
             MediaSessionDurationUnit.MILLISECONDS,
             PublicMediaBrowserServiceResolver.durationUnitFor(
                 "com.android.bluetooth",
-                "com.android.bluetooth.A2dpMediaBrowserService",
-                sdkInt = 28
+                "com.android.bluetooth.A2dpMediaBrowserService"
             )
         )
         assertEquals(
-            MediaSessionDurationUnit.SECONDS,
+            MediaSessionDurationUnit.MILLISECONDS,
             PublicMediaBrowserServiceResolver.durationUnitFor(
                 "com.android.bluetooth",
-                "com.android.bluetooth.BluetoothMediaBrowserService",
-                sdkInt = 30
+                "com.android.bluetooth.avrcpcontroller.BluetoothMediaBrowserService"
             )
         )
         assertEquals(
             MediaSessionDurationUnit.MILLISECONDS,
             PublicMediaBrowserServiceResolver.durationUnitFor(
                 "com.tencent.wecarflow",
-                "com.tencent.wecarflow.player.MediaPlaybackService",
-                sdkInt = 28
+                "com.tencent.wecarflow.player.MediaPlaybackService"
             )
         )
     }

@@ -49,7 +49,7 @@ class MediaSessionMetadataPolicyTest {
     }
 
     @Test
-    fun `android 10 bluetooth browser duration is converted from seconds`() {
+    fun `explicit seconds contract is converted without inferring an Android version`() {
         val metadata = MediaSessionMetadataPolicy.normalize(
             MediaSessionMetadataFields(
                 title = "Song", artist = "Artist", durationMs = 214L,
@@ -57,6 +57,25 @@ class MediaSessionMetadataPolicyTest {
             )
         )
         assertEquals(214_000L, metadata.durationMs)
+    }
+
+    @Test
+    fun `03T public bluetooth durations retain milliseconds and matching eligibility`() {
+        val unit = PublicMediaBrowserServiceResolver.durationUnitFor(
+            "com.android.bluetooth",
+            "com.android.bluetooth.avrcpcontroller.BluetoothMediaBrowserService"
+        )
+        listOf(249_773L, 206_326L, 140_000L).forEach { duration ->
+            val metadata = MediaSessionMetadataPolicy.normalize(
+                MediaSessionMetadataFields(
+                    title = "Song", artist = "Artist", durationMs = duration,
+                    durationUnit = unit, reportedPositionMs = 26_809L
+                )
+            )
+            assertEquals(duration, metadata.durationMs)
+            assertTrue(LyricsCandidateSelector.hasMatchingDuration(metadata.durationMs, duration))
+            assertFalse(LyricsCandidateSelector.hasMatchingDuration(metadata.durationMs, duration + 2_001L))
+        }
     }
 
     @Test

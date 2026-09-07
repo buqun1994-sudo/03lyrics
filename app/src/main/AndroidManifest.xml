@@ -17,6 +17,10 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <permission
+        android:name="${applicationId}.permission.MEDIA_DIAGNOSTICS"
+        android:protectionLevel="signature" />
+
     <application
         android:allowBackup="false"
         android:hardwareAccelerated="true"
@@ -25,6 +29,12 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.DesktopLyrics">
+
+        <provider
+            android:name=".MediaDiagnosticsProvider"
+            android:authorities="${applicationId}.media-diagnostics"
+            android:exported="true"
+            android:permission="${applicationId}.permission.MEDIA_DIAGNOSTICS" />
 
         <activity
             android:name=".MainActivity"

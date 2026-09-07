@@ -25,6 +25,7 @@
 | 权限、签名、密钥、第三方服务、发布 | `docs/security/安全与密钥边界.md` |
 | 任务输入、范围、完成标准 | `docs/plans/codex-task-intake-template.md` |
 | 媒体、歌词缓存与时间线唯一主链重构 | `docs/plans/media-lyrics-single-chain.md` |
+| 03T 蓝牙时长、网易云暂停、诊断助手与报告 | `docs/plans/netease-media-diagnostics.md` |
 | 当前事实、最近验证、未完成事项 | `docs/progress.md` |
 | 可复用代码、设计、产品、验证、安全、运维或 AI 协作规则 | `docs/architecture/rules/README.md` |
 | 规则沉淀 | `.agents/skills/rule-discovery/SKILL.md` |

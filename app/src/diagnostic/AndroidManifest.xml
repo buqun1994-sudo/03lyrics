@@ -3,24 +3,20 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <queries>
-        <package android:name="com.ninepointnine.desktopcast" />
-        <package android:name="com.ninepointnine.desktopcast.test" />
+        <package android:name="com.netease.cloudmusic.iot" />
+        <package android:name="com.ninepointnine.desktoplyrics" />
+        <package android:name="com.ninepointnine.desktoplyrics.test" />
         <intent>
             <action android:name="android.media.browse.MediaBrowserService" />
         </intent>
     </queries>
 
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE"
-        tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
-        tools:node="remove" />
+    <uses-permission android:name="com.ninepointnine.desktoplyrics.permission.MEDIA_DIAGNOSTICS" />
+    <uses-permission android:name="com.ninepointnine.desktoplyrics.test.permission.MEDIA_DIAGNOSTICS" />
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" tools:node="remove" />
+    <permission android:name="${applicationId}.permission.MEDIA_DIAGNOSTICS" tools:node="remove" />
     <uses-permission
         android:name="android.permission.SYSTEM_ALERT_WINDOW"
         tools:node="remove" />
@@ -29,10 +25,7 @@
         tools:node="remove" />
 
     <application android:label="@string/app_name">
-        <uses-library
-            android:name="android.car"
-            android:required="false" />
-
+        <provider android:name=".MediaDiagnosticsProvider" tools:node="remove" />
         <activity
             android:name=".MainActivity"
             tools:node="remove" />
@@ -40,13 +33,21 @@
         <activity
             android:name=".DiagnosticActivity"
             android:exported="true"
-            android:label="03歌词诊断"
+            android:launchMode="singleTop"
+            android:label="@string/app_name"
             android:screenOrientation="landscape">
+            <meta-data android:name="com.tcrrry.icar.window.STANDARD_FLOATING_WINDOW" android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service android:name=".MediaDiagnosticService" android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-initiated 60 second media session diagnostics" />
+        </service>
 
         <service android:name=".IcarDockAccessibilityService" tools:node="remove" />
         <service android:name=".LyricsOverlayService" tools:node="remove" />

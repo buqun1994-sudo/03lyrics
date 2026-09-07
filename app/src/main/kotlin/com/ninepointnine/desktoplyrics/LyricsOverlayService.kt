@@ -345,6 +345,7 @@ class LyricsOverlayService : Service() {
         createNotificationChannel()
         startAsForeground()
         isRunning = true
+        LyricsRuntimeDiagnostics.attach(::runtimeDiagnosticSnapshot)
         announceOverlayState()
         loadRuntimePreferences()
         SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
@@ -895,6 +896,7 @@ class LyricsOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        LyricsRuntimeDiagnostics.detach()
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
         IcarDockStateRegistry.removeListener(dockStateListener)
         IcarSrPanelMotionRegistry.removeListener(srPanelMotionListener)
@@ -1199,6 +1201,7 @@ class LyricsOverlayService : Service() {
                 "cached=${snapshot.cache.current?.selection ?: "none"}")
         }
         latestLyricsPlaybackSnapshot = snapshot
+        LyricsRuntimeDiagnostics.record("lyrics_snapshot", ::runtimeDiagnosticSnapshot)
         updateTranslationAvailability(
             snapshot.result?.let { classifyLyrics(it.translatedLyrics) == LyricsKind.SYNCHRONIZED }
                 ?: false
@@ -2412,6 +2415,22 @@ class LyricsOverlayService : Service() {
             ownPackageName = packageName,
             discoveryPending = preferredBrowserDiscoveryPending
         )
+        LyricsRuntimeDiagnostics.record("arbitration") {
+            JSONObject()
+                .put("action", decision.action.name)
+                .put("reason", decision.reason)
+                .put("selectedSession", LyricsRuntimeDiagnostics.sessionId(decision.sessionId))
+                .put("candidates", org.json.JSONArray(candidates.map { candidate ->
+                    JSONObject()
+                        .put("session", LyricsRuntimeDiagnostics.sessionId(candidate.sessionId))
+                        .put("packageName", candidate.packageName)
+                        .put("source", candidate.sourceId)
+                        .put("state", candidate.playbackState ?: JSONObject.NULL)
+                        .put("positionMs", candidate.reportedPositionMs)
+                        .put("updateElapsedRealtimeMs", candidate.positionUpdateTimeMs)
+                        .put("activeInSystemList", candidate.activeInSystemList)
+                }))
+        }
         val best = decision.sessionId?.let { id ->
             controllers.firstOrNull { mediaSessionId(it) == id }
         }
@@ -2743,6 +2762,7 @@ class LyricsOverlayService : Service() {
                 "position=${timeline.positionMs} reported=$reportedPositionMs " +
                 "duration=$duration publishedDuration=${mediaPlaybackAdapter.publishedDurationMs}")
         }
+        LyricsRuntimeDiagnostics.record("playback_snapshot", ::runtimeDiagnosticSnapshot)
         return JSONObject()
             .put("hasSession", title.isNotBlank() || playback != null)
             .put("permissionRequired", false)
@@ -2758,6 +2778,38 @@ class LyricsOverlayService : Service() {
             .put("speed", if (timeline.speed.isFinite()) timeline.speed else 1.0)
             .put("timelineReady", timeline.timelineReady)
             .put("capturedAtMs", System.currentTimeMillis())
+    }
+
+    private fun runtimeDiagnosticSnapshot(): JSONObject {
+        val controller = currentController
+        val playback = runCatching { controller?.playbackState }.getOrNull()
+        val metadata = currentRecordingState?.metadata
+        val lyrics = latestLyricsPlaybackSnapshot
+        return JSONObject()
+            .put("serviceRunning", isRunning)
+            .put("selectedPackage", controller?.packageName ?: JSONObject.NULL)
+            .put("source", currentLogicalSourceId ?: JSONObject.NULL)
+            .put("rawState", playback?.state ?: JSONObject.NULL)
+            .put("reportedPositionMs", playback?.position ?: JSONObject.NULL)
+            .put("updateElapsedRealtimeMs", playback?.lastPositionUpdateTime ?: JSONObject.NULL)
+            .put("rawDuration", runCatching {
+                controller?.metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)
+            }.getOrNull() ?: JSONObject.NULL)
+            .put("publishedDurationMs", mediaPlaybackAdapter.publishedDurationMs)
+            .put("durationUnit", controller?.let(::durationUnitForController)?.name ?: JSONObject.NULL)
+            .put("effectiveDurationMs", metadata?.durationMs ?: JSONObject.NULL)
+            .put("track", metadata?.track?.take(128) ?: JSONObject.NULL)
+            .put("artist", metadata?.artist?.take(128) ?: JSONObject.NULL)
+            .put("mediaId", metadata?.mediaId?.take(160) ?: JSONObject.NULL)
+            .put("recordingGeneration", lyrics.recordingGeneration)
+            .put("queryRevision", lyrics.queryRevision)
+            .put("lyricsAvailability", lyrics.availability.name)
+            .put("manualSearchState", lyrics.searchState.name)
+            .put("hasLyrics", lyrics.result != null)
+            .put("lyricsSource", lyrics.result?.source ?: JSONObject.NULL)
+            .put("cacheSelection", lyrics.cache.current?.selection?.name ?: JSONObject.NULL)
+            .put("webReady", webReady)
+            .put("webDispatchedGeneration", deliveredLyricsPlaybackSnapshot?.recordingGeneration ?: JSONObject.NULL)
     }
 
     private fun maybeRestorePlaybackCheckpoint(
@@ -2987,6 +3039,13 @@ class LyricsOverlayService : Service() {
                 deliveredLyricsPlaybackSnapshot = lyricsSnapshot
             }
             targetWebView.evaluateJavascript(script.toString(), null)
+            LyricsRuntimeDiagnostics.record("web_dispatch") {
+                JSONObject().put("generation", lyricsSnapshot.recordingGeneration)
+                    .put("revision", lyricsSnapshot.queryRevision)
+                    .put("matchingLyrics", matchingLyrics)
+                    .put("lyricsChanged", lyricsChanged)
+                    .put("playbackState", playback.optString("state"))
+            }
         }
     }
 

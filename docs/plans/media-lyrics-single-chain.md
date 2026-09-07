@@ -1,5 +1,7 @@
 # 媒体与歌词唯一主链重构
 
+2026-09-07 取证修正：03T BluetoothMediaBrowserService 返回毫秒，原先按 SDK 30 指定秒的画像已撤销。公开 Browser 补齐、有限连接与唯一主链继续保留；当前专项施工和验证见 `netease-media-diagnostics.md`。QQ 音乐“车载蓝牙歌词”造成原始字段动态变化属于用户确认的外部行为，本轮不解析复合文本。
+
 ## 1. 目标与已确认口径
 
 1. 爱趣听、蓝牙、U 盘、本机音乐与 03T 公开媒体代理共用同一条主链。只接入公开 MediaSession / MediaBrowser 与已经取证的 AVRCP 事件。
