@@ -12,6 +12,47 @@ import org.junit.Test
 
 class PublicMediaBrowserSessionRegistryTest {
     @Test
+    fun `preferred source id contributes only its package to supplemental discovery`() {
+        assertEquals(
+            "com.tencent.wecarflow",
+            PublicMediaBrowserServiceResolver.packageNameFromSourceId(
+                "com.tencent.wecarflow/com.mychery.cloudmusic.service.CloudMusicService"
+            )
+        )
+        assertNull(PublicMediaBrowserServiceResolver.packageNameFromSourceId("malformed"))
+        assertNull(PublicMediaBrowserServiceResolver.packageNameFromSourceId("com.example/"))
+        assertNull(PublicMediaBrowserServiceResolver.packageNameFromSourceId("../service"))
+    }
+
+    @Test
+    fun `preferred source package is included when activity has no active package`() {
+        var observedPackages = emptySet<String>()
+        val registry = PublicMediaBrowserSessionRegistry(
+            context = ContextWrapper(null),
+            mainHandler = Handler(),
+            listener = RecordingListener(),
+            serviceResolver = { emptyList() },
+            supplementalServiceResolver = { packages ->
+                observedPackages = packages
+                emptyList()
+            },
+            clientFactory = PublicMediaBrowserClientFactory { _, _, callback -> FakeClient(callback) },
+            scheduler = FakeScheduler()
+        )
+
+        registry.refresh(
+            eligiblePackages = emptySet(),
+            preferredSourceId =
+                "com.tencent.wecarflow/com.mychery.cloudmusic.service.CloudMusicService",
+            bluetoothRoutePresent = false,
+            discoverAllSources = false
+        )
+
+        assertEquals(setOf("com.tencent.wecarflow"), observedPackages)
+        assertEquals(0, registry.activeConnectionCount)
+    }
+
+    @Test
     fun `discovery remains open until arbitration selects a source`() {
         assertTrue(
             PublicMediaBrowserRegistryPolicy.shouldDiscoverAllSources(

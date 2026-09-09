@@ -181,6 +181,12 @@ internal fun classifyLyrics(value: String?): LyricsKind {
 internal fun synchronizedLyricsOrEmpty(value: String?): String =
     cleanLyrics(value).takeIf { classifyLyrics(it) == LyricsKind.SYNCHRONIZED }.orEmpty()
 
+internal fun isEmbeddedSynchronizedLyrics(value: String?): Boolean {
+    val lyrics = cleanLyrics(value)
+    if (classifyLyrics(lyrics) != LyricsKind.SYNCHRONIZED) return false
+    return TIMESTAMP_PATTERN.findAll(lyrics).take(2).count() >= 2
+}
+
 internal fun JSONObject?.contentString(key: String): String {
     val value = this?.opt(key)
     return cleanLyrics(value?.toString())

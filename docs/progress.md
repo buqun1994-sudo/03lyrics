@@ -1,5 +1,15 @@
 # 项目进度
 
+## 2026-09-10 网易云上电恢复与内置歌词优先（实现与车机回归完成）
+
+1. 根因收敛为两个独立链路：网易云 `CloudMusicService` 未声明标准 Browser intent-filter，服务重建时仅凭当前活动包可能错过它；其公开 MediaDescription 又把完整 LRC 放进 description，旧归一将其误当专辑，导致查找页专辑输入框显示歌词。现沿统一公开 Browser / Adapter / Store 主链修正，不增加网易云专用播放器或歌词协议分支。
+2. `PublicMediaBrowserSessionRegistry` 现在从已保存的 `preferredSourceId` 安全提取包名，与活动包一起进入补充服务探测；仅对这些候选包执行已导出、无权限限制且服务名含媒体语义的公开组件扫描，继续遵守最多 `8` 个连接和现有仲裁顺序。
+3. `MediaSessionMetadataPolicy` 将描述、展示描述和专辑候选中的完整同步 LRC（至少两条时间戳）分离到 `embeddedLyrics`，专辑字段只保留普通文本。`MediaRecordingStateTracker` 保留同一录音晚到的内置歌词，正文首次到达或变化推进查询修订，瞬时空字段不会抹除已观察内容。
+4. `LyricsPlaybackStore` 的选择顺序更新为“人工缓存 > 媒体内置 LRC > 自动缓存 > 网络解析”。内置歌词沿 `LyricsCandidateSelector` 生成当前录音的入选证明并通过现有自动缓存接口持久化；写入失败仍展示 `ONLINE_ONLY`，不触发网络，也不把旧自动缓存冒充当前歌词。
+5. 新增覆盖包名提取、首选来源补充发现、LRC / 专辑归一、晚到与瞬时缺失、内置歌词命中 / 人工优先 / 无效回退 / 缓存写入失败的 JVM 用例。定向与全量 JVM、`assembleDebug`、项目文档 / Skill / diff 检查均通过；按用户授权已卸载车上正式版并安装 `com.ninepointnine.desktoplyrics.test` `1.0.13-icar03-test / 127`，通过 ADB 追加 debug 通知监听授权后基础 smoke 通过，未截图。用户手动重启车机后确认网易云状态下歌词自动恢复，重启回归通过。
+6. 按用户确认完成网易云播放、歌词查找和内置歌词优先主测；重启后无需切换到其它播放器即可再次显示歌词，专辑字段不再显示 LRC 正文。
+7. 唯一版本真值已递增至 `1.0.14-icar03 / 128`。Release 完成 R8、资源收缩、发布 lint，并核对正式包名、单一 signer、APK v2；已导出 `03歌词-v1.0.14-icar03.apk` 与同名 ZIP 到正式发布目录。APK `2389403` bytes，SHA-256 `8ef8506b992da4ca8a5f4859f841b50b16c783c7fd302be84a5603e4e0223d8e`；ZIP `1394272` bytes，SHA-256 `4ee394d45566e7207524bd6917f886b5f6dc9e9ff3f9913205b339a1d0b60ac9`，ZIP 内单 APK 条目为 UTF-8 且解压字节一致。
+
 ## 2026-09-09 03T 网易云适配现场闭环（已完成）
 
 1. 针对 03T 多媒体中心内置网易云没有歌曲信息、旧来源歌词残留的问题，沿用公开 MediaBrowser、统一仲裁、录音身份、时间线、`LyricsPlaybackStore` 和唯一 WebView 投递主链完成适配。新增的补充发现只接入已出现在公开活动会话中的导出媒体服务，并在准入后参与既有连接预算，不增加网易云专用协议、歌词 API 或第二套状态机。
@@ -9,7 +19,7 @@
 5. 诊断归档外部轨迹 `60071ms`、`49` 事件、未截断；主应用轨迹受 `256` 条容量限制，保留 `256`、丢弃 `377`，报告明确 `truncated=true`。该证据覆盖持续播放与匹配投递；切歌后旧歌词清空全过程由用户手测确认，不能从未覆盖的诊断片段单独推导。诊断外部 Browser 清单未注入补充 resolver，可能缺少网易云服务项，但主应用运行记录已直接证明实际选中端点。
 6. 定向 JVM、`assembleDebug`、`assembleDiagnostic`、Node 诊断脚本、文档 / Skill / diff 检查均已通过。Debug 包保留在车机用于主测，诊断助手仍以开发签名运行；正式 Release 未安装到车机。
 7. 按用户指令递增唯一版本至 `1.0.13-icar03 / 127`，完成 `assembleRelease`（R8、资源收缩、发布 lint）并核对正式包名、版本、单一 signer 和 APK v2 签名。已导出 `03歌词-v1.0.13-icar03.apk` 与同名 ZIP 到正式发布目录；APK `2388195` bytes、SHA-256 `7b4b9cb34a12118b4307d576cb565be4a9cbbb32823a5de611e58210fccb72aa`，ZIP `1398749` bytes、SHA-256 `032f3d0205c8c27c4d576434866d96f40ca5e711bc340da2fc7ac3b450ea46a0`，ZIP 内单 APK 与原件逐字节一致。
-8. Cloud 共享登记仍停留在 `1.0.10 / 124`，严格检查因此报告版本、HEAD 和工作树漂移；本轮不改写共享登记库。代码与文档将按用户指令提交并推送，未清除车机数据、未安装 Release、未发布线上 Release。
+8. Cloud 共享登记仍停留在 `1.0.10 / 124`，严格检查因此报告版本、HEAD 和工作树漂移；本轮不改写共享登记库。代码与文档按用户指令提交，未推送、未清除车机数据、未安装 Release、未发布线上 Release。
 
 ## 2026-09-07 诊断助手一键自动录制（已完成）
 

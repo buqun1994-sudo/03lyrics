@@ -37,7 +37,8 @@ internal data class MediaRecordingMetadata(
     val artist: String,
     val album: String,
     val durationMs: Long,
-    val mediaId: String = ""
+    val mediaId: String = "",
+    val embeddedLyrics: String = ""
 ) {
     val hasTrack: Boolean get() = track.isNotBlank()
 }
@@ -64,7 +65,7 @@ internal object MediaSessionMetadataPolicy {
                 fields.albumArtist,
                 fields.author
             ),
-            album = firstText(
+            album = firstNonLyricsText(
                 fields.album,
                 fields.descriptionDescription,
                 fields.displayDescription
@@ -74,7 +75,12 @@ internal object MediaSessionMetadataPolicy {
                 unit = fields.durationUnit,
                 reportedPositionMs = fields.reportedPositionMs
             ),
-            mediaId = fields.mediaId.takeIf(String::isNotBlank).orEmpty()
+            mediaId = fields.mediaId.takeIf(String::isNotBlank).orEmpty(),
+            embeddedLyrics = firstEmbeddedLyrics(
+                fields.descriptionDescription,
+                fields.displayDescription,
+                fields.album
+            )
         )
 
     private fun normalizeDuration(
@@ -109,6 +115,18 @@ internal object MediaSessionMetadataPolicy {
         .asSequence()
         .map(String::trim)
         .firstOrNull(String::isNotEmpty)
+        .orEmpty()
+
+    private fun firstNonLyricsText(vararg values: String): String = values
+        .asSequence()
+        .map(String::trim)
+        .firstOrNull { it.isNotEmpty() && !isEmbeddedSynchronizedLyrics(it) }
+        .orEmpty()
+
+    private fun firstEmbeddedLyrics(vararg values: String): String = values
+        .asSequence()
+        .map(String::trim)
+        .firstOrNull(::isEmbeddedSynchronizedLyrics)
         .orEmpty()
 
     private const val MILLIS_PER_SECOND = 1_000L
@@ -203,7 +221,8 @@ internal class MediaRecordingStateTracker(
         } else {
             current.durationMs
         },
-        mediaId = incoming.mediaId.ifBlank { current.mediaId }
+        mediaId = incoming.mediaId.ifBlank { current.mediaId },
+        embeddedLyrics = incoming.embeddedLyrics.ifBlank { current.embeddedLyrics }
     )
 
     private fun queryMaterialChanged(
@@ -213,6 +232,7 @@ internal class MediaRecordingStateTracker(
         if (normalizeText(current.track) != normalizeText(incoming.track)) return true
         if (normalizeText(current.artist) != normalizeText(incoming.artist)) return true
         if (normalizeText(current.album) != normalizeText(incoming.album)) return true
+        if (current.embeddedLyrics != incoming.embeddedLyrics) return true
         val currentDurationKnown = current.durationMs >= MINIMUM_QUERY_DURATION_MS
         val incomingDurationKnown = incoming.durationMs >= MINIMUM_QUERY_DURATION_MS
         if (currentDurationKnown != incomingDurationKnown) return true

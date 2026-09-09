@@ -7,6 +7,40 @@ import org.junit.Test
 
 class MediaSessionMetadataPolicyTest {
     @Test
+    fun `embedded lrc is separated from album metadata`() {
+        val lrc = "[00:01.00]First line\n[00:02.00]Second line"
+        val metadata = MediaSessionMetadataPolicy.normalize(
+            MediaSessionMetadataFields(
+                title = "Song",
+                artist = "Artist",
+                descriptionDescription = lrc,
+                durationMs = 180_000L
+            )
+        )
+        assertEquals("", metadata.album)
+        assertEquals(lrc, metadata.embeddedLyrics)
+
+        val withAlbum = MediaSessionMetadataPolicy.normalize(
+            MediaSessionMetadataFields(
+                title = "Song",
+                artist = "Artist",
+                descriptionDescription = lrc,
+                album = "Album",
+                durationMs = 180_000L
+            )
+        )
+        assertEquals("Album", withAlbum.album)
+        assertEquals(lrc, withAlbum.embeddedLyrics)
+    }
+
+    @Test
+    fun `only complete embedded lrc qualifies`() {
+        assertTrue(isEmbeddedSynchronizedLyrics("[00:01.00]First\n[00:02.00]Second"))
+        assertFalse(isEmbeddedSynchronizedLyrics("[00:01.00]Only"))
+        assertFalse(isEmbeddedSynchronizedLyrics("[Live]"))
+    }
+
+    @Test
     fun `public media id remains opaque while later availability does not restart a query`() {
         val incoming = MediaSessionMetadataPolicy.normalize(
             MediaSessionMetadataFields(title = "Song", artist = "Artist", durationMs = 180_000L, mediaId = "Item/A-42")
@@ -274,6 +308,31 @@ class MediaSessionMetadataPolicyTest {
         assertEquals(first.queryRevision + 1L, enriched.queryRevision)
         assertEquals("Artist", enriched.metadata.artist)
         assertEquals("Album", enriched.metadata.album)
+    }
+
+    @Test
+    fun `embedded lyrics arriving late revises the query and transient loss is ignored`() {
+        val lrc = "[00:01.00]First\n[00:02.00]Second"
+        val tracker = MediaRecordingStateTracker()
+        val first = requireNotNull(
+            tracker.update("session", MediaRecordingMetadata("Song", "Artist", "Album", 180_000L))
+        )
+        val enriched = requireNotNull(
+            tracker.update(
+                "session",
+                MediaRecordingMetadata("Song", "Artist", "Album", 180_000L, embeddedLyrics = lrc)
+            )
+        )
+        assertEquals(first.recordingGeneration, enriched.recordingGeneration)
+        assertEquals(first.queryRevision + 1L, enriched.queryRevision)
+        assertTrue(enriched.queryChanged)
+        assertEquals(lrc, enriched.metadata.embeddedLyrics)
+
+        val transient = requireNotNull(
+            tracker.update("session", MediaRecordingMetadata("Song", "Artist", "Album", 180_000L))
+        )
+        assertEquals(lrc, transient.metadata.embeddedLyrics)
+        assertFalse(transient.queryChanged)
     }
 
     @Test

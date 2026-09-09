@@ -17,6 +17,68 @@ import kotlin.coroutines.CoroutineContext
 
 class LyricsPlaybackStoreTest {
     @Test
+    fun `embedded lyrics take the automatic path without a network lookup`() = Harness().use { h ->
+        val embedded = embeddedLyrics()
+        h.store.acceptPlayback(state(embeddedLyrics = embedded))
+        h.drain()
+
+        assertEquals(embedded, h.current.result?.lyrics)
+        assertEquals("media-session", h.current.result?.source)
+        assertEquals("embedded", h.current.result?.sourceId)
+        assertEquals(LyricsAvailability.CACHED_AUTOMATIC, h.current.availability)
+        assertEquals(embedded, h.current.cache.current?.result?.lyrics)
+        assertTrue(h.requests.isEmpty())
+    }
+
+    @Test
+    fun `manual cache remains ahead of embedded lyrics`() = Harness().use { h ->
+        val manual = result("song", "manual")
+        h.cache.manual[identity()] = entry(manual, manual = true)
+        h.store.acceptPlayback(state(embeddedLyrics = embeddedLyrics()))
+        h.drain()
+
+        assertEquals("manual", h.current.result?.sourceId)
+        assertEquals(LyricsAvailability.CACHED_MANUAL, h.current.availability)
+        assertTrue(h.requests.isEmpty())
+    }
+
+    @Test
+    fun `invalid embedded lyrics fall back to the normal resolver`() = Harness().use { h ->
+        h.store.acceptPlayback(state(embeddedLyrics = "[00:01.00]Only"))
+        h.drain()
+
+        assertEquals("online", h.current.result?.sourceId)
+        assertEquals(1, h.requests.size)
+    }
+
+    @Test
+    fun `embedded lyrics remain visible when automatic cache persistence fails`() = Harness().use { h ->
+        h.cache.acceptWrites = false
+        val embedded = embeddedLyrics()
+        h.store.acceptPlayback(state(embeddedLyrics = embedded))
+        h.drain()
+
+        assertEquals(embedded, h.current.result?.lyrics)
+        assertEquals("media-session", h.current.result?.source)
+        assertEquals(LyricsAvailability.ONLINE_ONLY, h.current.availability)
+        assertNull(h.current.cache.current)
+        assertTrue(h.requests.isEmpty())
+    }
+
+    @Test
+    fun `failed embedded replacement does not expose stale embedded cache`() = Harness().use { h ->
+        h.cache.automatic[identity()] = entry(embeddedResult("[00:01.00]Stale first\n[00:02.00]Stale second"))
+        h.cache.acceptWrites = false
+        val embedded = embeddedLyrics()
+        h.store.acceptPlayback(state(embeddedLyrics = embedded))
+        h.drain()
+
+        assertEquals(embedded, h.current.result?.lyrics)
+        assertEquals(LyricsAvailability.ONLINE_ONLY, h.current.availability)
+        assertNull(h.current.cache.current)
+    }
+
+    @Test
     fun `cache hit publishes lyrics and cache summary together without a network lookup`() = Harness().use { h ->
         val cached = result("song", "cached")
         h.cache.automatic[identity()] = entry(cached)
@@ -328,8 +390,34 @@ class LyricsPlaybackStoreTest {
     private companion object {
         const val NOW = 4_000_000_000L
         fun identity(track: String = "song") = LyricsPlaybackIdentity(track, "Artist", "Album", 200_000L)
-        fun state(track: String = "song", generation: Long = 1L, revision: Long = 1L) = MediaRecordingState(
-            MediaRecordingMetadata(track, "Artist", "Album", 200_000L), generation, revision, true, true
+        fun state(
+            track: String = "song",
+            generation: Long = 1L,
+            revision: Long = 1L,
+            embeddedLyrics: String = ""
+        ) = MediaRecordingState(
+            MediaRecordingMetadata(
+                track,
+                "Artist",
+                "Album",
+                200_000L,
+                embeddedLyrics = embeddedLyrics
+            ),
+            generation,
+            revision,
+            true,
+            true
+        )
+        fun embeddedLyrics() = "[00:01.00]Embedded first\n[00:02.00]Embedded second"
+        fun embeddedResult(lyrics: String) = LyricsResult(
+            lyrics = lyrics,
+            durationMs = 200_000L,
+            source = "media-session",
+            sourceId = "embedded",
+            candidateTrack = "song",
+            candidateArtist = "Artist",
+            candidateAlbum = "Album",
+            lyricsKind = LyricsKind.SYNCHRONIZED
         )
         fun result(track: String, id: String) = LyricsResult(
             lyrics = "[00:01.00]$id\n[00:10.00]Second line",

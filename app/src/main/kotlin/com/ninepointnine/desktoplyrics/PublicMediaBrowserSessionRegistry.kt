@@ -65,8 +65,9 @@ internal object PublicMediaBrowserServiceResolver {
 
     /**
      * Some vehicle media centers implement MediaBrowserServiceCompat but omit
-     * the standard intent filter. Only packages already present in the public
-     * MediaSession list are eligible for this bounded capability probe.
+     * the standard intent filter. Only packages present in the public
+     * MediaSession list or recovered from the saved preferred source are
+     * eligible for this bounded capability probe.
      */
     @Suppress("DEPRECATION")
     fun discoverUndeclared(
@@ -87,6 +88,16 @@ internal object PublicMediaBrowserServiceResolver {
         .mapNotNull { resolveUndeclared(it, excludedPackages) }
         .distinctBy(PublicMediaBrowserServiceDescriptor::sourceKey)
         .toList()
+
+    internal fun packageNameFromSourceId(sourceId: String?): String? {
+        val value = sourceId?.trim().orEmpty()
+        val separator = value.indexOf('/')
+        if (separator <= 0 || separator == value.lastIndex || value.indexOf('/', separator + 1) >= 0) {
+            return null
+        }
+        val packageName = value.substring(0, separator)
+        return packageName.takeIf { PACKAGE_NAME_PATTERN.matches(it) }
+    }
 
     fun resolveUndeclared(
         serviceInfo: ServiceInfo?,
@@ -162,6 +173,7 @@ internal object PublicMediaBrowserServiceResolver {
     }
 
     private val MEDIA_SERVICE_MARKERS = listOf("media", "music", "player")
+    private val PACKAGE_NAME_PATTERN = Regex("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)*")
 }
 
 internal object PublicMediaBrowserRegistryPolicy {
@@ -306,9 +318,15 @@ internal class PublicMediaBrowserSessionRegistry(
         discoverAllSources: Boolean
     ) {
         started = true
+        val supplementalCandidates = buildSet {
+            addAll(eligiblePackages)
+            PublicMediaBrowserServiceResolver.packageNameFromSourceId(preferredSourceId)
+                ?.let(::add)
+        }
         val descriptors = (
             runCatching { serviceResolver() }.getOrDefault(emptyList()) +
-                runCatching { supplementalServiceResolver(eligiblePackages) }.getOrDefault(emptyList())
+                runCatching { supplementalServiceResolver(supplementalCandidates) }
+                    .getOrDefault(emptyList())
             ).distinctBy(PublicMediaBrowserServiceDescriptor::sourceKey)
         val selected = PublicMediaBrowserServiceResolver.select(
             descriptors

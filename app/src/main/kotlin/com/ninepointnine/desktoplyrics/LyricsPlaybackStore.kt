@@ -201,6 +201,37 @@ internal class LyricsPlaybackStore(
             try {
                 val read = withCache { readCache(identity, recordUse = true) }
                 if (!isCurrent(epoch, state)) return@launch
+                if (read.entry?.selection == LyricsCacheSelection.MANUAL) {
+                    publishRead(read, null, loadingAvailability(state))
+                    return@launch
+                }
+
+                val embeddedCandidate = identity?.takeIf { it.isUsable }?.let { usableIdentity ->
+                    embeddedResolved(state, usableIdentity)?.let { resolved ->
+                        usableIdentity to resolved
+                    }
+                }
+                if (embeddedCandidate != null) {
+                    val (embeddedIdentity, embedded) = embeddedCandidate
+                    val persisted = withCache {
+                        cache.writeAutomatic(embeddedIdentity, embedded)
+                        readCache(embeddedIdentity)
+                    }
+                    if (!isCurrent(epoch, state)) return@launch
+                    val cachedEmbedded = persisted.entry?.takeIf {
+                        it.selection == LyricsCacheSelection.AUTOMATIC &&
+                            it.result.source == EMBEDDED_LYRICS_SOURCE &&
+                            it.result.sourceId == EMBEDDED_LYRICS_SOURCE_ID &&
+                            it.result == embedded.result
+                    }
+                    if (cachedEmbedded != null) {
+                        publishRead(persisted, null, LyricsAvailability.ONLINE_ONLY)
+                    } else {
+                        publishEmbedded(embedded.result, persisted.summary)
+                    }
+                    return@launch
+                }
+
                 publishRead(read, null, loadingAvailability(state))
                 if (identity?.isUsable != true ||
                     read.entry?.needsRefresh(nowEpochMs()) == false
@@ -247,6 +278,31 @@ internal class LyricsPlaybackStore(
         return CacheRead(entry, cache.snapshot(identity, entry))
     }
 
+    private fun embeddedResolved(
+        state: MediaRecordingState?,
+        identity: LyricsPlaybackIdentity?
+    ): ResolvedLyrics? {
+        if (state == null || identity?.isUsable != true) return null
+        val lyrics = state.metadata.embeddedLyrics
+        if (!isEmbeddedSynchronizedLyrics(lyrics)) return null
+        val candidate = LyricsResult(
+            lyrics = lyrics,
+            durationMs = identity.durationMs,
+            source = EMBEDDED_LYRICS_SOURCE,
+            sourceId = EMBEDDED_LYRICS_SOURCE_ID,
+            candidateTrack = identity.track,
+            candidateArtist = identity.artist,
+            candidateAlbum = identity.album,
+            lyricsKind = LyricsKind.SYNCHRONIZED
+        )
+        return LyricsCandidateSelector.selectCandidatesWithProof(
+            identity.lookup(),
+            listOf(candidate)
+        ).firstOrNull()?.let { selection ->
+            ResolvedLyrics(selection.candidate, selection.proof)
+        }
+    }
+
     private suspend fun <T> withCache(block: () -> T): T = withContext(ioDispatcher) {
         cacheMutex.withLock {
             // A cancelled writer must not resurrect a cache cleared by a newer command.
@@ -266,6 +322,16 @@ internal class LyricsPlaybackStore(
                     null -> if (result != null) LyricsAvailability.ONLINE_ONLY else empty
                 },
                 cache = read.summary
+            )
+        )
+    }
+
+    private fun publishEmbedded(result: LyricsResult, summary: LyricsCacheSnapshot) {
+        publish(
+            snapshot.copy(
+                result = result,
+                availability = LyricsAvailability.ONLINE_ONLY,
+                cache = summary.copy(current = null)
             )
         )
     }
@@ -323,6 +389,11 @@ internal class LyricsPlaybackStore(
     private fun MediaRecordingState.identity() = LyricsPlaybackIdentity(
         metadata.track, metadata.artist, metadata.album, metadata.durationMs
     )
+
+    private companion object {
+        const val EMBEDDED_LYRICS_SOURCE = "media-session"
+        const val EMBEDDED_LYRICS_SOURCE_ID = "embedded"
+    }
 }
 
 internal interface LyricsPlaybackCache {

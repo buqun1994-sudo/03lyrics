@@ -84,7 +84,7 @@ To build a signed APK, copy `keystore.properties.example` to `keystore.propertie
 
 ## Project information
 
-- Current release: `1.00` (versionCode 100)
+- Current release: `1.0.14-icar03` (versionCode 128)
 - Android package: `com.ninepointnine.desktoplyrics`
 - Author: Bilibili `@Tcrrrry`
 
