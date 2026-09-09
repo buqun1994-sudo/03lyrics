@@ -39,12 +39,6 @@ class MediaDiagnosticService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> if (collector == null && !finishing) startCapture()
-            ACTION_MARK -> {
-                val marker = intent.getStringExtra("marker").orEmpty()
-                collector?.mark(marker)
-                lastMarker = marker
-            }
-            ACTION_STOP -> finish("user_finished")
         }
         if (collector == null && !finishing) stopSelf(startId)
         return START_NOT_STICKY
@@ -55,7 +49,6 @@ class MediaDiagnosticService : Service() {
         recording = true
         saving = false
         error = ""
-        lastMarker = ""
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(
             CHANNEL, getString(R.string.diagnostic_recording), NotificationManager.IMPORTANCE_LOW
@@ -67,9 +60,6 @@ class MediaDiagnosticService : Service() {
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, DiagnosticActivity::class.java),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             .setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
-            .addAction(0, getString(R.string.diagnostic_heard), action(ACTION_MARK, "sound_heard", 1))
-            .addAction(0, getString(R.string.diagnostic_silent), action(ACTION_MARK, "no_sound", 2))
-            .addAction(0, getString(R.string.diagnostic_finish), action(ACTION_STOP, "", 3))
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -82,7 +72,7 @@ class MediaDiagnosticService : Service() {
             runtimeJob = scope.launch {
                 runtimeLeases = withContext(Dispatchers.IO) { beginRuntimeObservation() }
             }
-            handler.postDelayed(timeout, DURATION_MS)
+            handler.postDelayed(timeout, (DURATION_MS - (SystemClock.elapsedRealtime() - startedAtMs)).coerceAtLeast(0L))
         } catch (failure: Exception) {
             error = failure.javaClass.simpleName
             finish("observation_start_failed")
@@ -153,11 +143,6 @@ class MediaDiagnosticService : Service() {
 
     private fun runtimeUri(target: String): Uri = Uri.parse("content://" + target + ".media-diagnostics")
 
-    private fun action(action: String, marker: String, code: Int): PendingIntent = PendingIntent.getService(
-        this, code, Intent(this, MediaDiagnosticService::class.java).setAction(action).putExtra("marker", marker),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    )
-
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         collector?.let { running ->
@@ -177,8 +162,6 @@ class MediaDiagnosticService : Service() {
     companion object {
         const val DURATION_MS = 60_000L
         const val ACTION_START = "diagnostic.START"
-        const val ACTION_STOP = "diagnostic.STOP"
-        const val ACTION_MARK = "diagnostic.MARK"
         private const val CHANNEL = "netease_media_diagnostic"
         private const val NOTIFICATION_ID = 4310
         private val RUNTIME_PACKAGES = listOf(
@@ -189,8 +172,6 @@ class MediaDiagnosticService : Service() {
         var saving = false
             private set
         var startedAtMs = 0L
-            private set
-        var lastMarker = ""
             private set
         var error = ""
             private set

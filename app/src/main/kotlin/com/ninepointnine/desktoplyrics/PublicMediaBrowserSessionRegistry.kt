@@ -16,7 +16,8 @@ import android.os.Looper
 internal data class PublicMediaBrowserServiceDescriptor(
     val packageName: String,
     val serviceName: String,
-    val durationUnit: MediaSessionDurationUnit = MediaSessionDurationUnit.MILLISECONDS
+    val durationUnit: MediaSessionDurationUnit = MediaSessionDurationUnit.MILLISECONDS,
+    val supplemental: Boolean = false
 ) {
     val sourceKey: String
         get() {
@@ -62,6 +63,48 @@ internal object PublicMediaBrowserServiceResolver {
         return resolveServices(services.map { it.serviceInfo }, excludedPackages)
     }
 
+    /**
+     * Some vehicle media centers implement MediaBrowserServiceCompat but omit
+     * the standard intent filter. Only packages already present in the public
+     * MediaSession list are eligible for this bounded capability probe.
+     */
+    @Suppress("DEPRECATION")
+    fun discoverUndeclared(
+        packageManager: PackageManager,
+        candidatePackages: Set<String>,
+        excludedPackages: Set<String> = emptySet()
+    ): List<PublicMediaBrowserServiceDescriptor> = candidatePackages
+        .asSequence()
+        .filterNot(excludedPackages::contains)
+        .flatMap { packageName ->
+            runCatching {
+                packageManager.getPackageInfo(packageName, PackageManager.GET_SERVICES)
+                    .services
+                    .orEmpty()
+                    .asSequence()
+            }.getOrDefault(emptySequence())
+        }
+        .mapNotNull { resolveUndeclared(it, excludedPackages) }
+        .distinctBy(PublicMediaBrowserServiceDescriptor::sourceKey)
+        .toList()
+
+    fun resolveUndeclared(
+        serviceInfo: ServiceInfo?,
+        excludedPackages: Set<String> = emptySet()
+    ): PublicMediaBrowserServiceDescriptor? {
+        if (serviceInfo == null || !serviceInfo.exported || !serviceInfo.enabled) return null
+        if (!serviceInfo.permission.isNullOrBlank()) return null
+        val serviceName = serviceInfo.name?.trim().orEmpty()
+        if (!isPotentialMediaService(serviceName)) return null
+        return resolve(serviceInfo, excludedPackages)?.copy(supplemental = true)
+    }
+
+    internal fun isPotentialMediaService(serviceName: String): Boolean {
+        val simpleName = serviceName.substringAfterLast('.')
+        return simpleName.endsWith("Service", ignoreCase = true) &&
+            MEDIA_SERVICE_MARKERS.any { marker -> simpleName.contains(marker, ignoreCase = true) }
+    }
+
     fun resolveServices(
         serviceInfos: List<ServiceInfo?>,
         excludedPackages: Set<String> = emptySet()
@@ -95,8 +138,9 @@ internal object PublicMediaBrowserServiceResolver {
         .sortedBy {
             when {
                 it.sourceKey == preferredSourceId -> 0
-                it.packageName in eligiblePackages -> 1
-                else -> 2
+                it.supplemental -> 1
+                it.packageName in eligiblePackages -> 2
+                else -> 3
             }
         }
         .take(limit.coerceAtLeast(0))
@@ -116,6 +160,8 @@ internal object PublicMediaBrowserServiceResolver {
         ) -> MediaSessionDurationUnit.MILLISECONDS
         else -> MediaSessionDurationUnit.UNKNOWN
     }
+
+    private val MEDIA_SERVICE_MARKERS = listOf("media", "music", "player")
 }
 
 internal object PublicMediaBrowserRegistryPolicy {
@@ -212,11 +258,14 @@ internal class PublicMediaBrowserSessionRegistry(
             setOf(context.packageName)
         )
     },
+    private val supplementalServiceResolver:
+        (Set<String>) -> List<PublicMediaBrowserServiceDescriptor> = { emptyList() },
     private val clientFactory: PublicMediaBrowserClientFactory =
         PublicMediaBrowserClientFactory(::PlatformPublicMediaBrowserClient),
     private val scheduler: PublicMediaBrowserScheduler =
         HandlerPublicMediaBrowserScheduler(mainHandler),
-    private val elapsedRealtime: () -> Long = android.os.SystemClock::elapsedRealtime
+    private val elapsedRealtime: () -> Long = android.os.SystemClock::elapsedRealtime,
+    private val connectionLimit: Int = PublicMediaBrowserServiceResolver.MAX_SERVICES
 ) {
     interface Listener {
         fun onSessionsChanged(sessions: List<PublicMediaBrowserSession>)
@@ -257,7 +306,10 @@ internal class PublicMediaBrowserSessionRegistry(
         discoverAllSources: Boolean
     ) {
         started = true
-        val descriptors = runCatching { serviceResolver() }.getOrDefault(emptyList())
+        val descriptors = (
+            runCatching { serviceResolver() }.getOrDefault(emptyList()) +
+                runCatching { supplementalServiceResolver(eligiblePackages) }.getOrDefault(emptyList())
+            ).distinctBy(PublicMediaBrowserServiceDescriptor::sourceKey)
         val selected = PublicMediaBrowserServiceResolver.select(
             descriptors
                 .filter { descriptor ->
@@ -270,7 +322,8 @@ internal class PublicMediaBrowserSessionRegistry(
                     )
                 },
             preferredSourceId = preferredSourceId,
-            eligiblePackages = eligiblePackages
+            eligiblePackages = eligiblePackages,
+            limit = connectionLimit
         )
         val selectedSources = selected.mapTo(linkedSetOf()) { it.sourceKey }
 

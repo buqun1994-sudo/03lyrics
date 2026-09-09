@@ -26,6 +26,13 @@ test("exported bytes must agree with the archive manifest", () => {
     const archive = join(directory, "report.zip");
     execFileSync("zip", ["-jq", archive, report, integrity]);
     assert.equal(verifyDiagnosticArchive(archive).title, "Song");
+    const automatic = Buffer.from(JSON.stringify({ schemaVersion: 3, kind: "netease_media_events", capturePolicy: { mode: "automatic" } }));
+    writeFileSync(report, automatic);
+    writeFileSync(integrity, JSON.stringify({
+      file: "report.json", bytes: automatic.length, sha256: createHash("sha256").update(automatic).digest("hex")
+    }));
+    execFileSync("zip", ["-jq", archive, report, integrity]);
+    assert.equal(verifyDiagnosticArchive(archive).capturePolicy.mode, "automatic");
     writeFileSync(report, "{}");
     execFileSync("zip", ["-jq", archive, report]);
     assert.throws(() => verifyDiagnosticArchive(archive), /integrity mismatch/);

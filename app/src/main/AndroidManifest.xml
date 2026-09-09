@@ -3,6 +3,7 @@
 
     <queries>
         <package android:name="com.android.bluetooth" />
+        <package android:name="com.tencent.wecarflow" />
         <intent>
             <action android:name="android.media.browse.MediaBrowserService" />
         </intent>

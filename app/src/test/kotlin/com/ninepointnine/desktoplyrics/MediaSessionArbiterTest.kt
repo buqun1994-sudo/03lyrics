@@ -93,6 +93,46 @@ class MediaSessionArbiterTest {
     }
 
     @Test
+    fun `paused supplemental browser with advancing position can replace a stale active session`() {
+        val arbiter = runningArbiter()
+        val incumbent = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 100L)
+        val cloudMusic = candidate(
+            "cloud-music",
+            PlaybackState.STATE_PAUSED,
+            8_000L,
+            90L,
+            activeInSystemList = false
+        ).copy(sourceId = "com.tencent.wecarflow/com.mychery.cloudmusic.service.CloudMusicService")
+
+        assertEquals(
+            MediaSessionArbitrationAction.SELECT,
+            arbiter.evaluate(listOf(incumbent, cloudMusic), 0L, OWN_PACKAGE).action
+        )
+
+        val armed = arbiter.evaluate(
+            listOf(
+                incumbent.copy(reportedPositionMs = 1_500L, positionUpdateTimeMs = 200L),
+                cloudMusic.copy(reportedPositionMs = 8_300L, positionUpdateTimeMs = 180L)
+            ),
+            100L,
+            OWN_PACKAGE
+        )
+        assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, armed.action)
+        assertEquals("aqt", armed.sessionId)
+
+        val confirmed = arbiter.evaluate(
+            listOf(
+                incumbent.copy(reportedPositionMs = 2_000L, positionUpdateTimeMs = 300L),
+                cloudMusic.copy(reportedPositionMs = 8_700L, positionUpdateTimeMs = 280L)
+            ),
+            400L,
+            OWN_PACKAGE
+        )
+        assertEquals(MediaSessionArbitrationAction.SELECT, confirmed.action)
+        assertEquals("cloud-music", confirmed.sessionId)
+    }
+
+    @Test
     fun `paused incumbent remains selected while it leaves the active list`() {
         val arbiter = runningArbiter()
         val playing = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 100L)

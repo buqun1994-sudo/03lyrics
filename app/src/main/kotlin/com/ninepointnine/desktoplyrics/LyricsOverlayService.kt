@@ -108,6 +108,13 @@ class LyricsOverlayService : Service() {
                             "component=${descriptor.sourceKey}"
                     )
                 }
+            },
+            supplementalServiceResolver = { eligiblePackages ->
+                PublicMediaBrowserServiceResolver.discoverUndeclared(
+                    packageManager = this@LyricsOverlayService.packageManager,
+                    candidatePackages = eligiblePackages,
+                    excludedPackages = setOf(this@LyricsOverlayService.packageName)
+                )
             }
         )
     }

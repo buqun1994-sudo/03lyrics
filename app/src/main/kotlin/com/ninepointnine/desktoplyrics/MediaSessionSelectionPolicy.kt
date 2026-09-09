@@ -281,7 +281,7 @@ internal class MediaSessionArbiter(
         val pending = pendingHandoff
         val pendingCandidate = pending?.let { handoff ->
             eligible.firstOrNull {
-                identityOf(it) == handoff.sessionId && (it.isPlaying || it.isBuffering)
+                identityOf(it) == handoff.sessionId && isActiveEvidence(it)
             }
         }
         val challenger = pendingCandidate ?: bestActive(
@@ -289,7 +289,10 @@ internal class MediaSessionArbiter(
             excludeSessionId = currentId
         )
         val incumbentProgressed = hasFreshProgress(current, previousCandidates[currentId])
-        if (challenger != null && !incumbentProgressed) {
+        val challengerIsProgressingOnly = challenger != null &&
+            !challenger.isPlaying && !challenger.isBuffering &&
+            isPositionProgressing(challenger)
+        if (challenger != null && (!incumbentProgressed || challengerIsProgressingOnly)) {
             val challengerId = identityOf(challenger)
             if (pending?.sessionId != challengerId) {
                 pendingHandoff = PendingHandoff(
@@ -431,12 +434,30 @@ internal class MediaSessionArbiter(
     ): MediaSessionCandidate? = candidates
         .asSequence()
         .filter { identityOf(it) != excludeSessionId }
-        .filter { it.isPlaying || it.isBuffering }
+        .filter(::isActiveEvidence)
         .sortedWith(
-            compareByDescending<MediaSessionCandidate> { if (it.isPlaying) 2 else 1 }
+            compareByDescending<MediaSessionCandidate>(::activityRankWithProgress)
                 .thenBy(MediaSessionCandidate::index)
         )
         .firstOrNull()
+
+    private fun isActiveEvidence(candidate: MediaSessionCandidate): Boolean =
+        candidate.isPlaying || candidate.isBuffering || isPositionProgressing(candidate)
+
+    private fun isPositionProgressing(candidate: MediaSessionCandidate): Boolean {
+        val previous = previousCandidates[identityOf(candidate)] ?: return false
+        return !candidate.isEnded &&
+            candidate.reportedPositionMs >= 0L &&
+            previous.reportedPositionMs >= 0L &&
+            candidate.reportedPositionMs > previous.reportedPositionMs
+    }
+
+    private fun activityRankWithProgress(candidate: MediaSessionCandidate): Int = when {
+        candidate.isPlaying -> 3
+        candidate.isBuffering -> 2
+        isPositionProgressing(candidate) -> 1
+        else -> 0
+    }
 
     private fun hasFreshProgress(
         candidate: MediaSessionCandidate,

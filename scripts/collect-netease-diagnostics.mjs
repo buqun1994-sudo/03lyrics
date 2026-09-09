@@ -22,7 +22,7 @@ export function verifyDiagnosticArchive(file) {
     throw new Error("Diagnostic archive integrity mismatch");
   }
   const report = JSON.parse(bytes.toString("utf8"));
-  if (report.schemaVersion !== 2 || report.kind !== "netease_media_events") {
+  if (![2, 3].includes(report.schemaVersion) || report.kind !== "netease_media_events") {
     throw new Error("Unsupported diagnostic report schema");
   }
   return report;

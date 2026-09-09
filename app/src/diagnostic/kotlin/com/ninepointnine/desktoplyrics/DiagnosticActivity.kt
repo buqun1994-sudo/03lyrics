@@ -24,6 +24,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.DateFormat
+import java.util.Date
 
 class DiagnosticActivity : AppCompatActivity() {
     private val scope = MainScope()
@@ -32,14 +34,15 @@ class DiagnosticActivity : AppCompatActivity() {
     private lateinit var access: TextView
     private lateinit var location: TextView
     private lateinit var start: Button
-    private lateinit var stop: Button
     private lateinit var export: Button
-    private lateinit var grant: Button
-    private val markers = mutableListOf<Button>()
     private var latest: File? = null
     private var exportSource: File? = null
     private var exporting = false
     private var message = ""
+    private val requestAccess = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (MediaContractDiagnosticCollector.hasAccess(this)) startCapture()
+        else { message = getString(R.string.diagnostic_access_missing); render() }
+    }
     private val refresh = object : Runnable {
         override fun run() {
             render()
@@ -109,44 +112,15 @@ class DiagnosticActivity : AppCompatActivity() {
         side.addView(label(getString(R.string.diagnostic_title), R.style.SettingsText_Title))
         access = label("")
         side.addView(access)
-        grant = button(R.string.diagnostic_grant, android.R.drawable.ic_lock_lock) {
-            runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-                .onFailure { message = getString(R.string.diagnostic_grant_unavailable); render() }
-        }
-        side.addView(grant)
-        side.addView(button(R.string.diagnostic_open_target, android.R.drawable.ic_media_play) {
-            val intent = packageManager.getLaunchIntentForPackage(MediaContractDiagnosticCollector.TARGET_PACKAGE)
-            if (intent == null) {
-                message = getString(R.string.diagnostic_target_missing)
-                render()
-            } else {
-                mark("target_opened")
-                runCatching { startActivity(intent) }.onFailure {
-                    message = getString(R.string.diagnostic_target_missing)
-                    render()
-                }
-            }
-        })
         val content = column().apply { setBackgroundResource(R.drawable.bg_settings_content) }
         status = label("", R.style.SettingsText_Title)
         content.addView(status)
         start = button(R.string.diagnostic_start, android.R.drawable.ic_media_play) {
-            message = ""
-            ContextCompat.startForegroundService(this, Intent(this, MediaDiagnosticService::class.java)
-                .setAction(MediaDiagnosticService.ACTION_START))
+            if (MediaContractDiagnosticCollector.hasAccess(this)) startCapture()
+            else runCatching { requestAccess.launch(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                .onFailure { message = getString(R.string.diagnostic_grant_unavailable); render() }
         }
-        stop = button(R.string.diagnostic_finish, android.R.drawable.ic_media_pause) {
-            command(MediaDiagnosticService.ACTION_STOP)
-        }
-        content.addView(row(start, stop))
-        val markerButtons = listOf(
-            Triple(R.string.diagnostic_play_pressed, android.R.drawable.ic_media_play, "play_pressed"),
-            Triple(R.string.diagnostic_pause_pressed, android.R.drawable.ic_media_pause, "pause_pressed"),
-            Triple(R.string.diagnostic_next_pressed, android.R.drawable.ic_media_next, "next_pressed"),
-            Triple(R.string.diagnostic_heard, android.R.drawable.ic_lock_silent_mode_off, "sound_heard"),
-            Triple(R.string.diagnostic_silent, android.R.drawable.ic_lock_silent_mode, "no_sound")
-        ).map { (title, icon, value) -> button(title, icon) { mark(value) }.also(markers::add) }
-        markerButtons.chunked(2).forEach { content.addView(row(*it.toTypedArray())) }
+        content.addView(start)
         export = button(R.string.diagnostic_export, android.R.drawable.ic_menu_save) {
             latest?.let { file ->
                 exportSource = file
@@ -179,12 +153,10 @@ class DiagnosticActivity : AppCompatActivity() {
         val saving = MediaDiagnosticService.saving
         latest = DiagnosticReportWriter.latest(DiagnosticReportWriter.directory(this))
         access.updateText(getString(if (authorized) R.string.diagnostic_access_granted else R.string.diagnostic_access_missing))
-        grant.visibility = if (authorized) View.GONE else View.VISIBLE
-        start.isEnabled = authorized && !recording && !saving
-        stop.isEnabled = recording
-        markers.forEach { it.isEnabled = recording }
+        start.isEnabled = !recording && !saving && !exporting
         export.isEnabled = latest != null && !exporting && !saving && !recording
-        (markers + listOf(start, stop, export)).forEach { it.alpha = if (it.isEnabled) 1f else 0.4f }
+        export.visibility = if (latest != null && !recording && !saving) View.VISIBLE else View.GONE
+        listOf(start, export).forEach { it.alpha = if (it.isEnabled) 1f else 0.4f }
         val remaining = ((MediaDiagnosticService.DURATION_MS -
             (SystemClock.elapsedRealtime() - MediaDiagnosticService.startedAtMs)).coerceAtLeast(0) + 999) / 1_000
         status.updateText(when {
@@ -196,8 +168,10 @@ class DiagnosticActivity : AppCompatActivity() {
         })
         location.updateText(listOfNotNull(
             message.takeIf { it.isNotBlank() },
-            if (recording && MediaDiagnosticService.lastMarker.isNotEmpty()) getString(R.string.diagnostic_marked) else null,
-            latest?.let { getString(R.string.diagnostic_local_report) + "\n" + it.name }
+            latest?.takeIf { !recording && !saving }?.let {
+                getString(R.string.diagnostic_local_report, DateFormat.getDateTimeInstance(
+                    DateFormat.SHORT, DateFormat.SHORT).format(Date(it.lastModified())))
+            }
         ).joinToString("\n\n"))
     }
 
@@ -205,12 +179,14 @@ class DiagnosticActivity : AppCompatActivity() {
         if (text.toString() != value) text = value
     }
 
-    private fun command(action: String, marker: String? = null) {
-        if (!MediaDiagnosticService.recording) return
-        startService(Intent(this, MediaDiagnosticService::class.java).setAction(action).putExtra("marker", marker))
+    private fun startCapture() {
+        message = ""
+        runCatching {
+            ContextCompat.startForegroundService(this, Intent(this, MediaDiagnosticService::class.java)
+                .setAction(MediaDiagnosticService.ACTION_START))
+        }.onFailure { message = getString(R.string.diagnostic_recording_failed) }
+        render()
     }
-
-    private fun mark(marker: String) = command(MediaDiagnosticService.ACTION_MARK, marker)
 
     private fun column() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -240,16 +216,6 @@ class DiagnosticActivity : AppCompatActivity() {
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             .apply { bottomMargin = dp(12) }
         setOnClickListener { action() }
-    }
-
-    private fun row(vararg views: View) = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        views.forEachIndexed { index, view ->
-            addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                bottomMargin = dp(12)
-                if (index > 0) marginStart = dp(12)
-            })
-        }
     }
 
     private fun dimen(id: Int) = resources.getDimensionPixelSize(id)

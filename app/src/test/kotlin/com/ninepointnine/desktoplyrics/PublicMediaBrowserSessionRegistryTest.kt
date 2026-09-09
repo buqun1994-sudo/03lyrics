@@ -66,6 +66,89 @@ class PublicMediaBrowserSessionRegistryTest {
     }
 
     @Test
+    fun `resolver supplements an exported undeclared vehicle music service`() {
+        val cloudMusic = ServiceInfo().apply {
+            packageName = "com.tencent.wecarflow"
+            name = "com.mychery.cloudmusic.service.CloudMusicService"
+            exported = true
+            enabled = true
+        }
+        val protectedMusic = ServiceInfo().apply {
+            packageName = "com.tencent.wecarflow"
+            name = "com.mychery.cloudmusic.service.ProtectedMusicService"
+            exported = true
+            enabled = true
+            permission = "com.example.MEDIA_CONTROL"
+        }
+        val unrelated = ServiceInfo().apply {
+            packageName = "com.tencent.wecarflow"
+            name = "com.tencent.wecarflow.DeviceInfoService"
+            exported = true
+            enabled = true
+        }
+
+        val resolved = listOf(cloudMusic, protectedMusic, unrelated)
+            .map(PublicMediaBrowserServiceResolver::resolveUndeclared)
+            .filterNotNull()
+
+        assertEquals(
+            listOf("com.tencent.wecarflow/com.mychery.cloudmusic.service.CloudMusicService"),
+            resolved.map(PublicMediaBrowserServiceDescriptor::sourceKey)
+        )
+        assertTrue(resolved.single().supplemental)
+    }
+
+    @Test
+    fun `supplemental vehicle music service survives the shared connection budget`() {
+        val standard = (0 until 9).map { descriptor("com.example.player$it", "MusicService") }
+        val cloudMusic = descriptor(
+            "com.tencent.wecarflow",
+            "com.mychery.cloudmusic.service.CloudMusicService",
+            supplemental = true
+        )
+
+        val selected = PublicMediaBrowserServiceResolver.select(
+            descriptors = standard + cloudMusic,
+            limit = PublicMediaBrowserServiceResolver.MAX_SERVICES,
+            eligiblePackages = setOf(cloudMusic.packageName)
+        )
+
+        assertEquals(PublicMediaBrowserServiceResolver.MAX_SERVICES, selected.size)
+        assertTrue(cloudMusic.sourceKey in selected.map(PublicMediaBrowserServiceDescriptor::sourceKey))
+        assertEquals(cloudMusic.sourceKey, selected.first().sourceKey)
+    }
+
+    @Test
+    fun `registry merges supplemental endpoints into the existing connection owner`() {
+        val cloudMusic = descriptor(
+            "com.tencent.wecarflow",
+            "com.mychery.cloudmusic.service.CloudMusicService"
+        )
+        val clients = linkedMapOf<String, FakeClient>()
+        val registry = PublicMediaBrowserSessionRegistry(
+            context = ContextWrapper(null),
+            mainHandler = Handler(),
+            listener = RecordingListener(),
+            serviceResolver = { emptyList() },
+            supplementalServiceResolver = { listOf(cloudMusic) },
+            clientFactory = PublicMediaBrowserClientFactory { _, endpoint, callback ->
+                FakeClient(callback).also { clients[endpoint.sourceKey] = it }
+            },
+            scheduler = FakeScheduler()
+        )
+
+        registry.refresh(
+            eligiblePackages = setOf("com.tencent.wecarflow"),
+            preferredSourceId = null,
+            bluetoothRoutePresent = false,
+            discoverAllSources = false
+        )
+
+        assertEquals(1, registry.activeConnectionCount)
+        assertEquals(1, clients[cloudMusic.sourceKey]?.connectCount)
+    }
+
+    @Test
     fun `discovery keeps the complete public inventory before allocating connections`() {
         val services = (0 until 10).map { index ->
             ServiceInfo().apply {
@@ -252,6 +335,25 @@ class PublicMediaBrowserSessionRegistryTest {
     }
 
     @Test
+    fun `diagnostic connection budget includes later services and still releases every client`() {
+        val clients = mutableListOf<FakeClient>()
+        val registry = PublicMediaBrowserSessionRegistry(
+            context = ContextWrapper(null),
+            mainHandler = Handler(),
+            listener = RecordingListener(),
+            serviceResolver = { (0 until 18).map { descriptor("com.example.player$it", "MusicService") } },
+            clientFactory = PublicMediaBrowserClientFactory { _, _, callback -> FakeClient(callback).also(clients::add) },
+            scheduler = FakeScheduler(),
+            connectionLimit = 16
+        )
+        registry.refresh(emptySet(), null, bluetoothRoutePresent = false, discoverAllSources = true)
+        assertEquals(16, registry.activeConnectionCount)
+        registry.disconnect()
+        assertEquals(0, registry.activeConnectionCount)
+        assertTrue(clients.all { it.disconnectCount == 1 })
+    }
+
+    @Test
     fun `registry retries once then waits for the bounded reprobe interval`() {
         val scheduler = FakeScheduler()
         val clients = mutableListOf<FakeClient>()
@@ -330,8 +432,15 @@ class PublicMediaBrowserSessionRegistryTest {
         assertTrue(listener.sessions.isEmpty())
     }
 
-    private fun descriptor(packageName: String, className: String) =
-        PublicMediaBrowserServiceDescriptor(packageName, className)
+    private fun descriptor(
+        packageName: String,
+        className: String,
+        supplemental: Boolean = false
+    ) = PublicMediaBrowserServiceDescriptor(
+        packageName = packageName,
+        serviceName = className,
+        supplemental = supplemental
+    )
 
     private class RecordingListener : PublicMediaBrowserSessionRegistry.Listener {
         val sessions = mutableListOf<List<PublicMediaBrowserSession>>()

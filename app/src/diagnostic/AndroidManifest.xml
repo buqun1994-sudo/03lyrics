@@ -4,10 +4,15 @@
 
     <queries>
         <package android:name="com.netease.cloudmusic.iot" />
+        <package android:name="com.netease.cloudmusic" />
         <package android:name="com.ninepointnine.desktoplyrics" />
         <package android:name="com.ninepointnine.desktoplyrics.test" />
         <intent>
             <action android:name="android.media.browse.MediaBrowserService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 
