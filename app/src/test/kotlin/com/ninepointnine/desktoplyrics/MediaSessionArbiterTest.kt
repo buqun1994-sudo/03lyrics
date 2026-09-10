@@ -72,11 +72,11 @@ class MediaSessionArbiterTest {
         val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 100L)
         assertEquals(
             "bluetooth",
-            arbiter.evaluate(listOf(bluetooth), 0L, OWN_PACKAGE).sessionId
+            arbiter.evaluate(listOf(bluetooth), 100L, OWN_PACKAGE).sessionId
         )
 
         val aqt = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 200L)
-        val armed = arbiter.evaluate(listOf(bluetooth, aqt), 100L, OWN_PACKAGE)
+        val armed = arbiter.evaluate(listOf(bluetooth, aqt), 200L, OWN_PACKAGE)
         assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, armed.action)
         assertEquals("bluetooth", armed.sessionId)
 
@@ -85,7 +85,7 @@ class MediaSessionArbiterTest {
                 bluetooth,
                 aqt.copy(reportedPositionMs = 1_400L, positionUpdateTimeMs = 500L)
             ),
-            400L,
+            500L,
             OWN_PACKAGE
         )
         assertEquals(MediaSessionArbitrationAction.SELECT, confirmed.action)
@@ -106,15 +106,15 @@ class MediaSessionArbiterTest {
 
         assertEquals(
             MediaSessionArbitrationAction.SELECT,
-            arbiter.evaluate(listOf(incumbent, cloudMusic), 0L, OWN_PACKAGE).action
+            arbiter.evaluate(listOf(incumbent, cloudMusic), 100L, OWN_PACKAGE).action
         )
 
         val armed = arbiter.evaluate(
             listOf(
-                incumbent.copy(reportedPositionMs = 1_500L, positionUpdateTimeMs = 200L),
+                incumbent.copy(positionUpdateTimeMs = 200L),
                 cloudMusic.copy(reportedPositionMs = 8_300L, positionUpdateTimeMs = 180L)
             ),
-            100L,
+            200L,
             OWN_PACKAGE
         )
         assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, armed.action)
@@ -122,10 +122,10 @@ class MediaSessionArbiterTest {
 
         val confirmed = arbiter.evaluate(
             listOf(
-                incumbent.copy(reportedPositionMs = 2_000L, positionUpdateTimeMs = 300L),
+                incumbent.copy(positionUpdateTimeMs = 300L),
                 cloudMusic.copy(reportedPositionMs = 8_700L, positionUpdateTimeMs = 280L)
             ),
-            400L,
+            500L,
             OWN_PACKAGE
         )
         assertEquals(MediaSessionArbitrationAction.SELECT, confirmed.action)
@@ -208,7 +208,7 @@ class MediaSessionArbiterTest {
     }
 
     @Test
-    fun `cold start restores a preferred paused source before stale playback`() {
+    fun `cold start lets real playback outrank a preferred paused source`() {
         val arbiter = MediaSessionArbiter()
         arbiter.restorePreferredSource("aqt-source")
         val aqt = candidate("aqt", PlaybackState.STATE_PAUSED, 2_000L, 100L)
@@ -216,10 +216,186 @@ class MediaSessionArbiterTest {
         val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 10L)
             .copy(sourceId = "bluetooth-source")
 
-        val decision = arbiter.evaluate(listOf(bluetooth, aqt), 100L, OWN_PACKAGE)
+        arbiter.evaluate(listOf(bluetooth, aqt), 100L, OWN_PACKAGE)
+        val decision = arbiter.evaluate(listOf(bluetooth, aqt), 1_600L, OWN_PACKAGE)
 
         assertEquals(MediaSessionArbitrationAction.SELECT, decision.action)
+        assertEquals("bluetooth", decision.sessionId)
+    }
+
+    @Test
+    fun `preferred paused source is restored when other playback has only stale state`() {
+        val arbiter = MediaSessionArbiter()
+        arbiter.restorePreferredSource("aqt-source")
+        val aqt = candidate("aqt", PlaybackState.STATE_PAUSED, 2_000L, 100L)
+            .copy(sourceId = "aqt-source", activeInSystemList = false)
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 10L)
+        arbiter.evaluate(listOf(bluetooth, aqt), 10_000L, OWN_PACKAGE)
+
+        val decision = arbiter.evaluate(listOf(bluetooth, aqt), 11_500L, OWN_PACKAGE)
+
         assertEquals("aqt", decision.sessionId)
+    }
+
+    @Test
+    fun `playing preference cannot override fresher unlisted playback`() {
+        val arbiter = MediaSessionArbiter()
+        arbiter.restorePreferredSource("bluetooth-source")
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 100L)
+            .copy(sourceId = "bluetooth-source")
+        val cloud = candidate("cloud", PlaybackState.STATE_PLAYING, 8_000L, 10_000L, false)
+
+        assertEquals(null, arbiter.evaluate(listOf(bluetooth, cloud), 10_000L, OWN_PACKAGE).sessionId)
+        val selected = arbiter.evaluate(listOf(bluetooth, cloud), 11_500L, OWN_PACKAGE)
+        assertEquals("cloud", selected.sessionId)
+    }
+
+    @Test
+    fun `observed paused progress wins cold selection and survives a repeated sample`() {
+        val arbiter = MediaSessionArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 10_000L)
+        val cloud = candidate("cloud", PlaybackState.STATE_PAUSED, 8_000L, 0L, false)
+        arbiter.evaluate(listOf(bluetooth, cloud), 10_000L, OWN_PACKAGE)
+        val advanced = cloud.copy(reportedPositionMs = 8_500L)
+        arbiter.evaluate(listOf(bluetooth, advanced), 10_500L, OWN_PACKAGE)
+
+        val selected = arbiter.evaluate(
+            listOf(bluetooth.copy(positionUpdateTimeMs = 11_500L), advanced), 11_500L, OWN_PACKAGE
+        )
+
+        assertEquals("cloud", selected.sessionId)
+    }
+
+    @Test
+    fun `unlisted playback timestamp wins a same evidence tie before system active flag`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 10_000L)
+        val cloud = candidate("cloud", PlaybackState.STATE_PLAYING, 8_000L, 11_000L, false)
+
+        assertEquals("cloud", arbiter.evaluate(listOf(bluetooth, cloud), 11_000L, OWN_PACKAGE).sessionId)
+    }
+
+    @Test
+    fun `unknown and future timestamps cannot defeat observed progress`() {
+        listOf(0L, -1L, Long.MAX_VALUE).forEach { timestamp ->
+            val arbiter = MediaSessionArbiter()
+            val stale = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, timestamp)
+            val cloud = candidate("cloud", PlaybackState.STATE_PAUSED, 8_000L, 0L, false)
+            arbiter.evaluate(listOf(stale, cloud), 10_000L, OWN_PACKAGE)
+            val progressed = cloud.copy(reportedPositionMs = 9_500L)
+
+            assertEquals("cloud", arbiter.evaluate(listOf(stale, progressed), 11_500L, OWN_PACKAGE).sessionId)
+        }
+    }
+
+    @Test
+    fun `paused browser progress is confirmed even without another position callback within 250ms`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 100L)
+        val cloud = candidate("cloud", PlaybackState.STATE_PAUSED, 8_000L, 0L, false)
+        assertEquals("bluetooth", arbiter.evaluate(listOf(bluetooth, cloud), 10_000L, OWN_PACKAGE).sessionId)
+        val advanced = cloud.copy(reportedPositionMs = 8_500L)
+        val armed = arbiter.evaluate(listOf(bluetooth, advanced), 10_500L, OWN_PACKAGE)
+        assertEquals("handoff_armed", armed.reason)
+
+        val selected = arbiter.evaluate(listOf(bluetooth, advanced), 10_750L, OWN_PACKAGE)
+        assertEquals("cloud", selected.sessionId)
+    }
+
+    @Test
+    fun `timestamp only incumbent updates cannot block progressing playback`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 10_000L)
+        val cloud = candidate("cloud", PlaybackState.STATE_PLAYING, 8_000L, 9_000L, false)
+        arbiter.evaluate(listOf(bluetooth, cloud), 10_000L, OWN_PACKAGE)
+        val advanced = cloud.copy(reportedPositionMs = 8_500L, positionUpdateTimeMs = 10_500L)
+        val refreshed = bluetooth.copy(positionUpdateTimeMs = 10_600L)
+        assertEquals("handoff_armed", arbiter.evaluate(listOf(refreshed, advanced), 10_600L, OWN_PACKAGE).reason)
+
+        val selected = arbiter.evaluate(
+            listOf(refreshed.copy(positionUpdateTimeMs = 10_850L), advanced), 10_850L, OWN_PACKAGE
+        )
+        assertEquals("cloud", selected.sessionId)
+    }
+
+    @Test
+    fun `timestamp only challenger cannot take playback back between position callbacks`() {
+        val arbiter = runningArbiter()
+        val cloud = candidate("cloud", PlaybackState.STATE_PLAYING, 8_000L, 10_000L, false)
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 100L)
+        arbiter.evaluate(listOf(cloud, bluetooth), 10_000L, OWN_PACKAGE)
+        listOf(10_100L, 10_400L, 16_000L, 16_300L).forEach { now ->
+            val decision = arbiter.evaluate(listOf(cloud, bluetooth.copy(positionUpdateTimeMs = now)), now, OWN_PACKAGE)
+            assertEquals("cloud", decision.sessionId)
+        }
+    }
+
+    @Test
+    fun `stale playing challenger cannot starve progressing paused browser`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 100L)
+        arbiter.evaluate(listOf(bluetooth), 10_000L, OWN_PACKAGE)
+        val stale = candidate("aqt", PlaybackState.STATE_PLAYING, 3_000L, 0L)
+        val cloud = candidate("cloud", PlaybackState.STATE_PAUSED, 8_000L, 0L, false)
+        arbiter.evaluate(listOf(bluetooth, stale, cloud), 10_100L, OWN_PACKAGE)
+        val advanced = cloud.copy(reportedPositionMs = 8_500L)
+        arbiter.evaluate(listOf(bluetooth, stale, advanced), 10_600L, OWN_PACKAGE)
+
+        assertEquals("cloud", arbiter.evaluate(listOf(bluetooth, stale, advanced), 10_850L, OWN_PACKAGE).sessionId)
+    }
+
+    @Test
+    fun `confirmed challenger can replace an incumbent with unknown state`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 100L)
+        arbiter.evaluate(listOf(bluetooth), 10_000L, OWN_PACKAGE)
+        val unknown = bluetooth.copy(playbackState = null)
+        val cloud = candidate("cloud", PlaybackState.STATE_PLAYING, 8_000L, 10_100L, false)
+        arbiter.evaluate(listOf(unknown, cloud), 10_100L, OWN_PACKAGE)
+
+        assertEquals("cloud", arbiter.evaluate(listOf(unknown, cloud), 10_350L, OWN_PACKAGE).sessionId)
+    }
+
+    @Test
+    fun `stopped erroneous and truly paused challengers cannot retain motion evidence`() {
+        listOf(PlaybackState.STATE_STOPPED, PlaybackState.STATE_NONE, PlaybackState.STATE_ERROR, PlaybackState.STATE_PAUSED).forEach { state ->
+            val arbiter = runningArbiter()
+            val bluetooth = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 100L)
+            val cloud = candidate("cloud", PlaybackState.STATE_PLAYING, 8_000L, 0L, false)
+            arbiter.evaluate(listOf(bluetooth), 10_000L, OWN_PACKAGE)
+            arbiter.evaluate(listOf(bluetooth, cloud), 10_100L, OWN_PACKAGE)
+            val advanced = cloud.copy(reportedPositionMs = 8_500L)
+            arbiter.evaluate(listOf(bluetooth, advanced), 10_600L, OWN_PACKAGE)
+
+            val selected = arbiter.evaluate(
+                listOf(bluetooth, advanced.copy(playbackState = state, reportedPositionMs = 8_600L)), 10_850L, OWN_PACKAGE
+            )
+            assertEquals("bluetooth", selected.sessionId)
+        }
+    }
+
+    @Test
+    fun `cold start chooses real playing source over active paused incumbent`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate(
+            "bluetooth",
+            PlaybackState.STATE_PAUSED,
+            64_000L,
+            2_000L,
+            activeInSystemList = true
+        )
+        val cloudMusic = candidate(
+            "cloud-music",
+            PlaybackState.STATE_PLAYING,
+            8_000L,
+            2_400L,
+            activeInSystemList = false
+        )
+
+        val decision = arbiter.evaluate(listOf(bluetooth, cloudMusic), 2_500L, OWN_PACKAGE)
+
+        assertEquals(MediaSessionArbitrationAction.SELECT, decision.action)
+        assertEquals("cloud-music", decision.sessionId)
     }
 
     @Test
@@ -265,16 +441,56 @@ class MediaSessionArbiterTest {
         val arbiter = runningArbiter()
         val aqt = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 100L)
         val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 500L, 50L)
-        arbiter.evaluate(listOf(aqt), 0L, OWN_PACKAGE)
+        arbiter.evaluate(listOf(aqt), 100L, OWN_PACKAGE)
         arbiter.forgetSession("aqt")
 
         val decision = arbiter.evaluate(
             listOf(bluetooth.copy(positionUpdateTimeMs = 200L)),
-            100L,
+            200L,
             OWN_PACKAGE
         )
         assertEquals(MediaSessionArbitrationAction.SELECT, decision.action)
         assertEquals("bluetooth", decision.sessionId)
+    }
+
+    @Test
+    fun `equally progressing sources keep the incumbent regardless of callback ordering`() {
+        val arbiter = runningArbiter()
+        var current = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 10_000L)
+        var other = candidate("cloud", PlaybackState.STATE_PAUSED, 8_000L, 0L, false)
+        arbiter.evaluate(listOf(current, other), 10_000L, OWN_PACKAGE)
+        current = current.copy(reportedPositionMs = 1_500L, positionUpdateTimeMs = 10_500L)
+        arbiter.evaluate(listOf(current, other), 10_500L, OWN_PACKAGE)
+        other = other.copy(reportedPositionMs = 8_500L)
+        arbiter.evaluate(listOf(other, current), 10_550L, OWN_PACKAGE)
+
+        assertEquals("aqt", arbiter.evaluate(listOf(other, current), 10_850L, OWN_PACKAGE).sessionId)
+    }
+
+    @Test
+    fun `restored pause keeps discovery open and later motion closes it until stale`() {
+        val arbiter = runningArbiter()
+        var source = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 0L)
+        arbiter.evaluate(listOf(source), 100L, OWN_PACKAGE)
+        assertEquals(false, arbiter.hasCurrentPlaybackEvidence(100L))
+        source = source.copy(reportedPositionMs = 65_000L)
+        arbiter.evaluate(listOf(source), 1_100L, OWN_PACKAGE)
+        assertEquals(true, arbiter.hasCurrentPlaybackEvidence(6_100L))
+        assertEquals(false, arbiter.hasCurrentPlaybackEvidence(6_101L))
+    }
+
+    @Test
+    fun `ended source never resurrects an unrelated paused source on later refresh`() {
+        val arbiter = runningArbiter()
+        val current = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 100L)
+        val paused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 50L)
+        arbiter.evaluate(listOf(current, paused), 100L, OWN_PACKAGE)
+        val stopped = current.copy(playbackState = PlaybackState.STATE_STOPPED)
+        assertEquals(MediaSessionArbitrationAction.CLEAR, arbiter.evaluate(listOf(stopped, paused), 200L, OWN_PACKAGE).action)
+
+        listOf(300L, 5_000L, 15_000L).forEach { now ->
+            assertEquals(null, arbiter.evaluate(listOf(stopped, paused), now, OWN_PACKAGE).sessionId)
+        }
     }
 
     @Test

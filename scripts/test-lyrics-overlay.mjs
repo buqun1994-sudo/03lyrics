@@ -11,7 +11,8 @@ const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const reports = join(root, "app/build/reports/lyrics-overlay");
-mkdirSync(reports, { recursive: true });
+const captureScreenshots = !process.argv.includes("--no-screenshots");
+if (captureScreenshots) mkdirSync(reports, { recursive: true });
 const browser = await chromium.launch({
   headless: true,
   channel: process.env.LYRICS_TEST_BROWSER_CHANNEL || undefined,
@@ -117,7 +118,7 @@ try {
       await page.evaluate(() => window.LobstaOverlay.setSurfaceMode("topbar"));
       await page.clock.runFor(250);
     }
-    await page.screenshot({ path: join(reports, `${name}-preview.png`) });
+    if (captureScreenshots) await page.screenshot({ path: join(reports, `${name}-preview.png`) });
 
     await send({ timelineReady: true, positionMs: 21_000 });
     check((await view(page)).active, 1, `${name}: first trusted progress immediately selects the correct row`);
@@ -136,7 +137,9 @@ try {
     await page.clock.runFor(10_100);
     check((await view(page)).active, 1, `${name}: the lyric deadline advances without polling`);
     await page.clock.runFor(300);
-    await page.screenshot({ path: join(reports, `${name}-synchronized.png`), animations: "disabled" });
+    if (captureScreenshots) {
+      await page.screenshot({ path: join(reports, `${name}-synchronized.png`), animations: "disabled" });
+    }
 
     await send({ track: "Next Song", recordingGeneration: 2, queryRevision: 2, positionMs: 0 });
     check((await view(page)).visible, false, `${name}: switching tracks removes old lyrics`);
@@ -163,7 +166,7 @@ try {
     console.log(`PASS ${name}`);
   }
   check(failures, [], "production overlay has no JavaScript errors");
-  console.log(`PASS ${assertions} overlay assertions; screenshots: app/build/reports/lyrics-overlay`);
+  console.log(`PASS ${assertions} overlay assertions; ${captureScreenshots ? "screenshots: app/build/reports/lyrics-overlay" : "screenshots disabled"}`);
 } finally {
   await browser.close();
 }

@@ -134,6 +134,51 @@ class LyricsPlaybackStoreTest {
     }
 
     @Test
+    fun `arbitrated source switch clears old lyrics before loading embedded or missing lyrics`() = Harness().use { h ->
+        val arbiter = MediaSessionArbiter(coldStartSettleMs = 0L, preferredSourceSettleMs = 0L)
+        val adapter = MediaPlaybackAdapter(nowElapsedRealtime = { 10_000L })
+        val bluetooth = MediaSessionCandidate(
+            index = 0, sessionId = "bluetooth", packageName = "com.android.bluetooth",
+            playbackState = android.media.session.PlaybackState.STATE_PAUSED,
+            audioUsage = android.media.AudioAttributes.USAGE_MEDIA, audioContentType = null,
+            playbackActions = 0L, hasTitle = true, reportedPositionMs = 64_000L,
+            positionUpdateTimeMs = 100L
+        )
+        val cloud = bluetooth.copy(
+            index = 1, sessionId = "cloud", packageName = "com.example.mediacenter",
+            playbackState = android.media.session.PlaybackState.STATE_PLAYING,
+            activeInSystemList = false, reportedPositionMs = 8_000L, positionUpdateTimeMs = 10_100L
+        )
+        val bluetoothSong = MediaRecordingMetadata("bluetooth-song", "Artist", "Album", 200_000L)
+        val cloudSong = bluetoothSong.copy(track = "cloud-song", embeddedLyrics = embeddedLyrics())
+        h.cache.automatic[identity("bluetooth-song")] = entry(result("bluetooth-song", "cached"))
+        val first = arbiter.evaluate(listOf(bluetooth), 10_000L, "self")
+        assertEquals("bluetooth", first.sessionId)
+        h.store.acceptPlayback(adapter.updateRecording(bluetooth.packageName, bluetoothSong))
+        h.drain()
+        assertEquals("cached", h.current.result?.sourceId)
+
+        arbiter.evaluate(listOf(bluetooth, cloud), 10_100L, "self")
+        val selected = arbiter.evaluate(listOf(bluetooth, cloud), 10_350L, "self")
+        assertEquals("cloud", selected.sessionId)
+        h.store.acceptPlayback(adapter.updateRecording(cloud.packageName, cloudSong))
+        assertEquals("cloud-song", h.current.identity?.track)
+        assertNull(h.current.result)
+        assertNull(h.current.cache.current)
+        h.drain()
+        assertEquals(embeddedLyrics(), h.current.result?.lyrics)
+        assertTrue(h.requests.isEmpty())
+
+        h.resolve = { LyricsResolutionOutcome.NoMatch }
+        h.store.acceptPlayback(adapter.updateRecording(cloud.packageName, cloudSong.copy(track = "no-lyrics", embeddedLyrics = "")))
+        assertNull(h.current.result)
+        h.drain()
+        assertEquals("no-lyrics", h.current.identity?.track)
+        assertNull(h.current.result)
+        assertEquals("cloud", arbiter.evaluate(listOf(bluetooth, cloud), 10_700L, "self").sessionId)
+    }
+
+    @Test
     fun `manual choice cancels the automatic refresh and survives its late result`() = Harness().use { h ->
         val late = CompletableDeferred<LyricsResolutionOutcome>()
         h.resolve = { withContext(NonCancellable) { late.await() } }

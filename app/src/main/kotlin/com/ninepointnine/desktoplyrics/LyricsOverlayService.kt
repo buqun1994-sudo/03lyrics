@@ -2295,7 +2295,8 @@ class LyricsOverlayService : Service() {
                 bluetoothRoutePresent = hasBluetoothBrowserRoute(),
                 discoverAllSources = SystemClock.elapsedRealtime() < coldMediaDiscoveryDeadlineMs ||
                     PublicMediaBrowserRegistryPolicy.shouldDiscoverAllSources(
-                        currentControllerPresent = currentController != null
+                        currentSourceHasPlaybackEvidence = mediaSessionArbiter
+                            .hasCurrentPlaybackEvidence(SystemClock.elapsedRealtime())
                     )
             )
             val preferredBrowserDiscoveryPending = lastMediaSourceId?.let { sourceId ->

@@ -53,15 +53,60 @@ class PublicMediaBrowserSessionRegistryTest {
     }
 
     @Test
-    fun `discovery remains open until arbitration selects a source`() {
+    fun `cold discovery expands supplemental probing to packages in public inventory`() {
+        val standard = descriptor("com.tencent.wecarflow", ".player.MediaPlaybackService")
+        val cloudMusic = descriptor(
+            "com.tencent.wecarflow",
+            "com.mychery.cloudmusic.service.CloudMusicService",
+            supplemental = true
+        )
+        val observedPackages = mutableSetOf<String>()
+        val clients = linkedMapOf<String, FakeClient>()
+        val registry = PublicMediaBrowserSessionRegistry(
+            context = ContextWrapper(null),
+            mainHandler = Handler(),
+            listener = RecordingListener(),
+            serviceResolver = { listOf(standard) },
+            supplementalServiceResolver = { packages ->
+                observedPackages += packages
+                listOf(cloudMusic).filter { it.packageName in packages }
+            },
+            clientFactory = PublicMediaBrowserClientFactory { _, endpoint, callback ->
+                FakeClient(callback).also { clients[endpoint.sourceKey] = it }
+            },
+            scheduler = FakeScheduler()
+        )
+
+        registry.refresh(
+            eligiblePackages = setOf("com.android.bluetooth"),
+            preferredSourceId = null,
+            bluetoothRoutePresent = false,
+            discoverAllSources = true
+        )
+
+        assertTrue("com.tencent.wecarflow" in observedPackages)
+        assertEquals(1, clients[cloudMusic.sourceKey]?.connectCount)
+
+        val cloudClient = requireNotNull(clients[cloudMusic.sourceKey])
+        registry.refresh(setOf("com.android.bluetooth"), cloudMusic.sourceKey, false, false)
+        assertEquals(0, cloudClient.disconnectCount)
+        assertEquals(1, cloudClient.connectCount)
+        observedPackages.clear()
+        registry.refresh(setOf("com.android.bluetooth"), null, false, false)
+        assertEquals(setOf("com.android.bluetooth"), observedPackages)
+        assertEquals(1, cloudClient.disconnectCount)
+    }
+
+    @Test
+    fun `discovery remains open until arbitration confirms playback`() {
         assertTrue(
             PublicMediaBrowserRegistryPolicy.shouldDiscoverAllSources(
-                currentControllerPresent = false
+                currentSourceHasPlaybackEvidence = false
             )
         )
         assertFalse(
             PublicMediaBrowserRegistryPolicy.shouldDiscoverAllSources(
-                currentControllerPresent = true
+                currentSourceHasPlaybackEvidence = true
             )
         )
     }

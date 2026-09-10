@@ -66,8 +66,8 @@ internal object PublicMediaBrowserServiceResolver {
     /**
      * Some vehicle media centers implement MediaBrowserServiceCompat but omit
      * the standard intent filter. Only packages present in the public
-     * MediaSession list or recovered from the saved preferred source are
-     * eligible for this bounded capability probe.
+     * MediaSession list, recovered from the saved preferred source, or present
+     * in the standard Browser inventory are eligible for this bounded probe.
      */
     @Suppress("DEPRECATION")
     fun discoverUndeclared(
@@ -186,12 +186,12 @@ internal object PublicMediaBrowserRegistryPolicy {
     fun shouldRetry(retryCount: Int): Boolean = retryCount < MAX_RETRIES
 
     /**
-     * Empty Browser sessions are not an active source. Continue bounded
-     * discovery until arbitration has selected a recording.
+     * A restored paused session is not proof of playback. Continue bounded
+     * discovery until the arbiter confirms activity from the current source.
      */
     fun shouldDiscoverAllSources(
-        currentControllerPresent: Boolean
-    ): Boolean = !currentControllerPresent
+        currentSourceHasPlaybackEvidence: Boolean
+    ): Boolean = !currentSourceHasPlaybackEvidence
 
     fun shouldInclude(
         descriptor: PublicMediaBrowserServiceDescriptor,
@@ -318,13 +318,17 @@ internal class PublicMediaBrowserSessionRegistry(
         discoverAllSources: Boolean
     ) {
         started = true
+        val declaredDescriptors = runCatching { serviceResolver() }.getOrDefault(emptyList())
         val supplementalCandidates = buildSet {
             addAll(eligiblePackages)
             PublicMediaBrowserServiceResolver.packageNameFromSourceId(preferredSourceId)
                 ?.let(::add)
+            if (discoverAllSources) {
+                declaredDescriptors.mapTo(this, PublicMediaBrowserServiceDescriptor::packageName)
+            }
         }
         val descriptors = (
-            runCatching { serviceResolver() }.getOrDefault(emptyList()) +
+            declaredDescriptors +
                 runCatching { supplementalServiceResolver(supplementalCandidates) }
                     .getOrDefault(emptyList())
             ).distinctBy(PublicMediaBrowserServiceDescriptor::sourceKey)

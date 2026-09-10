@@ -153,8 +153,12 @@ internal class MediaSessionArbiter(
 ) {
     private data class PendingHandoff(
         val sessionId: String,
-        val armedAtMs: Long,
-        val evidenceAtArm: Boolean
+        val armedAtMs: Long
+    )
+
+    private data class ActivityEvidence(
+        var progressedAtMs: Long? = null,
+        var publishedAtMs: Long? = null
     )
 
     private var selectedSessionId: String? = null
@@ -163,6 +167,7 @@ internal class MediaSessionArbiter(
     private var selectionMayResumeImmediately = false
     private var pendingHandoff: PendingHandoff? = null
     private val previousCandidates = linkedMapOf<String, MediaSessionCandidate>()
+    private val activityEvidence = linkedMapOf<String, ActivityEvidence>()
 
     fun evaluate(
         candidates: List<MediaSessionCandidate>,
@@ -178,6 +183,7 @@ internal class MediaSessionArbiter(
                     allowMissingTitle = it.isPlaying || it.isBuffering
                 )
             }
+        observeActivity(eligible, nowMs)
         val byId = eligible.associateBy { identityOf(it) }
         val currentId = selectedSessionId
         val currentRaw = currentId?.let { id ->
@@ -189,7 +195,7 @@ internal class MediaSessionArbiter(
             selectedSessionId = null
             pendingHandoff = null
             coldStartStartedAtMs = nowMs
-            val fresh = freshestPlaying(eligible)
+            val fresh = bestActive(eligible, nowMs)?.takeIf { evidenceRank(it, nowMs) >= 2 }
             if (fresh != null) {
                 selectionMayResumeImmediately = true
                 return commit(fresh, candidates, "current_session_missing_new_playing")
@@ -199,20 +205,11 @@ internal class MediaSessionArbiter(
             return decisionClear("current_session_missing")
         }
 
-        // MediaSession providers can briefly publish a null playback state
-        // while replacing metadata or reconnecting. Keep the incumbent until
-        // the provider reports a concrete ended state or the session is
-        // destroyed; otherwise a transient callback would clear lyrics.
-        if (currentId != null && current == null && currentRaw?.playbackState == null) {
-            pendingHandoff = null
-            remember(candidates)
-            return decisionKeep(currentId, "incumbent_state_unknown")
-        }
-
         if (currentRaw?.isEnded == true) {
             selectedSessionId = null
             pendingHandoff = null
-            val fresh = freshestPlaying(eligible, excludeSessionId = currentId)
+            val fresh = bestActive(eligible, nowMs, excludeSessionId = currentId)
+                ?.takeIf { evidenceRank(it, nowMs) >= 2 }
             if (fresh != null) {
                 selectionMayResumeImmediately = true
                 return commit(fresh, candidates, "current_session_ended_new_playing")
@@ -223,14 +220,26 @@ internal class MediaSessionArbiter(
             return decisionClear("current_session_ended")
         }
 
-        if (currentId != null && current == null) {
-            pendingHandoff = null
-            remember(candidates)
-            return decisionKeep(currentId, "incumbent_state_transitional")
-        }
-
-        if (current == null) {
+        if (currentId == null) {
             if (coldStartStartedAtMs == null) coldStartStartedAtMs = nowMs
+            val coldStartElapsed = nowMs - (coldStartStartedAtMs ?: nowMs)
+            if (!selectionMayResumeImmediately && coldStartElapsed < coldStartSettleMs) {
+                remember(candidates)
+                return decisionKeep(
+                    null,
+                    "cold_start_waiting_for_session_evidence",
+                    coldStartSettleMs - coldStartElapsed
+                )
+            }
+            val active = bestActive(eligible, nowMs)
+            if (active != null && evidenceRank(active, nowMs) >= 2) {
+                return commit(active, candidates, "cold_start_playback_evidence")
+            }
+            // Once a source ends, only new playback evidence can replace it.
+            if (selectionMayResumeImmediately) {
+                remember(candidates)
+                return decisionKeep(null, "waiting_for_new_playback")
+            }
             val preferred = preferredSourceId?.let { sourceId ->
                 eligible.firstOrNull { sourceIdentityOf(it) == sourceId && isColdStartCandidate(it) }
             }
@@ -238,7 +247,6 @@ internal class MediaSessionArbiter(
                 return commit(preferred, candidates, "cold_start_preferred_source")
             }
 
-            val coldStartElapsed = nowMs - (coldStartStartedAtMs ?: nowMs)
             if (preferredSourceId != null && discoveryPending &&
                 coldStartElapsed < PREFERRED_DISCOVERY_MAX_WAIT_MS
             ) {
@@ -247,7 +255,7 @@ internal class MediaSessionArbiter(
                     null,
                     "cold_start_waiting_for_preferred_browser",
                     minOf(
-                        preferredSourceSettleMs,
+                        preferredSourceSettleMs.coerceAtLeast(1L),
                         PREFERRED_DISCOVERY_MAX_WAIT_MS - coldStartElapsed
                     )
                 )
@@ -260,14 +268,6 @@ internal class MediaSessionArbiter(
                     preferredSourceSettleMs - coldStartElapsed
                 )
             }
-            if (!selectionMayResumeImmediately && coldStartElapsed < coldStartSettleMs) {
-                remember(candidates)
-                return decisionKeep(
-                    null,
-                    "cold_start_waiting_for_session_evidence",
-                    coldStartSettleMs - coldStartElapsed
-                )
-            }
             val restored = bestColdStartCandidate(eligible, nowMs)
             if (restored != null) {
                 return commit(restored, candidates, "cold_start_best_evidence")
@@ -277,49 +277,27 @@ internal class MediaSessionArbiter(
         }
 
         coldStartStartedAtMs = null
-        preferredSourceId = sourceIdentityOf(current)
+        current?.let { preferredSourceId = sourceIdentityOf(it) }
         val pending = pendingHandoff
-        val pendingCandidate = pending?.let { handoff ->
-            eligible.firstOrNull {
-                identityOf(it) == handoff.sessionId && isActiveEvidence(it)
-            }
-        }
-        val challenger = pendingCandidate ?: bestActive(
+        val challenger = bestActive(
             eligible,
+            nowMs,
             excludeSessionId = currentId
         )
-        val incumbentProgressed = hasFreshProgress(current, previousCandidates[currentId])
-        val challengerIsProgressingOnly = challenger != null &&
-            !challenger.isPlaying && !challenger.isBuffering &&
-            isPositionProgressing(challenger)
-        if (challenger != null && (!incumbentProgressed || challengerIsProgressingOnly)) {
+        if (challenger != null && hasHandoffEvidence(challenger, current, nowMs)) {
             val challengerId = identityOf(challenger)
             if (pending?.sessionId != challengerId) {
                 pendingHandoff = PendingHandoff(
                     sessionId = challengerId,
-                    armedAtMs = nowMs,
-                    evidenceAtArm = hasHandoffEvidence(
-                        candidate = challenger,
-                        previous = previousCandidates[challengerId],
-                        incumbent = current,
-                        nowMs = nowMs
-                    )
+                    armedAtMs = nowMs
                 )
                 remember(candidates)
                 return decisionKeep(currentId, "handoff_armed", handoffConfirmMs)
             }
 
-            val previous = previousCandidates[challengerId]
             val elapsed = nowMs - pending.armedAtMs
-            val confirmed = elapsed >= handoffConfirmMs &&
-                (pending.evidenceAtArm || hasHandoffEvidence(
-                    candidate = challenger,
-                    previous = previous,
-                    incumbent = current,
-                    nowMs = nowMs
-                ))
             remember(candidates)
-            if (confirmed) return commit(challenger, candidates, "handoff_confirmed")
+            if (elapsed >= handoffConfirmMs) return commit(challenger, candidates, "handoff_confirmed")
             return decisionKeep(
                 currentId,
                 "handoff_waiting_for_fresh_progress",
@@ -330,7 +308,9 @@ internal class MediaSessionArbiter(
         pendingHandoff = null
         remember(candidates)
         val reason = when {
-            incumbentProgressed -> "incumbent_progressing"
+            currentRaw?.playbackState == null -> "incumbent_state_unknown"
+            current == null -> "incumbent_state_transitional"
+            evidenceRank(current, nowMs) == 3 -> "incumbent_progressing"
             current.isPlaying || current.isBuffering -> "incumbent_active_without_challenger"
             else -> "incumbent_paused"
         }
@@ -339,6 +319,7 @@ internal class MediaSessionArbiter(
 
     fun forgetSession(sessionId: String) {
         previousCandidates.remove(sessionId)
+        activityEvidence.remove(sessionId)
         if (selectedSessionId == sessionId) {
             selectedSessionId = null
             preferredSourceId = null
@@ -352,6 +333,10 @@ internal class MediaSessionArbiter(
         if (selectedSessionId == null) preferredSourceId = sourceId?.takeIf(String::isNotBlank)
     }
 
+    fun hasCurrentPlaybackEvidence(nowMs: Long): Boolean = selectedSessionId
+        ?.let(previousCandidates::get)
+        ?.let { evidenceRank(it, nowMs) >= 2 } == true
+
     fun reset() {
         selectedSessionId = null
         preferredSourceId = null
@@ -359,6 +344,7 @@ internal class MediaSessionArbiter(
         pendingHandoff = null
         selectionMayResumeImmediately = false
         previousCandidates.clear()
+        activityEvidence.clear()
     }
 
     private fun commit(
@@ -381,21 +367,6 @@ internal class MediaSessionArbiter(
         }
     }
 
-    private fun freshestPlaying(
-        candidates: List<MediaSessionCandidate>,
-        excludeSessionId: String? = null
-    ): MediaSessionCandidate? =
-        candidates
-            .asSequence()
-            .filter { identityOf(it) != excludeSessionId }
-            .filter { it.isPlaying || it.isBuffering }
-            .filter { hasFreshProgress(it, previousCandidates[identityOf(it)]) }
-            .sortedWith(
-                compareByDescending<MediaSessionCandidate> { if (it.isPlaying) 2 else 1 }
-                    .thenBy(MediaSessionCandidate::index)
-            )
-            .firstOrNull()
-
     private fun isColdStartCandidate(candidate: MediaSessionCandidate): Boolean =
         candidate.isPlaying || candidate.isBuffering || (candidate.isPaused && candidate.hasTitle)
 
@@ -404,86 +375,111 @@ internal class MediaSessionArbiter(
         nowMs: Long
     ): MediaSessionCandidate? {
         val viable = candidates.filter(::isColdStartCandidate)
-        val withPublisherTime = viable.filter { candidate ->
+        bestActive(viable, nowMs)?.let { return it }
+
+        val paused = viable.filter(MediaSessionCandidate::isPaused)
+        if (paused.size == 1) return paused.single()
+        val withPublisherTime = paused.filter { candidate ->
             candidate.positionUpdateTimeMs in 1..nowMs
         }
-        if (withPublisherTime.isNotEmpty()) {
-            return withPublisherTime.maxWithOrNull(
-                compareBy<MediaSessionCandidate>(MediaSessionCandidate::positionUpdateTimeMs)
-                    .thenBy { if (it.activeInSystemList) 1 else 0 }
-                    .thenBy(::activityRank)
-                    .thenBy { -it.index }
-            )
-        }
-        val active = viable.filter { it.isPlaying || it.isBuffering }
-        if (active.isNotEmpty()) {
-            return active
-                .sortedWith(
-                    compareByDescending<MediaSessionCandidate>(::activityRank)
-                        .thenBy(MediaSessionCandidate::index)
-                )
-                .first()
-        }
-        val paused = viable.filter(MediaSessionCandidate::isPaused)
-        return paused.singleOrNull()
+        return withPublisherTime.maxWithOrNull(
+            compareBy<MediaSessionCandidate>(MediaSessionCandidate::positionUpdateTimeMs)
+                .thenBy { if (it.activeInSystemList) 1 else 0 }
+                .thenBy { -it.index }
+        )
     }
+
+    private fun evidenceRank(
+        candidate: MediaSessionCandidate,
+        nowMs: Long
+    ): Int {
+        if (!isColdStartCandidate(candidate)) return 0
+        val evidence = activityEvidence[identityOf(candidate)]
+        return when {
+            isRecent(evidence?.progressedAtMs, nowMs) -> 3
+            isRecent(evidence?.publishedAtMs, nowMs) -> 2
+            candidate.isPlaying || candidate.isBuffering -> 1
+            else -> 0
+        }
+    }
+
+    private fun isRecent(atMs: Long?, nowMs: Long): Boolean =
+        atMs != null && atMs <= nowMs && nowMs - atMs <= ACTIVITY_EVIDENCE_MAX_AGE_MS
 
     private fun bestActive(
         candidates: List<MediaSessionCandidate>,
+        nowMs: Long,
         excludeSessionId: String? = null
     ): MediaSessionCandidate? = candidates
         .asSequence()
         .filter { identityOf(it) != excludeSessionId }
-        .filter(::isActiveEvidence)
+        .filter { evidenceRank(it, nowMs) > 0 }
         .sortedWith(
-            compareByDescending<MediaSessionCandidate>(::activityRankWithProgress)
+            compareByDescending<MediaSessionCandidate> { evidenceRank(it, nowMs) }
+                .thenByDescending { evidenceTime(it, nowMs) }
+                .thenByDescending(::activityRank)
+                .thenByDescending(MediaSessionCandidate::activeInSystemList)
                 .thenBy(MediaSessionCandidate::index)
         )
         .firstOrNull()
 
-    private fun isActiveEvidence(candidate: MediaSessionCandidate): Boolean =
-        candidate.isPlaying || candidate.isBuffering || isPositionProgressing(candidate)
-
-    private fun isPositionProgressing(candidate: MediaSessionCandidate): Boolean {
-        val previous = previousCandidates[identityOf(candidate)] ?: return false
-        return !candidate.isEnded &&
-            candidate.reportedPositionMs >= 0L &&
-            previous.reportedPositionMs >= 0L &&
-            candidate.reportedPositionMs > previous.reportedPositionMs
-    }
-
-    private fun activityRankWithProgress(candidate: MediaSessionCandidate): Int = when {
-        candidate.isPlaying -> 3
-        candidate.isBuffering -> 2
-        isPositionProgressing(candidate) -> 1
-        else -> 0
-    }
-
-    private fun hasFreshProgress(
-        candidate: MediaSessionCandidate,
-        previous: MediaSessionCandidate?
-    ): Boolean {
-        if (previous == null) return true
-        val positionChanged = candidate.reportedPositionMs >= 0L &&
-            previous.reportedPositionMs >= 0L &&
-            candidate.reportedPositionMs != previous.reportedPositionMs
-        val publisherTimeChanged = candidate.positionUpdateTimeMs > 0L &&
-            candidate.positionUpdateTimeMs != previous.positionUpdateTimeMs
-        val becameVisible = candidate.activeInSystemList && !previous.activeInSystemList
-        return positionChanged || publisherTimeChanged || becameVisible
+    private fun evidenceTime(candidate: MediaSessionCandidate, nowMs: Long): Long {
+        val evidence = activityEvidence[identityOf(candidate)] ?: return 0L
+        return when (evidenceRank(candidate, nowMs)) {
+            3 -> evidence.progressedAtMs ?: 0L
+            2 -> evidence.publishedAtMs ?: 0L
+            else -> 0L
+        }
     }
 
     private fun hasHandoffEvidence(
         candidate: MediaSessionCandidate,
-        previous: MediaSessionCandidate?,
-        incumbent: MediaSessionCandidate,
+        incumbent: MediaSessionCandidate?,
         nowMs: Long
     ): Boolean {
-        if (previous != null && hasFreshProgress(candidate, previous)) return true
-        val publisherTime = candidate.positionUpdateTimeMs
-        val ageMs = nowMs - publisherTime
-        return publisherTime > incumbent.positionUpdateTimeMs &&
-            ageMs in 0..ACTIVITY_EVIDENCE_MAX_AGE_MS
+        val challengerRank = evidenceRank(candidate, nowMs)
+        if (challengerRank < 2) return false
+        val incumbentRank = incumbent?.let { evidenceRank(it, nowMs) } ?: 0
+        if (challengerRank != incumbentRank) return challengerRank > incumbentRank
+        // Equally progressing sources retain the incumbent to avoid callback-order churn.
+        return challengerRank == 2 && incumbent != null &&
+            evidenceTime(candidate, nowMs) > evidenceTime(incumbent, nowMs)
+    }
+
+    /** Retain observed facts across duplicate callbacks, never extrapolated positions. */
+    private fun observeActivity(candidates: List<MediaSessionCandidate>, nowMs: Long) {
+        activityEvidence.keys.retainAll(candidates.mapTo(hashSetOf(), ::identityOf))
+        candidates.forEach { candidate ->
+            val id = identityOf(candidate)
+            if (!isColdStartCandidate(candidate)) {
+                activityEvidence.remove(id)
+                return@forEach
+            }
+            val previous = previousCandidates[id]
+            val evidence = activityEvidence.getOrPut(id, ::ActivityEvidence)
+            val paused = candidate.isPaused && previous != null && !previous.isPaused
+            if (paused || (previous != null && !isColdStartCandidate(previous))) {
+                evidence.progressedAtMs = null
+                evidence.publishedAtMs = null
+            }
+            val positionChanged = previous != null && candidate.reportedPositionMs >= 0L &&
+                previous.reportedPositionMs >= 0L && candidate.reportedPositionMs != previous.reportedPositionMs
+            val progressing = positionChanged && !paused && previous != null && isColdStartCandidate(previous) &&
+                (candidate.reportedPositionMs > previous.reportedPositionMs ||
+                    candidate.playbackState == PlaybackState.STATE_REWINDING)
+            if (progressing) evidence.progressedAtMs = nowMs
+
+            if (candidate.isPlaying || candidate.isBuffering) {
+                val resumed = previous != null && !previous.isPlaying && !previous.isBuffering
+                if (previous == null || resumed || positionChanged) {
+                    evidence.publishedAtMs = candidate.positionUpdateTimeMs.takeIf {
+                        candidate.reportedPositionMs >= 0L && it in 1..nowMs
+                    }
+                }
+            } else {
+                evidence.publishedAtMs = null
+            }
+        }
     }
 
     private fun identityOf(candidate: MediaSessionCandidate): String =
