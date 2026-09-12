@@ -12,7 +12,7 @@
 1. 根因是车机蓝牙公开会话对音乐、手机视频和部分通信场景都报告 `USAGE_MEDIA + CONTENT_TYPE_UNKNOWN`；仅看 `PLAYING`、时间戳或活动列表会让旧蓝牙歌词重新抢占当前暂停的网易云并造成上下抽动。
 2. `MediaSessionArbiter` 现在要求蓝牙先观察到暂停基线，再出现有效位置前进才具备交接证据；单纯状态 / 时间戳刷新保持当前来源。蓝牙候选需带歌手或专辑元数据才可进入歌词主链。`LyricsOverlayService` 读取 `AudioManager` 通话模式和 `TYPE_BLUETOOTH_SCO`，通信路由直接排除蓝牙来源并清除已选蓝牙歌词；通话结束后的旧 `PLAYING` 状态也必须等新的位置推进才能重新入选。
 3. 新增和调整仲裁测试，覆盖蓝牙状态重复刷新、真实位置推进交接、通信路由清除，以及暂停 / 停止 / 消失来源的既有边界。
-4. 自动验证已通过 `MediaSessionArbiterTest`、`MediaSessionSelectionPolicyTest`、全量 `testDebugUnitTest`（461 项，0 失败）、`assembleDebug`、`check-project-docs.mjs`、`check-skills.mjs` 和 `git diff --check`；车机 `com.ninepointnine.desktoplyrics.test 1.0.17-icar03-test (131)` 已保留数据覆盖安装，基础 smoke 通过且未发现致命日志。
+4. 自动验证已通过 `MediaSessionArbiterTest`、`MediaSessionSelectionPolicyTest`、全量 `testDebugUnitTest`（461 项，0 失败）、`assembleDebug`、`check-project-docs.mjs`、`check-skills.mjs` 和 `git diff --check`；车机 `com.ninepointnine.desktoplyrics.test 1.0.16-icar03-test (130)` 已保留数据覆盖安装，基础 smoke 通过且未发现致命日志。
 5. `scripts/test-lyrics-overlay.mjs --no-screenshots` 已借用本机已有 Playwright 运行时通过 `95` 条断言；本次媒体仲裁改动未触及 HTML 呈现链。
 
 ## 2026-09-12 当前歌词颜色三模式与色卡（实现完成，待用户主测）
