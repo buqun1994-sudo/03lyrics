@@ -92,6 +92,45 @@ try {
     check(state.scrolling, false, `${name}: provisional lyric does not scroll`);
     check(state.scrollReady, false, `${name}: preview never fabricates timing readiness`);
 
+    await page.evaluate(() => {
+      window.LobstaOverlay.setTheme("light", "#FF123456", "#FFABCDEF");
+    });
+    check(
+      await page.evaluate(() => getComputedStyle(document.querySelector("#lyrics .line.active")).color),
+      "rgb(171, 205, 239)",
+      `${name}: current-line override reaches the active lyric`
+    );
+    await page.evaluate(() => window.LobstaOverlay.setTheme("light", "#FFFF0000", null));
+    check(
+      await page.evaluate(() => getComputedStyle(document.querySelector("#lyrics .line.active")).color),
+      "rgb(255, 0, 0)",
+      `${name}: default current-line color inherits the overall custom lyric color`
+    );
+    await page.evaluate(() => window.LobstaOverlay.setTheme("dark", null, null));
+    check(
+      await page.evaluate(() => {
+        const active = getComputedStyle(document.querySelector("#lyrics .line.active"));
+        return active.getPropertyValue("--lyric-active") === active.getPropertyValue("--foreground");
+      }),
+      true,
+      `${name}: default current-line variable inherits the light lyric mode`
+    );
+    await page.evaluate(() => window.LobstaOverlay.setTheme("light", null, null));
+    check(
+      await page.evaluate(() => {
+        const active = getComputedStyle(document.querySelector("#lyrics .line.active"));
+        return active.getPropertyValue("--lyric-active") === active.getPropertyValue("--foreground");
+      }),
+      true,
+      `${name}: default current-line variable inherits the dark lyric mode`
+    );
+    await page.evaluate(() => window.LobstaOverlay.setTheme("light"));
+    check(
+      await page.evaluate(() => getComputedStyle(document.querySelector("#lyrics .line.active")).color),
+      "rgb(23, 27, 33)",
+      `${name}: default current-line color follows the overall theme`
+    );
+
     await page.evaluate(() => { window.testInitialRow = document.querySelector("#lyrics .line"); });
     await send({ positionMs: 45_000 });
     check((await view(page)).text, firstLine, `${name}: unknown progress cannot move the preview`);

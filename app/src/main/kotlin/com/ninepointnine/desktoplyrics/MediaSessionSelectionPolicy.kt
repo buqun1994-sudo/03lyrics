@@ -19,7 +19,10 @@ internal data class MediaSessionCandidate(
     val hasTitle: Boolean,
     val activeInSystemList: Boolean = true,
     val reportedPositionMs: Long = PlaybackState.PLAYBACK_POSITION_UNKNOWN,
-    val positionUpdateTimeMs: Long = 0L
+    val positionUpdateTimeMs: Long = 0L,
+    val transport: MediaSessionTransport = MediaSessionTransport.STANDARD,
+    val bluetoothCommunicationActive: Boolean = false,
+    val hasMusicMetadata: Boolean = true
 ) {
     val isPlaying: Boolean
         get() = playbackState == PlaybackState.STATE_PLAYING ||
@@ -102,6 +105,16 @@ internal object MediaSessionSelectionPolicy {
         candidate: MediaSessionCandidate,
         allowMissingTitle: Boolean
     ): Boolean {
+        if (candidate.transport == MediaSessionTransport.BLUETOOTH_AVRCP &&
+            candidate.bluetoothCommunicationActive
+        ) {
+            return false
+        }
+        if (candidate.transport == MediaSessionTransport.BLUETOOTH_AVRCP &&
+            !candidate.hasMusicMetadata
+        ) {
+            return false
+        }
         if (!hasMediaSemantics(candidate)) return false
         val explicitMusicSignal = candidate.audioUsage == AudioAttributes.USAGE_MEDIA ||
             candidate.audioContentType == AudioAttributes.CONTENT_TYPE_MUSIC
@@ -168,6 +181,7 @@ internal class MediaSessionArbiter(
     private var pendingHandoff: PendingHandoff? = null
     private val previousCandidates = linkedMapOf<String, MediaSessionCandidate>()
     private val activityEvidence = linkedMapOf<String, ActivityEvidence>()
+    private val bluetoothRequiresFreshProgress = linkedSetOf<String>()
 
     fun evaluate(
         candidates: List<MediaSessionCandidate>,
@@ -183,13 +197,35 @@ internal class MediaSessionArbiter(
                     allowMissingTitle = it.isPlaying || it.isBuffering
                 )
             }
-        observeActivity(eligible, nowMs)
+        observeActivity(candidatesWithoutSelf = candidates.filter { it.packageName != ownPackageName }, nowMs)
         val byId = eligible.associateBy { identityOf(it) }
         val currentId = selectedSessionId
         val currentRaw = currentId?.let { id ->
             candidates.firstOrNull { identityOf(it) == id }
         }
         val current = currentId?.let(byId::get)
+
+        // A Bluetooth session can become temporarily ineligible while the
+        // phone is using the car's communication route or stops publishing
+        // music metadata. Do not retain it as the lyric source.
+        if (currentId != null && currentRaw != null && current == null &&
+            currentRaw.transport == MediaSessionTransport.BLUETOOTH_AVRCP &&
+            (currentRaw.bluetoothCommunicationActive || !currentRaw.hasMusicMetadata)
+        ) {
+            bluetoothRequiresFreshProgress += identityOf(currentRaw)
+            selectedSessionId = null
+            pendingHandoff = null
+            coldStartStartedAtMs = nowMs
+            selectionMayResumeImmediately = true
+            remember(candidates)
+            return decisionClear(
+                if (currentRaw.bluetoothCommunicationActive) {
+                    "bluetooth_communication_route"
+                } else {
+                    "bluetooth_music_metadata_missing"
+                }
+            )
+        }
 
         if (currentId != null && currentRaw == null) {
             selectedSessionId = null
@@ -320,6 +356,7 @@ internal class MediaSessionArbiter(
     fun forgetSession(sessionId: String) {
         previousCandidates.remove(sessionId)
         activityEvidence.remove(sessionId)
+        bluetoothRequiresFreshProgress.remove(sessionId)
         if (selectedSessionId == sessionId) {
             selectedSessionId = null
             preferredSourceId = null
@@ -345,6 +382,7 @@ internal class MediaSessionArbiter(
         selectionMayResumeImmediately = false
         previousCandidates.clear()
         activityEvidence.clear()
+        bluetoothRequiresFreshProgress.clear()
     }
 
     private fun commit(
@@ -395,6 +433,22 @@ internal class MediaSessionArbiter(
     ): Int {
         if (!isColdStartCandidate(candidate)) return 0
         val evidence = activityEvidence[identityOf(candidate)]
+        // The car's public Bluetooth session reports USAGE_MEDIA with an
+        // UNKNOWN content type for both music and non-music phone audio. A
+        // state or timestamp refresh alone is therefore not proof that music
+        // resumed; Bluetooth must publish a forward position change first.
+        if (candidate.transport == MediaSessionTransport.BLUETOOTH_AVRCP) {
+            if (identityOf(candidate) in bluetoothRequiresFreshProgress) return 0
+            return when {
+                isRecent(evidence?.progressedAtMs, nowMs) -> 3
+                // A cold-start Bluetooth session may only expose PLAYING
+                // before its first position callback. It can be selected as
+                // the initial source, but it cannot displace an incumbent
+                // source until a real position change has been observed.
+                selectedSessionId == null && (candidate.isPlaying || candidate.isBuffering) -> 1
+                else -> 0
+            }
+        }
         return when {
             isRecent(evidence?.progressedAtMs, nowMs) -> 3
             isRecent(evidence?.publishedAtMs, nowMs) -> 2
@@ -447,10 +501,17 @@ internal class MediaSessionArbiter(
     }
 
     /** Retain observed facts across duplicate callbacks, never extrapolated positions. */
-    private fun observeActivity(candidates: List<MediaSessionCandidate>, nowMs: Long) {
-        activityEvidence.keys.retainAll(candidates.mapTo(hashSetOf(), ::identityOf))
-        candidates.forEach { candidate ->
+    private fun observeActivity(candidatesWithoutSelf: List<MediaSessionCandidate>, nowMs: Long) {
+        activityEvidence.keys.retainAll(candidatesWithoutSelf.mapTo(hashSetOf(), ::identityOf))
+        candidatesWithoutSelf.forEach { candidate ->
             val id = identityOf(candidate)
+            if (candidate.transport == MediaSessionTransport.BLUETOOTH_AVRCP &&
+                candidate.bluetoothCommunicationActive
+            ) {
+                activityEvidence.remove(id)
+                bluetoothRequiresFreshProgress += id
+                return@forEach
+            }
             if (!isColdStartCandidate(candidate)) {
                 activityEvidence.remove(id)
                 return@forEach
@@ -468,6 +529,9 @@ internal class MediaSessionArbiter(
                 (candidate.reportedPositionMs > previous.reportedPositionMs ||
                     candidate.playbackState == PlaybackState.STATE_REWINDING)
             if (progressing) evidence.progressedAtMs = nowMs
+            if (progressing && candidate.transport == MediaSessionTransport.BLUETOOTH_AVRCP) {
+                bluetoothRequiresFreshProgress.remove(id)
+            }
 
             if (candidate.isPlaying || candidate.isBuffering) {
                 val resumed = previous != null && !previous.isPlaying && !previous.isBuffering

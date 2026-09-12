@@ -10,13 +10,13 @@ internal object IcarThemeColorPalette {
     const val GLOBAL_THEME_KEY = "com.mb.provider.theme_key"
 
     private const val DEFAULT = 0
-    private const val CYAN = 2
-    private const val METAL = 4
-    private const val ORANGE = 8
+    private const val CYAN = 31
+    private const val METAL = 34
+    private const val ORANGE = 8 // legacy only
     private const val PINK_LEGACY = 16
     private const val PURPLE = 32
     private const val PINK = 33
-    private const val YELLOW = 64
+    private const val YELLOW = 35
 
     fun resolve(themeKey: Int?, nightMode: Boolean): IcarThemePalette {
         val accentColor = when (themeKey) {

@@ -7,6 +7,14 @@ import org.junit.Test
 
 class LyricsSettingsModelsTest {
     @Test
+    fun `current lyrics color mode defaults safely and round trips supported values`() {
+        assertEquals(CurrentLyricsColorMode.DEFAULT, CurrentLyricsColorMode.fromPreference(null))
+        assertEquals(CurrentLyricsColorMode.DEFAULT, CurrentLyricsColorMode.fromPreference("unsupported"))
+        assertEquals(CurrentLyricsColorMode.THEME, CurrentLyricsColorMode.fromPreference("theme"))
+        assertEquals(CurrentLyricsColorMode.CUSTOM, CurrentLyricsColorMode.fromPreference("custom"))
+    }
+
+    @Test
     fun `wallpaper position defaults to right for new and unknown preferences`() {
         assertEquals(WallpaperLyricsPosition.RIGHT, WallpaperLyricsPosition.fromPreference(null))
         assertEquals(

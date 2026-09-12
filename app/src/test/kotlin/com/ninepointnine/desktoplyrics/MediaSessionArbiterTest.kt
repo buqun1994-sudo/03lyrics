@@ -67,12 +67,161 @@ class MediaSessionArbiterTest {
     }
 
     @Test
+    fun `bluetooth state refresh without position progress does not replace paused music`() {
+        val arbiter = runningArbiter()
+        val aqtPaused = candidate("aqt", PlaybackState.STATE_PAUSED, 1_000L, 100L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 100L)
+        arbiter.evaluate(listOf(aqtPaused), 100L, OWN_PACKAGE)
+
+        val bluetoothResumedWithoutProgress = bluetoothPaused.copy(
+            playbackState = PlaybackState.STATE_PLAYING,
+            positionUpdateTimeMs = 200L
+        )
+        val decision = arbiter.evaluate(
+            listOf(aqtPaused, bluetoothResumedWithoutProgress),
+            200L,
+            OWN_PACKAGE
+        )
+
+        assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, decision.action)
+        assertEquals("aqt", decision.sessionId)
+    }
+
+    @Test
+    fun `bluetooth repeated state and timestamp refreshes remain inert without forward progress`() {
+        val arbiter = runningArbiter()
+        val aqtPaused = candidate("aqt", PlaybackState.STATE_PAUSED, 1_000L, 100L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 100L)
+        arbiter.evaluate(listOf(aqtPaused, bluetoothPaused), 100L, OWN_PACKAGE)
+
+        var bluetooth = bluetoothPaused.copy(playbackState = PlaybackState.STATE_PLAYING)
+        listOf(200L, 600L, 1_100L, 1_600L).forEach { now ->
+            bluetooth = bluetooth.copy(positionUpdateTimeMs = now)
+            val decision = arbiter.evaluate(listOf(aqtPaused, bluetooth), now, OWN_PACKAGE)
+            assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, decision.action)
+            assertEquals("aqt", decision.sessionId)
+        }
+    }
+
+    @Test
+    fun `bluetooth forward position progress can replace paused music`() {
+        val arbiter = runningArbiter()
+        val aqtPaused = candidate("aqt", PlaybackState.STATE_PAUSED, 1_000L, 100L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 100L)
+        arbiter.evaluate(listOf(aqtPaused, bluetoothPaused), 100L, OWN_PACKAGE)
+
+        val progressingBluetooth = bluetoothPaused.copy(
+            playbackState = PlaybackState.STATE_PLAYING,
+            reportedPositionMs = 64_500L,
+            positionUpdateTimeMs = 200L
+        )
+        val armed = arbiter.evaluate(
+            listOf(aqtPaused, progressingBluetooth),
+            200L,
+            OWN_PACKAGE
+        )
+        assertEquals("handoff_armed", armed.reason)
+
+        val confirmed = arbiter.evaluate(
+            listOf(aqtPaused, progressingBluetooth),
+            500L,
+            OWN_PACKAGE
+        )
+        assertEquals(MediaSessionArbitrationAction.SELECT, confirmed.action)
+        assertEquals("bluetooth", confirmed.sessionId)
+    }
+
+    @Test
+    fun `bluetooth position progress without music metadata cannot replace paused music`() {
+        val arbiter = runningArbiter()
+        val aqtPaused = candidate("aqt", PlaybackState.STATE_PAUSED, 1_000L, 100L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 100L)
+            .copy(hasMusicMetadata = false)
+        arbiter.evaluate(listOf(aqtPaused, bluetoothPaused), 100L, OWN_PACKAGE)
+
+        val decision = arbiter.evaluate(
+            listOf(aqtPaused, bluetoothPaused.copy(
+                playbackState = PlaybackState.STATE_PLAYING,
+                reportedPositionMs = 64_500L,
+                positionUpdateTimeMs = 200L
+            )),
+            200L,
+            OWN_PACKAGE
+        )
+
+        assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, decision.action)
+        assertEquals("aqt", decision.sessionId)
+    }
+
+    @Test
+    fun `bluetooth communication route is not eligible as a music source`() {
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_500L, 200L)
+            .copy(bluetoothCommunicationActive = true)
+        val decision = MediaSessionSelectionPolicy.select(
+            candidates = listOf(bluetooth),
+            currentIndex = null,
+            ownPackageName = OWN_PACKAGE
+        )
+
+        assertEquals(null, decision)
+    }
+
+    @Test
+    fun `selected bluetooth source is cleared when communication route starts`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 100L)
+        assertEquals("bluetooth", arbiter.evaluate(listOf(bluetooth), 100L, OWN_PACKAGE).sessionId)
+
+        val decision = arbiter.evaluate(
+            listOf(bluetooth.copy(bluetoothCommunicationActive = true)),
+            200L,
+            OWN_PACKAGE
+        )
+
+        assertEquals(MediaSessionArbitrationAction.CLEAR, decision.action)
+        assertEquals("bluetooth_communication_route", decision.reason)
+        assertEquals(null, decision.sessionId)
+    }
+
+    @Test
+    fun `stale bluetooth state after communication route waits for fresh progress`() {
+        val arbiter = runningArbiter()
+        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 100L)
+        assertEquals("bluetooth", arbiter.evaluate(listOf(bluetooth), 100L, OWN_PACKAGE).sessionId)
+        assertEquals(
+            MediaSessionArbitrationAction.CLEAR,
+            arbiter.evaluate(
+                listOf(bluetooth.copy(bluetoothCommunicationActive = true)),
+                200L,
+                OWN_PACKAGE
+            ).action
+        )
+
+        val staleAfterCall = arbiter.evaluate(
+            listOf(bluetooth.copy(positionUpdateTimeMs = 300L)),
+            300L,
+            OWN_PACKAGE
+        )
+        assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, staleAfterCall.action)
+        assertEquals(null, staleAfterCall.sessionId)
+
+        val resumed = arbiter.evaluate(
+            listOf(bluetooth.copy(reportedPositionMs = 64_500L, positionUpdateTimeMs = 400L)),
+            400L,
+            OWN_PACKAGE
+        )
+        assertEquals(MediaSessionArbitrationAction.SELECT, resumed.action)
+        assertEquals("bluetooth", resumed.sessionId)
+    }
+
+    @Test
     fun `stale playing incumbent yields to a challenger with confirmed progress`() {
         val arbiter = runningArbiter()
         val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 100L)
+        val first = arbiter.evaluate(listOf(bluetooth), 100L, OWN_PACKAGE)
         assertEquals(
             "bluetooth",
-            arbiter.evaluate(listOf(bluetooth), 100L, OWN_PACKAGE).sessionId
+            first.sessionId
         )
 
         val aqt = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 200L)
@@ -158,17 +307,27 @@ class MediaSessionArbiterTest {
             300L,
             activeInSystemList = false
         )
-        val bluetoothPlaying = candidate("bluetooth", PlaybackState.STATE_PLAYING, 1_000L, 100L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 1_000L, 100L)
         arbiter.evaluate(listOf(aqtPaused), 0L, OWN_PACKAGE)
         arbiter.evaluate(listOf(aqtPaused), 1_500L, OWN_PACKAGE)
 
-        val armed = arbiter.evaluate(listOf(aqtPaused, bluetoothPlaying), 1_600L, OWN_PACKAGE)
+        arbiter.evaluate(listOf(aqtPaused, bluetoothPaused), 1_600L, OWN_PACKAGE)
+        val bluetoothPlaying = bluetoothPaused.copy(playbackState = PlaybackState.STATE_PLAYING)
+        val waiting = arbiter.evaluate(listOf(aqtPaused, bluetoothPlaying), 1_700L, OWN_PACKAGE)
+        assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, waiting.action)
+        assertEquals("aqt", waiting.sessionId)
+
+        val armed = arbiter.evaluate(
+            listOf(aqtPaused, bluetoothPlaying.copy(reportedPositionMs = 1_400L, positionUpdateTimeMs = 1_800L)),
+            1_900L,
+            OWN_PACKAGE
+        )
         assertEquals(MediaSessionArbitrationAction.KEEP_CURRENT, armed.action)
         assertEquals("aqt", armed.sessionId)
 
         val confirmed = arbiter.evaluate(
-            listOf(aqtPaused, bluetoothPlaying.copy(reportedPositionMs = 1_400L, positionUpdateTimeMs = 400L)),
-            1_900L,
+            listOf(aqtPaused, bluetoothPlaying.copy(reportedPositionMs = 1_400L, positionUpdateTimeMs = 1_800L)),
+            2_200L,
             OWN_PACKAGE
         )
         assertEquals(MediaSessionArbitrationAction.SELECT, confirmed.action)
@@ -213,11 +372,15 @@ class MediaSessionArbiterTest {
         arbiter.restorePreferredSource("aqt-source")
         val aqt = candidate("aqt", PlaybackState.STATE_PAUSED, 2_000L, 100L)
             .copy(sourceId = "aqt-source", activeInSystemList = false)
-        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 10L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 10L)
             .copy(sourceId = "bluetooth-source")
 
-        arbiter.evaluate(listOf(bluetooth, aqt), 100L, OWN_PACKAGE)
-        val decision = arbiter.evaluate(listOf(bluetooth, aqt), 1_600L, OWN_PACKAGE)
+        arbiter.evaluate(listOf(bluetoothPaused, aqt), 100L, OWN_PACKAGE)
+        val bluetoothPlaying = bluetoothPaused.copy(playbackState = PlaybackState.STATE_PLAYING)
+        arbiter.evaluate(listOf(bluetoothPlaying, aqt), 200L, OWN_PACKAGE)
+        val progressing = bluetoothPlaying.copy(reportedPositionMs = 64_500L, positionUpdateTimeMs = 300L)
+        arbiter.evaluate(listOf(progressing, aqt), 300L, OWN_PACKAGE)
+        val decision = arbiter.evaluate(listOf(progressing, aqt), 1_600L, OWN_PACKAGE)
 
         assertEquals(MediaSessionArbitrationAction.SELECT, decision.action)
         assertEquals("bluetooth", decision.sessionId)
@@ -305,12 +468,16 @@ class MediaSessionArbiterTest {
     @Test
     fun `timestamp only incumbent updates cannot block progressing playback`() {
         val arbiter = runningArbiter()
-        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 64_000L, 10_000L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 64_000L, 10_000L)
         val cloud = candidate("cloud", PlaybackState.STATE_PLAYING, 8_000L, 9_000L, false)
-        arbiter.evaluate(listOf(bluetooth, cloud), 10_000L, OWN_PACKAGE)
+        arbiter.evaluate(listOf(bluetoothPaused), 10_000L, OWN_PACKAGE)
+        val bluetooth = bluetoothPaused.copy(playbackState = PlaybackState.STATE_PLAYING)
+        val second = arbiter.evaluate(listOf(bluetooth, cloud), 10_100L, OWN_PACKAGE)
+        assertEquals("handoff_armed", second.reason)
         val advanced = cloud.copy(reportedPositionMs = 8_500L, positionUpdateTimeMs = 10_500L)
         val refreshed = bluetooth.copy(positionUpdateTimeMs = 10_600L)
-        assertEquals("handoff_armed", arbiter.evaluate(listOf(refreshed, advanced), 10_600L, OWN_PACKAGE).reason)
+        val third = arbiter.evaluate(listOf(refreshed, advanced), 10_600L, OWN_PACKAGE)
+        assertEquals("handoff_confirmed", third.reason)
 
         val selected = arbiter.evaluate(
             listOf(refreshed.copy(positionUpdateTimeMs = 10_850L), advanced), 10_850L, OWN_PACKAGE
@@ -440,12 +607,17 @@ class MediaSessionArbiterTest {
     fun `destroyed incumbent can be forgotten and replaced by fresh playback`() {
         val arbiter = runningArbiter()
         val aqt = candidate("aqt", PlaybackState.STATE_PLAYING, 1_000L, 100L)
-        val bluetooth = candidate("bluetooth", PlaybackState.STATE_PLAYING, 500L, 50L)
+        val bluetoothPaused = candidate("bluetooth", PlaybackState.STATE_PAUSED, 500L, 50L)
         arbiter.evaluate(listOf(aqt), 100L, OWN_PACKAGE)
         arbiter.forgetSession("aqt")
 
+        arbiter.evaluate(listOf(bluetoothPaused), 150L, OWN_PACKAGE)
         val decision = arbiter.evaluate(
-            listOf(bluetooth.copy(positionUpdateTimeMs = 200L)),
+            listOf(bluetoothPaused.copy(
+                playbackState = PlaybackState.STATE_PLAYING,
+                reportedPositionMs = 600L,
+                positionUpdateTimeMs = 200L
+            )),
             200L,
             OWN_PACKAGE
         )
@@ -558,7 +730,12 @@ class MediaSessionArbiterTest {
         hasTitle = true,
         activeInSystemList = activeInSystemList,
         reportedPositionMs = positionMs,
-        positionUpdateTimeMs = positionUpdateTimeMs
+        positionUpdateTimeMs = positionUpdateTimeMs,
+        transport = if (sessionId == "bluetooth") {
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        } else {
+            MediaSessionTransport.STANDARD
+        }
     )
 
     private fun runningArbiter() = MediaSessionArbiter(

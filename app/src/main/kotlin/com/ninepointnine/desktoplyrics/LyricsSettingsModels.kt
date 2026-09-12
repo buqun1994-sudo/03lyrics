@@ -8,7 +8,8 @@ import kotlin.math.roundToInt
 internal enum class LyricsColorMode(val preferenceValue: String) {
     DARK("dark"),
     LIGHT("light"),
-    SYSTEM("system");
+    SYSTEM("system"),
+    CUSTOM("custom");
 
     companion object {
         fun fromPreference(value: String?): LyricsColorMode =
@@ -19,6 +20,16 @@ internal enum class LyricsColorMode(val preferenceValue: String) {
         DARK -> false
         LIGHT -> true
         SYSTEM -> systemNight
+        CUSTOM -> systemNight
+    }
+}
+
+internal enum class CurrentLyricsColorMode(val preferenceValue: String) {
+    DEFAULT("default"), THEME("theme"), CUSTOM("custom");
+
+    companion object {
+        fun fromPreference(value: String?): CurrentLyricsColorMode =
+            entries.firstOrNull { it.preferenceValue == value } ?: DEFAULT
     }
 }
 

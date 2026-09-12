@@ -2,6 +2,8 @@ package com.ninepointnine.desktoplyrics
 
 import android.content.res.ColorStateList
 import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -30,6 +32,9 @@ internal data class LyricsSettingsPreferences(
     val wallpaperFocus: WallpaperLyricsFocus,
     val wallpaperPosition: WallpaperLyricsPosition,
     val lyricsColorMode: LyricsColorMode,
+    val customLyricsColor: Int,
+    val currentLyricsColorMode: CurrentLyricsColorMode,
+    val customCurrentLyricsColor: Int,
     val autoStart: Boolean,
     val translationEnabled: Boolean
 )
@@ -47,6 +52,9 @@ internal data class LyricsSettingsActions(
     val onWallpaperFocusChanged: (WallpaperLyricsFocus) -> Unit,
     val onWallpaperPositionChanged: (WallpaperLyricsPosition) -> Unit,
     val onLyricsColorModeChanged: (LyricsColorMode) -> Unit,
+    val onCustomLyricsColorChanged: (Int) -> Unit,
+    val onCurrentLyricsColorModeChanged: (CurrentLyricsColorMode) -> Unit,
+    val onCustomCurrentLyricsColorChanged: (Int) -> Unit,
     val onAutoStartChanged: (Boolean) -> Unit,
     val onTranslationChanged: (Boolean) -> Unit,
     val onServiceRunningChanged: (Boolean) -> Unit,
@@ -102,8 +110,28 @@ internal class LyricsSettingsRenderer(
     private val lyricsColorOptions = listOf(
         root.findViewById<TextView>(R.id.lyrics_color_dark) to LyricsColorMode.DARK,
         root.findViewById<TextView>(R.id.lyrics_color_light) to LyricsColorMode.LIGHT,
-        root.findViewById<TextView>(R.id.lyrics_color_system) to LyricsColorMode.SYSTEM
+        root.findViewById<TextView>(R.id.lyrics_color_system) to LyricsColorMode.SYSTEM,
+        root.findViewById<TextView>(R.id.lyrics_color_custom) to LyricsColorMode.CUSTOM
     )
+    private val customColorPicker: IcarColorCardView = root.findViewById(R.id.lyrics_custom_color_picker)
+    private val currentColorOptions = listOf(
+        root.findViewById<TextView>(R.id.current_lyrics_color_default) to CurrentLyricsColorMode.DEFAULT,
+        root.findViewById<TextView>(R.id.current_lyrics_color_theme) to CurrentLyricsColorMode.THEME,
+        root.findViewById<TextView>(R.id.current_lyrics_color_custom) to CurrentLyricsColorMode.CUSTOM
+    )
+    private val currentColorPicker: IcarColorCardView = root.findViewById(R.id.current_lyrics_color_picker)
+    private val customColorCommitHandler = Handler(Looper.getMainLooper())
+    private val currentColorCommitHandler = Handler(Looper.getMainLooper())
+    private var pendingCustomColor: Int? = null
+    private var pendingCurrentColor: Int? = null
+    private val customColorCommitRunnable = Runnable {
+        pendingCustomColor?.let(actions.onCustomLyricsColorChanged)
+        pendingCustomColor = null
+    }
+    private val currentColorCommitRunnable = Runnable {
+        pendingCurrentColor?.let(actions.onCustomCurrentLyricsColorChanged)
+        pendingCurrentColor = null
+    }
 
     private val wallpaperSwitch: IcarSwitch = root.findViewById(R.id.wallpaper_lyrics_switch)
     private val wallpaperBlurSwitch: IcarSwitch = root.findViewById(R.id.wallpaper_blur_switch)
@@ -173,8 +201,27 @@ internal class LyricsSettingsRenderer(
             view.setOnClickListener { actions.onWallpaperPositionChanged(value) }
         }
         lyricsColorOptions.forEach { (view, value) ->
-            view.setOnClickListener { actions.onLyricsColorModeChanged(value) }
+            view.setOnClickListener {
+                if (value != LyricsColorMode.CUSTOM) {
+                    customColorCommitHandler.removeCallbacks(customColorCommitRunnable)
+                    pendingCustomColor = null
+                }
+                actions.onLyricsColorModeChanged(value)
+            }
         }
+        currentColorOptions.forEach { (view, value) ->
+            view.setOnClickListener {
+                if (value != CurrentLyricsColorMode.CUSTOM) {
+                    currentColorCommitHandler.removeCallbacks(currentColorCommitRunnable)
+                    pendingCurrentColor = null
+                }
+                actions.onCurrentLyricsColorModeChanged(value)
+            }
+        }
+        customColorPicker.onColorPreview = ::scheduleCustomColorCommit
+        customColorPicker.onColorCommit = ::scheduleCustomColorCommit
+        currentColorPicker.onColorPreview = ::scheduleCurrentColorCommit
+        currentColorPicker.onColorCommit = ::scheduleCurrentColorCommit
         bindSwitch(
             root.findViewById(R.id.wallpaper_lyrics_setting),
             wallpaperSwitch,
@@ -264,6 +311,11 @@ internal class LyricsSettingsRenderer(
             lyricsColorOptions.forEach { (view, mode) ->
                 view.renderSelected(mode == value.lyricsColorMode)
             }
+            customColorPicker.visibility = if (value.lyricsColorMode == LyricsColorMode.CUSTOM) View.VISIBLE else View.GONE
+            customColorPicker.color = value.customLyricsColor
+            currentColorOptions.forEach { (view, mode) -> view.renderSelected(mode == value.currentLyricsColorMode) }
+            currentColorPicker.visibility = if (value.currentLyricsColorMode == CurrentLyricsColorMode.CUSTOM) View.VISIBLE else View.GONE
+            currentColorPicker.color = value.customCurrentLyricsColor
             renderSwitch(wallpaperSwitch, value.wallpaperEnabled)
             renderSwitch(wallpaperBlurSwitch, value.wallpaperBlur)
             renderSwitch(wallpaperShadowSwitch, value.wallpaperShadow)
@@ -272,6 +324,18 @@ internal class LyricsSettingsRenderer(
         } finally {
             rendering = false
         }
+    }
+
+    private fun scheduleCustomColorCommit(color: Int) {
+        pendingCustomColor = color
+        customColorCommitHandler.removeCallbacks(customColorCommitRunnable)
+        customColorCommitHandler.postDelayed(customColorCommitRunnable, 180L)
+    }
+
+    private fun scheduleCurrentColorCommit(color: Int) {
+        pendingCurrentColor = color
+        currentColorCommitHandler.removeCallbacks(currentColorCommitRunnable)
+        currentColorCommitHandler.postDelayed(currentColorCommitRunnable, 180L)
     }
 
     fun renderServiceRunning(running: Boolean) {

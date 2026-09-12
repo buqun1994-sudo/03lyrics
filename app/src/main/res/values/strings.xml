@@ -45,6 +45,11 @@
     <string name="settings_lyrics_color_dark">深色</string>
     <string name="settings_lyrics_color_light">浅色</string>
     <string name="settings_lyrics_color_system">跟随系统</string>
+    <string name="settings_lyrics_color_custom">自定义</string>
+    <string name="settings_current_lyrics_color">当前歌词颜色</string>
+    <string name="settings_current_lyrics_color_default">默认</string>
+    <string name="settings_current_lyrics_color_theme">主题色</string>
+    <string name="settings_current_lyrics_color_custom">自定义</string>
     <string name="settings_auto_start">开机自启动</string>
     <string name="settings_auto_start_summary">车机启动或应用升级后自动恢复歌词服务</string>
     <string name="settings_lyrics_translation">逐句翻译</string>

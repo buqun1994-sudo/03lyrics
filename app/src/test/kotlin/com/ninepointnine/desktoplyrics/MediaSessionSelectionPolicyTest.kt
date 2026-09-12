@@ -212,6 +212,25 @@ class MediaSessionSelectionPolicyTest {
     }
 
     @Test
+    fun `bluetooth session without music metadata is not admitted`() {
+        val bluetoothVideo = candidate(
+            index = 0,
+            packageName = "com.android.bluetooth",
+            playbackState = PlaybackState.STATE_PLAYING,
+            audioUsage = AudioAttributes.USAGE_MEDIA,
+            title = true
+        ).copy(hasMusicMetadata = false)
+
+        assertNull(
+            MediaSessionSelectionPolicy.select(
+                candidates = listOf(bluetoothVideo),
+                currentIndex = null,
+                ownPackageName = "com.ninepointnine.desktoplyrics"
+            )
+        )
+    }
+
+    @Test
     fun `unknown audio semantics without metadata are not admitted early`() {
         val unknown = candidate(
             index = 0,
@@ -417,6 +436,11 @@ class MediaSessionSelectionPolicyTest {
         audioUsage = audioUsage,
         audioContentType = audioContentType,
         playbackActions = playbackActions,
-        hasTitle = title
+        hasTitle = title,
+        transport = if (packageName == PublicMediaBrowserServiceResolver.BLUETOOTH_PACKAGE) {
+            MediaSessionTransport.BLUETOOTH_AVRCP
+        } else {
+            MediaSessionTransport.STANDARD
+        }
     )
 }

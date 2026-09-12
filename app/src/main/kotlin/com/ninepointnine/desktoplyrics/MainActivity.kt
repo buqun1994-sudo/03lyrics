@@ -147,6 +147,9 @@ class MainActivity : AppCompatActivity() {
                 onWallpaperFocusChanged = ::setWallpaperFocus,
                 onWallpaperPositionChanged = ::setWallpaperPosition,
                 onLyricsColorModeChanged = ::setLyricsColorMode,
+                onCustomLyricsColorChanged = ::setCustomLyricsColor,
+                onCurrentLyricsColorModeChanged = ::setCurrentLyricsColorMode,
+                onCustomCurrentLyricsColorChanged = ::setCustomCurrentLyricsColor,
                 onAutoStartChanged = ::setAutoStartEnabled,
                 onTranslationChanged = ::setLyricsTranslationEnabled,
                 onServiceRunningChanged = ::setServiceRunning,
@@ -446,9 +449,68 @@ class MainActivity : AppCompatActivity() {
             .putString(LyricsOverlayService.PREF_LYRICS_COLOR_MODE, mode.preferenceValue)
             .apply()
         updateOptions()
-        notifyDisplaySetting(LyricsOverlayService.ACTION_SET_LYRICS_COLOR_MODE) {
+        startService(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_SET_LYRICS_COLOR_MODE
             putExtra(LyricsOverlayService.EXTRA_LYRICS_COLOR_MODE, mode.preferenceValue)
-        }
+            if (mode == LyricsColorMode.CUSTOM) {
+                putExtra(
+                    LyricsOverlayService.EXTRA_CUSTOM_LYRICS_COLOR,
+                    overlayPrefs.getInt(LyricsOverlayService.PREF_CUSTOM_LYRICS_COLOR, 0xFF5C66BF.toInt())
+                )
+            }
+        })
+    }
+
+    private fun setCustomLyricsColor(color: Int) {
+        overlayPrefs.edit().putInt(LyricsOverlayService.PREF_CUSTOM_LYRICS_COLOR, color).apply()
+        updateOptions()
+        // Color changes are high-frequency UI edits; deliver them directly to
+        // the existing service instance instead of relying on its cached
+        // process flag, which can be stale after a debug package reinstall.
+        startService(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_SET_LYRICS_COLOR_MODE
+            putExtra(LyricsOverlayService.EXTRA_LYRICS_COLOR_MODE, LyricsColorMode.CUSTOM.preferenceValue)
+            putExtra(LyricsOverlayService.EXTRA_CUSTOM_LYRICS_COLOR, color)
+        })
+    }
+
+    private fun setCurrentLyricsColorMode(mode: CurrentLyricsColorMode) {
+        overlayPrefs.edit()
+            .putString(LyricsOverlayService.PREF_CURRENT_LYRICS_COLOR_MODE, mode.preferenceValue)
+            .apply()
+        updateOptions()
+        startService(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_SET_CURRENT_LYRICS_COLOR_MODE
+            putExtra(LyricsOverlayService.EXTRA_CURRENT_LYRICS_COLOR_MODE, mode.preferenceValue)
+            if (mode == CurrentLyricsColorMode.CUSTOM) {
+                putExtra(
+                    LyricsOverlayService.EXTRA_CUSTOM_CURRENT_LYRICS_COLOR,
+                    overlayPrefs.getInt(
+                        LyricsOverlayService.PREF_CUSTOM_CURRENT_LYRICS_COLOR,
+                        0xFF5C66BF.toInt()
+                    )
+                )
+            }
+        })
+    }
+
+    private fun setCustomCurrentLyricsColor(color: Int) {
+        overlayPrefs.edit()
+            .putInt(LyricsOverlayService.PREF_CUSTOM_CURRENT_LYRICS_COLOR, color)
+            .putString(
+                LyricsOverlayService.PREF_CURRENT_LYRICS_COLOR_MODE,
+                CurrentLyricsColorMode.CUSTOM.preferenceValue
+            )
+            .apply()
+        updateOptions()
+        startService(Intent(this, LyricsOverlayService::class.java).apply {
+            action = LyricsOverlayService.ACTION_SET_CURRENT_LYRICS_COLOR_MODE
+            putExtra(
+                LyricsOverlayService.EXTRA_CURRENT_LYRICS_COLOR_MODE,
+                CurrentLyricsColorMode.CUSTOM.preferenceValue
+            )
+            putExtra(LyricsOverlayService.EXTRA_CUSTOM_CURRENT_LYRICS_COLOR, color)
+        })
     }
 
     private fun setLyricsTranslationEnabled(enabled: Boolean) {
@@ -537,6 +599,20 @@ class MainActivity : AppCompatActivity() {
                         LyricsOverlayService.PREF_LYRICS_COLOR_MODE,
                         LyricsColorMode.SYSTEM.preferenceValue
                     )
+                ),
+                customLyricsColor = overlayPrefs.getInt(
+                    LyricsOverlayService.PREF_CUSTOM_LYRICS_COLOR,
+                    0xFF5C66BF.toInt()
+                ),
+                currentLyricsColorMode = CurrentLyricsColorMode.fromPreference(
+                    overlayPrefs.getString(
+                        LyricsOverlayService.PREF_CURRENT_LYRICS_COLOR_MODE,
+                        CurrentLyricsColorMode.DEFAULT.preferenceValue
+                    )
+                ),
+                customCurrentLyricsColor = overlayPrefs.getInt(
+                    LyricsOverlayService.PREF_CUSTOM_CURRENT_LYRICS_COLOR,
+                    0xFF5C66BF.toInt()
                 ),
                 autoStart = overlayPrefs.getBoolean(
                     LyricsOverlayService.PREF_AUTO_START,

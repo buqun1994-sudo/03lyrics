@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.ActivityOptions
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.database.ContentObserver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -149,6 +150,11 @@ class LyricsOverlayService : Service() {
             onTrialLeaseDue = ::recheckCommercialEntitlementAtTrialLease
         )
     }
+    private val themeColorObserver = object : ContentObserver(mainHandler) {
+        override fun onChange(selfChange: Boolean) {
+            applyThemeToWeb()
+        }
+    }
 
     private var overlayRoot: FrameLayout? = null
     private var webView: WebView? = null
@@ -172,6 +178,9 @@ class LyricsOverlayService : Service() {
     private var wallpaperFocus = WallpaperLyricsFocus.CENTER
     private var wallpaperPosition = WallpaperLyricsPosition.RIGHT
     private var lyricsColorMode = LyricsColorMode.SYSTEM
+    private var customLyricsColor = 0xFF5C66BF.toInt()
+    private var currentLyricsColorMode = CurrentLyricsColorMode.DEFAULT
+    private var customCurrentLyricsColor = 0xFF5C66BF.toInt()
     private var nightTheme = true
     private var surfaceMode = LyricsSurfaceMode.TOPBAR
     private var surfaceHandoffTarget: LyricsSurfaceMode? = null
@@ -355,6 +364,13 @@ class LyricsOverlayService : Service() {
         LyricsRuntimeDiagnostics.attach(::runtimeDiagnosticSnapshot)
         announceOverlayState()
         loadRuntimePreferences()
+        runCatching {
+            contentResolver.registerContentObserver(
+                Settings.Global.getUriFor(IcarThemeColorPalette.GLOBAL_THEME_KEY),
+                false,
+                themeColorObserver
+            )
+        }
         SurfaceOccupancyLeaseRegistry.addListener(surfaceOccupancyListener)
         IcarDockStateRegistry.addListener(dockStateListener)
         IcarSrPanelMotionRegistry.addListener(srPanelMotionListener)
@@ -364,8 +380,7 @@ class LyricsOverlayService : Service() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         val nextNightTheme = lyricsColorMode.resolve(isNightTheme(newConfig))
-        if (nightTheme == nextNightTheme) return
-        nightTheme = nextNightTheme
+        if (nightTheme != nextNightTheme) nightTheme = nextNightTheme
         applyThemeToWeb()
     }
 
@@ -822,11 +837,36 @@ class LyricsOverlayService : Service() {
             prefs.edit()
                 .putString(PREF_LYRICS_COLOR_MODE, lyricsColorMode.preferenceValue)
                 .apply()
+            if (intent.hasExtra(EXTRA_CUSTOM_LYRICS_COLOR)) {
+                customLyricsColor = intent.getIntExtra(EXTRA_CUSTOM_LYRICS_COLOR, customLyricsColor)
+                prefs.edit().putInt(PREF_CUSTOM_LYRICS_COLOR, customLyricsColor).apply()
+            }
             val nextNightTheme = lyricsColorMode.resolve(isNightTheme(resources.configuration))
             if (nightTheme != nextNightTheme) {
                 nightTheme = nextNightTheme
-                applyThemeToWeb()
             }
+            // Re-apply even when light/dark did not change: custom hue changes
+            // are carried by the same theme update and must reach the live WebView.
+            applyThemeToWeb()
+            if (overlayRoot != null) return START_STICKY
+        }
+
+        if (intent?.action == ACTION_SET_CURRENT_LYRICS_COLOR_MODE) {
+            currentLyricsColorMode = CurrentLyricsColorMode.fromPreference(
+                intent.getStringExtra(EXTRA_CURRENT_LYRICS_COLOR_MODE)
+            )
+            if (intent.hasExtra(EXTRA_CUSTOM_CURRENT_LYRICS_COLOR)) {
+                customCurrentLyricsColor = intent.getIntExtra(
+                    EXTRA_CUSTOM_CURRENT_LYRICS_COLOR,
+                    customCurrentLyricsColor
+                )
+                prefs.edit().putInt(PREF_CUSTOM_CURRENT_LYRICS_COLOR, customCurrentLyricsColor).apply()
+            }
+            prefs.edit().putString(
+                PREF_CURRENT_LYRICS_COLOR_MODE,
+                currentLyricsColorMode.preferenceValue
+            ).apply()
+            applyThemeToWeb()
             if (overlayRoot != null) return START_STICKY
         }
 
@@ -903,6 +943,7 @@ class LyricsOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        runCatching { contentResolver.unregisterContentObserver(themeColorObserver) }
         LyricsRuntimeDiagnostics.detach()
         SurfaceOccupancyLeaseRegistry.removeListener(surfaceOccupancyListener)
         IcarDockStateRegistry.removeListener(dockStateListener)
@@ -921,6 +962,14 @@ class LyricsOverlayService : Service() {
     private fun loadRuntimePreferences() {
         lyricsColorMode = LyricsColorMode.fromPreference(
             prefs.getString(PREF_LYRICS_COLOR_MODE, LyricsColorMode.SYSTEM.preferenceValue)
+        )
+        customLyricsColor = prefs.getInt(PREF_CUSTOM_LYRICS_COLOR, customLyricsColor)
+        currentLyricsColorMode = CurrentLyricsColorMode.fromPreference(
+            prefs.getString(PREF_CURRENT_LYRICS_COLOR_MODE, CurrentLyricsColorMode.DEFAULT.preferenceValue)
+        )
+        customCurrentLyricsColor = prefs.getInt(
+            PREF_CUSTOM_CURRENT_LYRICS_COLOR,
+            customCurrentLyricsColor
         )
         nightTheme = lyricsColorMode.resolve(isNightTheme(resources.configuration))
         backgroundMode = BACKGROUND_TRANSPARENT
@@ -2022,8 +2071,24 @@ class LyricsOverlayService : Service() {
     private fun applyThemeToWeb() {
         if (!webReady) return
         val encodedTheme = JSONObject.quote(if (nightTheme) "dark" else "light")
+        val encodedColor = if (lyricsColorMode == LyricsColorMode.CUSTOM) {
+            JSONObject.quote("#%08X".format(customLyricsColor))
+        } else {
+            "null"
+        }
+        val currentColor = when (currentLyricsColorMode) {
+            CurrentLyricsColorMode.DEFAULT -> null
+            CurrentLyricsColorMode.CUSTOM -> customCurrentLyricsColor
+            CurrentLyricsColorMode.THEME -> {
+                val themeKey = runCatching {
+                    Settings.Global.getInt(contentResolver, IcarThemeColorPalette.GLOBAL_THEME_KEY)
+                }.getOrNull()
+                IcarThemeColorPalette.resolve(themeKey, isNightTheme(resources.configuration)).accentColor
+            }
+        }
+        val encodedCurrentColor = currentColor?.let { JSONObject.quote("#%08X".format(it)) } ?: "null"
         webView?.evaluateJavascript(
-            "window.LobstaOverlay && window.LobstaOverlay.setTheme($encodedTheme);",
+            "window.LobstaOverlay && window.LobstaOverlay.setTheme($encodedTheme,$encodedColor,$encodedCurrentColor);",
             null
         )
     }
@@ -2389,6 +2454,20 @@ class LyricsOverlayService : Service() {
             .any { device -> isBluetoothBrowserRouteType(device.type) }
     }.getOrDefault(false)
 
+    /**
+     * A Bluetooth A2DP session is also exposed while the phone uses HFP / a
+     * communication route. That route is not a music source and must not
+     * displace a paused music session.
+     */
+    private fun isBluetoothCommunicationActive(): Boolean = runCatching {
+        val mode = audioManager.mode
+        mode == AudioManager.MODE_IN_CALL ||
+            mode == AudioManager.MODE_IN_COMMUNICATION ||
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            }
+    }.getOrDefault(false)
+
     private fun isBluetoothBrowserRouteType(type: Int): Boolean =
         PublicMediaBrowserRegistryPolicy.isBluetoothOutputType(type, Build.VERSION.SDK_INT)
 
@@ -2398,9 +2477,12 @@ class LyricsOverlayService : Service() {
         preferredBrowserDiscoveryPending: Boolean
     ) {
         updateControllerCallbacks(controllers)
+        val bluetoothCommunicationActive = isBluetoothCommunicationActive()
         val candidates = controllers.mapIndexed { index, controller ->
             val playback = runCatching { controller.playbackState }.getOrNull()
             val playbackInfo = runCatching { controller.playbackInfo }.getOrNull()
+            val transport = MediaPlaybackAdapter.transportFor(controller)
+            val recordingMetadata = normalizedRecordingMetadata(controller)
             MediaSessionCandidate(
                 index = index,
                 sessionId = mediaSessionId(controller),
@@ -2410,10 +2492,15 @@ class LyricsOverlayService : Service() {
                 audioUsage = playbackInfo?.audioAttributes?.usage,
                 audioContentType = playbackInfo?.audioAttributes?.contentType,
                 playbackActions = playback?.actions ?: 0L,
-                hasTitle = normalizedRecordingMetadata(controller)?.hasTrack == true,
+                hasTitle = recordingMetadata?.hasTrack == true,
                 activeInSystemList = controller.sessionToken in activeTokens,
                 reportedPositionMs = playback?.position ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN,
-                positionUpdateTimeMs = playback?.lastPositionUpdateTime ?: 0L
+                positionUpdateTimeMs = playback?.lastPositionUpdateTime ?: 0L,
+                transport = transport,
+                bluetoothCommunicationActive = transport == MediaSessionTransport.BLUETOOTH_AVRCP &&
+                    bluetoothCommunicationActive,
+                hasMusicMetadata = transport != MediaSessionTransport.BLUETOOTH_AVRCP ||
+                    recordingMetadata?.let { it.artist.isNotBlank() || it.album.isNotBlank() } == true
             )
         }
         logSessionCandidates(candidates)
@@ -2434,6 +2521,9 @@ class LyricsOverlayService : Service() {
                         .put("packageName", candidate.packageName)
                         .put("source", candidate.sourceId)
                         .put("state", candidate.playbackState ?: JSONObject.NULL)
+                        .put("transport", candidate.transport.name.lowercase())
+                        .put("bluetoothCommunicationActive", candidate.bluetoothCommunicationActive)
+                        .put("hasMusicMetadata", candidate.hasMusicMetadata)
                         .put("positionMs", candidate.reportedPositionMs)
                         .put("updateElapsedRealtimeMs", candidate.positionUpdateTimeMs)
                         .put("activeInSystemList", candidate.activeInSystemList)
@@ -2631,6 +2721,9 @@ class LyricsOverlayService : Service() {
                 ":content=${candidate.audioContentType ?: -1}" +
                 ":actions=${candidate.playbackActions}" +
                 ":title=${candidate.hasTitle}" +
+                ":transport=${candidate.transport.name.lowercase()}" +
+                ":btCommunication=${candidate.bluetoothCommunicationActive}" +
+                ":musicMetadata=${candidate.hasMusicMetadata}" +
                 ":active=${candidate.activeInSystemList}" +
                 ":position=${candidate.reportedPositionMs}" +
                 ":positionTime=${candidate.positionUpdateTimeMs}"
@@ -3101,6 +3194,8 @@ class LyricsOverlayService : Service() {
             "com.ninepointnine.desktoplyrics.action.SET_LYRICS_TRANSLATION"
         const val ACTION_SET_LYRICS_COLOR_MODE =
             "com.ninepointnine.desktoplyrics.action.SET_LYRICS_COLOR_MODE"
+        const val ACTION_SET_CURRENT_LYRICS_COLOR_MODE =
+            "com.ninepointnine.desktoplyrics.action.SET_CURRENT_LYRICS_COLOR_MODE"
         const val ACTION_SET_WALLPAPER_LYRICS =
             "com.ninepointnine.desktoplyrics.action.SET_WALLPAPER_LYRICS"
         const val ACTION_SETTINGS_OPENED = "com.ninepointnine.desktoplyrics.action.SETTINGS_OPENED"
@@ -3126,6 +3221,10 @@ class LyricsOverlayService : Service() {
         const val EXTRA_TOPBAR_SECOND_LINE_FONT_SIZE_PX = "topbar_second_line_font_size_px"
         const val EXTRA_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled"
         const val EXTRA_LYRICS_COLOR_MODE = "lyrics_color_mode"
+        const val EXTRA_CUSTOM_LYRICS_COLOR = "custom_lyrics_color"
+        const val PREF_CUSTOM_LYRICS_COLOR = "custom_lyrics_color_v1"
+        const val EXTRA_CURRENT_LYRICS_COLOR_MODE = "current_lyrics_color_mode"
+        const val EXTRA_CUSTOM_CURRENT_LYRICS_COLOR = "custom_current_lyrics_color"
         const val EXTRA_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled"
         const val EXTRA_WALLPAPER_BLUR_ENABLED = "wallpaper_blur_enabled"
         const val EXTRA_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled"
@@ -3160,6 +3259,8 @@ class LyricsOverlayService : Service() {
         const val PREF_TOPBAR_LINES = "topbar_lines_v1"
         const val PREF_LYRICS_TRANSLATION_ENABLED = "lyrics_translation_enabled_v1"
         const val PREF_LYRICS_COLOR_MODE = "lyrics_color_mode_v1"
+        const val PREF_CURRENT_LYRICS_COLOR_MODE = "current_lyrics_color_mode_v1"
+        const val PREF_CUSTOM_CURRENT_LYRICS_COLOR = "custom_current_lyrics_color_v1"
         const val PREF_WALLPAPER_LYRICS_ENABLED = "wallpaper_lyrics_enabled_v1"
         const val PREF_WALLPAPER_BLUR_ENABLED = "wallpaper_blur_enabled_v1"
         const val PREF_WALLPAPER_SHADOW_ENABLED = "wallpaper_shadow_enabled_v1"

@@ -23,10 +23,30 @@ class IcarThemeColorPaletteTest {
 
     @Test
     fun `yellow theme uses dark selected text for readability`() {
-        val palette = IcarThemeColorPalette.resolve(themeKey = 64, nightMode = false)
+        val palette = IcarThemeColorPalette.resolve(themeKey = 35, nightMode = false)
 
         assertEquals(0xFFFDFD54.toInt(), palette.accentColor)
         assertEquals(0xFF16161B.toInt(), palette.accentTextColor)
+    }
+
+    @Test
+    fun `the six vehicle theme keys resolve to the verified palette`() {
+        val expected = mapOf(
+            0 to 0xFF1A8CFF.toInt(),
+            31 to 0xFF92B5CD.toInt(),
+            32 to 0xFF5C66BF.toInt(),
+            33 to 0xFFFB86A9.toInt(),
+            34 to 0xFF9F704B.toInt(),
+            35 to 0xFFFDFD54.toInt()
+        )
+
+        expected.forEach { (themeKey, color) ->
+            assertEquals(
+                "theme key $themeKey",
+                color,
+                IcarThemeColorPalette.resolve(themeKey, nightMode = false).accentColor
+            )
+        }
     }
 
     @Test

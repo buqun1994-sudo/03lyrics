@@ -1,5 +1,36 @@
 # 项目进度
 
+## 2026-09-12 正式 Release 1.0.17 打包并准备推送
+
+1. 按用户指令将唯一版本真值递增至 `1.0.17-icar03 / 131`，并通过 `node scripts/bump-release-version.mjs --check`；正式包继续使用 `com.ninepointnine.desktoplyrics` 与既有正式签名。
+2. `testDebugUnitTest assembleRelease` 成功，Release 完成 R8、资源收缩和 `lintVitalRelease`；APK 实际包名、版本、单一正式 signer、APK v2 签名和生产 Device Commerce 配置核验通过。
+3. 已导出 `03歌词-v1.0.17-icar03.apk` 与同名 ZIP 到用户指定正式发布目录。APK `2396911` bytes，SHA-256 `8ccc91543bc57261639ef3c63c14b94dd92440b4c20aed9fc478fb3b24941eeb`；ZIP `1398564` bytes，SHA-256 `29e9c4d9a94ac0b3f8b3c2e54676380f233272b59beb8ebeee7fdbf7a4b269de`。ZIP 仅含同名 UTF-8 APK 条目，解压字节与独立 APK 完全一致。
+4. 项目文档、Skills 和 `git diff --check` 通过；共享 03 APP Guard 仍因 Cloud 登记库版本 / HEAD / 工作树快照落后而失败，未改写外部登记库。
+
+## 2026-09-12 蓝牙非音乐音频不抢占歌词焦点（实现完成，待用户主测）
+
+1. 根因是车机蓝牙公开会话对音乐、手机视频和部分通信场景都报告 `USAGE_MEDIA + CONTENT_TYPE_UNKNOWN`；仅看 `PLAYING`、时间戳或活动列表会让旧蓝牙歌词重新抢占当前暂停的网易云并造成上下抽动。
+2. `MediaSessionArbiter` 现在要求蓝牙先观察到暂停基线，再出现有效位置前进才具备交接证据；单纯状态 / 时间戳刷新保持当前来源。蓝牙候选需带歌手或专辑元数据才可进入歌词主链。`LyricsOverlayService` 读取 `AudioManager` 通话模式和 `TYPE_BLUETOOTH_SCO`，通信路由直接排除蓝牙来源并清除已选蓝牙歌词；通话结束后的旧 `PLAYING` 状态也必须等新的位置推进才能重新入选。
+3. 新增和调整仲裁测试，覆盖蓝牙状态重复刷新、真实位置推进交接、通信路由清除，以及暂停 / 停止 / 消失来源的既有边界。
+4. 自动验证已通过 `MediaSessionArbiterTest`、`MediaSessionSelectionPolicyTest`、全量 `testDebugUnitTest`（461 项，0 失败）、`assembleDebug`、`check-project-docs.mjs`、`check-skills.mjs` 和 `git diff --check`；车机 `com.ninepointnine.desktoplyrics.test 1.0.17-icar03-test (131)` 已保留数据覆盖安装，基础 smoke 通过且未发现致命日志。
+5. `scripts/test-lyrics-overlay.mjs --no-screenshots` 已借用本机已有 Playwright 运行时通过 `95` 条断言；本次媒体仲裁改动未触及 HTML 呈现链。
+
+## 2026-09-12 当前歌词颜色三模式与色卡（实现完成，待用户主测）
+
+1. 已完成“当前歌词颜色”独立设置板块：默认 / 主题色 / 自定义，默认值为默认；默认态通过 CSS `--lyric-active: var(--foreground)` 继承上方“歌词颜色”的最终主色，浅色、深色、跟随系统和自定义均沿既有主链解析，不在当前句逻辑中写死颜色。
+2. 已完成第一条整体歌词颜色四模式与第二条当前句色卡；`IcarColorCardView` 在拖动期间独占触摸并阻止设置页滚动，颜色只做本地预览，停止 `180ms` 后提交服务；当前句自定义 / 主题色只覆盖当前句，临近句、已播放句和翻译句保留整体主色派生规则。
+3. 车机主题色只读 `Settings.Global` 的 `com.mb.provider.theme_key`，按 `0 / 31 / 32 / 33 / 34 / 35` 映射六种已取证主色，未知值回退默认蓝色；主题键变化通过现有 WebView 入口刷新，不写回系统设置。
+4. 自动验证：`testDebugUnitTest assembleDebug` 通过；共享 Chrome 下 `scripts/test-lyrics-overlay.mjs --no-screenshots` 通过 `95` 条断言，覆盖当前句覆盖、默认变量继承和三种歌词颜色主色；`check-project-docs.mjs`、`check-skills.mjs`、`git diff --check` 均通过。
+5. 车机验证：debug 包 `com.ninepointnine.desktoplyrics.test / 1.0.15-icar03-test / 129` 已保留数据覆盖安装；设置页、双租约、窗口避让无障碍、媒体监听、歌词服务恢复和致命日志 smoke 通过。车机截图已确认新增板块和默认选中态可见；剩余主测为切换整体颜色后确认“当前歌词颜色 → 默认”实时继承，以及主题色 / 当前句自定义和色卡拖动体验。
+6. 未提交、未推送、未发布；未清除数据、卸载或重启车机。
+
+## 2026-09-12 正式 Release 1.0.16 打包（已导出）
+
+1. 按用户指令将唯一版本真值递增至 `1.0.16-icar03 / 130`，并通过 `node scripts/bump-release-version.mjs --check`；正式构建继续使用 `com.ninepointnine.desktoplyrics` 与既有正式签名。
+2. `assembleRelease` 成功，包含 `minifyReleaseWithR8`、`shrinkReleaseRes`、`optimizeReleaseResources` 和 `lintVitalRelease`；APK 实际包名、版本、单一 signer、APK v2 签名和生产构建配置核验通过，未安装到车机。
+3. 已导出 `03歌词-v1.0.16-icar03.apk` 与同名 ZIP 到用户指定正式发布目录。APK `2396471` bytes，SHA-256 `f63c31c7c8653994a24c68956c5d22290931592a25b9f1a8c6ecba66214f0526`；ZIP `1401427` bytes，SHA-256 `e69782c3f1d9a90b32cb269afa1b04438180142becfd2e29e6f51959ce77ec37`。ZIP 仅含同名 UTF-8 APK 条目，解压字节与独立 APK 完全一致。
+4. `node scripts/check-03app-repository.mjs` 仍报告 Cloud 登记库停留在 `1.0.10-icar03 / 124`，且登记的 HEAD 与工作树 clean 快照均与当前仓库不一致；本轮未改写外部登记库，未提交、推送或上传产物。
+
 ## 2026-09-10 网易云偶发上电错选来源（已完成，三次重启主测通过）
 
 1. 后续只读取证观察到 `1.0.14-icar03 / 128` 的旧蓝牙会话为 `active=true / PAUSED` 且位置不变，网易云 `CloudMusicService` 为 `active=false / PLAYING` 且位置推进；该 Browser 当时仅由多媒体中心绑定。03歌词正式包不能读取调试内部状态，因此不把“保存偏好必然是蓝牙”写为实机已证实事实。源码确认原发现仅依赖活动包与保存偏好，暂停占位来源还会在冷窗口后关闭扩展发现；冷选偏好优先和时间戳变化被误作活动证据共同构成可复现路径。前一轮一次成功重启不覆盖本次发现的到达顺序与旧来源组合。

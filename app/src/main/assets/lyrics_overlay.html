@@ -30,6 +30,7 @@
       --surface-background-high:rgba(5,6,9,.86);
       --surface-border:rgba(255,255,255,.10);
       --foreground:#fff;
+      --lyric-active:var(--foreground);
       --muted:rgba(255,255,255,.62);
       --soft:rgba(255,255,255,.38);
       --lyric-default:rgba(255,255,255,.30);
@@ -50,6 +51,7 @@
       --surface-background-high:rgba(255,255,255,.92);
       --surface-border:rgba(19,27,36,.12);
       --foreground:#171b21;
+      --lyric-active:var(--foreground);
       --muted:rgba(20,27,35,.64);
       --soft:rgba(20,27,35,.42);
       --lyric-default:rgba(17,23,31,.40);
@@ -209,7 +211,7 @@
     }
     .line.near { color:var(--lyric-near); opacity:.88; }
     .line.active {
-      color:var(--foreground); opacity:1; font-size:var(--lyric-active-size); font-weight:820;
+      color:var(--lyric-active); opacity:1; font-size:var(--lyric-active-size); font-weight:820;
       text-shadow:none;
     }
     .line.past { color:var(--lyric-past); opacity:.58; }
@@ -221,7 +223,7 @@
     .compact-line {
       position:absolute; left:0; right:0; top:0; height:100%; display:flex; flex-direction:column; justify-content:center; align-items:stretch; padding:0 8px;
       overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
-      color:var(--foreground); font-size:var(--compact-font-size); line-height:1.05; font-weight:820;
+      color:var(--lyric-active); font-size:var(--compact-font-size); line-height:1.05; font-weight:820;
       text-shadow:none;
       opacity:0; transform:translate3d(0,11px,0);
       transition:transform .18s ease,opacity .18s ease;
@@ -233,7 +235,7 @@
     .compact-line-text { display:block; width:100%; min-width:0; overflow:hidden; white-space:nowrap; }
     .compact-translation-line {
       display:block; width:100%; min-width:0; overflow:hidden; white-space:nowrap;
-      color:var(--compact-translation); font-size:var(--compact-next-size); line-height:1.12; font-weight:650;
+      color:var(--lyric-active); opacity:.80; font-size:var(--compact-next-size); line-height:1.12; font-weight:650;
     }
     .compact-next-line { display:none; width:100%; min-width:0; overflow:hidden; white-space:nowrap; color:var(--compact-next); font-size:var(--compact-next-size); line-height:1.12; font-weight:650; }
     .compact-scroll-text { display:inline-block; min-width:100%; transform:translate3d(0,0,0); }
@@ -346,12 +348,12 @@
       color:var(--desktop-near); opacity:.96; filter:none; text-shadow:none;
     }
     body.surface-desktop .line.active {
-      color:var(--foreground); opacity:1; font-size:var(--desktop-active-size); font-weight:820;
+      color:var(--lyric-active); opacity:1; font-size:var(--desktop-active-size); font-weight:820;
       filter:none;
       text-shadow:none;
     }
     body.surface-desktop .line.active .line-translation {
-      color:var(--foreground); font-weight:620; opacity:.84;
+      color:var(--lyric-active); font-weight:620; opacity:.80;
     }
     body.surface-desktop .line.past {
       color:var(--desktop-past); opacity:.84; filter:none; text-shadow:none;
@@ -1596,11 +1598,42 @@
       setFontScale,
       setDisplayPreferences,
       setDesktopVisibleRatio,
-      setTheme(value) {
+      setTheme(value, customColor, currentColor) {
         finishDesktopLineMotion();
         const light=value==='light';
         document.body.classList.toggle('theme-light',light);
         document.body.classList.toggle('theme-dark',!light);
+        const customProperties=['--foreground','--lyric-active','--lyric-default','--lyric-near','--lyric-past','--lyric-loading','--compact-next','--compact-translation','--desktop-lyric','--desktop-translation','--desktop-near','--desktop-past'];
+        customProperties.forEach(name=>{
+          document.documentElement.style.removeProperty(name);
+          document.body.style.removeProperty(name);
+        });
+        if (typeof customColor === 'string' && /^#[0-9a-f]{8}$/i.test(customColor)) {
+          const n=parseInt(customColor.slice(1),16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+          const root=document.body;
+          root.style.setProperty('--foreground',`rgb(${r},${g},${b})`);
+          root.style.setProperty('--lyric-default',`rgba(${r},${g},${b},.30)`);
+          root.style.setProperty('--lyric-near',`rgba(${r},${g},${b},.70)`);
+          root.style.setProperty('--lyric-past',`rgba(${r},${g},${b},.45)`);
+          root.style.setProperty('--lyric-loading',`rgba(${r},${g},${b},.55)`);
+          root.style.setProperty('--compact-next',`rgba(${r},${g},${b},.50)`);
+          root.style.setProperty('--compact-translation',`rgba(${r},${g},${b},.80)`);
+          root.style.setProperty('--desktop-lyric',`rgba(${r},${g},${b},.70)`);
+          root.style.setProperty('--desktop-translation',`rgba(${r},${g},${b},.80)`);
+          root.style.setProperty('--desktop-near',`rgba(${r},${g},${b},.70)`);
+          root.style.setProperty('--desktop-past',`rgba(${r},${g},${b},.45)`);
+        }
+        // Default mode inherits the resolved overall lyric color. The
+        // existing light/dark/system/custom chain owns the actual value.
+        document.body.style.setProperty('--lyric-active', 'var(--foreground)');
+        if (typeof customColor === 'string' && /^#[0-9a-f]{8}$/i.test(customColor)) {
+          const n=parseInt(customColor.slice(1),16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+          document.body.style.setProperty('--lyric-active',`rgb(${r},${g},${b})`);
+        }
+        if (typeof currentColor === 'string' && /^#[0-9a-f]{8}$/i.test(currentColor)) {
+          const n=parseInt(currentColor.slice(1),16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+          document.body.style.setProperty('--lyric-active',`rgb(${r},${g},${b})`);
+        }
       },
       setSurfaceMode(value) {
         finishDesktopLineMotion();
